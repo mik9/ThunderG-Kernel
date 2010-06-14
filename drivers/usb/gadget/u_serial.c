@@ -559,17 +559,11 @@ recycle:
 		list_move(&req->list, &port->read_pool);
 	}
 
-	/* Push from tty to ldisc; this is immediate with low_latency, and
-	 * may trigger callbacks to this driver ... so drop the spinlock.
+	/* Push from tty to ldisc; without low_latency set this is handled by
+	 * a workqueue, so we won't get callbacks and can hold port_lock
 	 */
 	if (tty && do_push) {
-		spin_unlock_irq(&port->port_lock);
 		tty_flip_buffer_push(tty);
-		wake_up_interruptible(&tty->read_wait);
-		spin_lock_irq(&port->port_lock);
-
-		/* tty may have been closed */
-		tty = port->port_tty;
 	}
 
 
@@ -811,13 +805,6 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 
 	port->open_count = 1;
 	port->openclose = false;
-
-	/* low_latency means ldiscs work is carried in the same context
-	 * of tty_flip_buffer_push. The same can be called from IRQ with
-	 * low_latency = 0. But better to use a dedicated worker thread
-	 * to push the data.
-	 */
-	tty->low_latency = 1;
 
 	/* if connected, start the I/O stream */
 	if (port->port_usb) {
