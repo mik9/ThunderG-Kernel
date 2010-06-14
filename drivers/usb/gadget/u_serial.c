@@ -1295,6 +1295,7 @@ void gserial_cleanup(void)
 
 	destroy_workqueue(gserial_wq);
 	tty_unregister_driver(gs_tty_driver);
+	put_tty_driver(gs_tty_driver);
 	gs_tty_driver = NULL;
 
 	pr_debug("%s: cleaned up ttyGS* support\n", __func__);
