@@ -709,6 +709,20 @@ static int input_dev_filter(const char* input_dev_name)
 	return ret;
 }
 
+static int input_dev_filter(const char* input_dev_name)
+{
+	int ret = 0;
+	if (strstr(input_dev_name, "touchscreen") ||
+		strstr(input_dev_name, "-keypad") ||
+		strstr(input_dev_name, "-nav") ||
+		strstr(input_dev_name, "-oj")) {
+	}
+	else {
+		ret = 1;
+	}
+	return ret;
+}
+
 static int dbs_input_connect(struct input_handler *handler,
 		struct input_dev *dev, const struct input_device_id *id)
 {
