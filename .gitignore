@@ -97,6 +97,14 @@ lib/crc32table.h
 lib/gen_crc32table
 usr/gen_init_cpio
 usr/initramfs_data.cpio
+scripts/basic/docproc
+scripts/basic/fixdep
+scripts/basic/hash
+scripts/kconfig/lex.zconf.c
+scripts/kconfig/mconf
+scripts/kconfig/zconf.hash.c
+scripts/kconfig/zconf.tab.c
+
 
 
 \#*#
