@@ -67,8 +67,8 @@ UTS_TRUNCATE="cut -b -$UTS_LEN"
 
 # LGE_CHANGE print lge instead of build person in kernel release version string
 # cleaneye.kim@lge.com, 2010-02-27
-  echo \#define LINUX_COMPILE_BY \"lg-electronics\"
-#  echo \#define LINUX_COMPILE_BY \"`whoami`\"
+#  echo \#define LINUX_COMPILE_BY \"lg-electronics\"
+  echo \#define LINUX_COMPILE_BY \"`whoami`\"
   echo \#define LINUX_COMPILE_HOST \"`hostname | $UTS_TRUNCATE`\"
 
   if [ -x /bin/dnsdomainname ]; then
