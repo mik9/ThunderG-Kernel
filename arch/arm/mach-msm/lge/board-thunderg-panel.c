@@ -105,9 +105,9 @@ static struct platform_device mddi_hitachi_panel_device = {
 /* backlight device */
 static struct gpio_i2c_pin bl_i2c_pin[] = {
 	[0] = {
-		.sda_pin	= 89,
-		.scl_pin	= 88,
-		.reset_pin	= 82,
+		.sda_pin	= GPIO_BL_I2C_SDA,
+		.scl_pin	= GPIO_BL_I2C_SCL,
+		.reset_pin	= GPIO_LCD_BL_EN,
 		.irq_pin	= 0,
 	},
 };
