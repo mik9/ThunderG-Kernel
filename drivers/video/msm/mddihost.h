@@ -83,6 +83,11 @@ typedef enum {
 /* LGE_CHANGES_E [minjong.gong] 2010-03-23 Google Mass 3G Hitahci MDDI I/F LCD driver */
 /* LGE_CHANGES [dojip.kim@lge.com] 2010-04-23, [LS670] Novatek MDDI I/F LCD driver */
 	MDDI_LCD_NOVATEK_NT35451,
+/* LGE_CHANGES_S [infopc@lge.com], 2009-08-18 [LS680] lcd device driver */
+#if defined (CONFIG_FB_MSM_MDDI_LGIT_HVGA)
+	MDDI_LCD_INNOTEK_IM300WBN1A,
+#endif
+/* LGE_CHANGES_E [infopc@lge.com], 2009-08-18 [LS680] */
 	MDDI_NUM_LCD_TYPES,
 	MDDI_LCD_DEFAULT = MDDI_LCD_TOSHIBA
 } mddi_lcd_type;
