@@ -138,6 +138,7 @@ struct msm_otg_platform_data {
 	enum cdr_auto_reset	cdr_autoreset;
 	enum hs_drv_amplitude	drv_ampl;
 	int			phy_reset_sig_inverted;
+	int			pclk_required_during_lpm;
 
 	/* pmic notfications apis */
 	int (*pmic_notif_init) (void);

@@ -1310,6 +1310,9 @@ EXPORT_SYMBOL(mmc_card_can_sleep);
  *	mmc_suspend_host - suspend a host
  *	@host: mmc host
  *	@state: suspend mode (PM_SUSPEND_xxx)
+ *  LGE_CHANGE
+ *  do nothing! for do not issue cmd0, cmd41 at wakeup time
+ *  patch from domestic Thunder issue
  */
 int mmc_suspend_host(struct mmc_host *host, pm_message_t state)
 {
@@ -1321,16 +1324,19 @@ int mmc_suspend_host(struct mmc_host *host, pm_message_t state)
 	if (host->caps & MMC_CAP_DISABLE)
 		cancel_delayed_work(&host->disable);
 
-	mmc_bus_get(host);
-	if (host->bus_ops && !host->bus_dead) {
-		if (host->bus_ops->suspend)
-			err = host->bus_ops->suspend(host);
+	if (!strncmp(mmc_hostname(host),"mmc0",4)) {
+		; // do nothing! for do not issue cmd0,cmd41 at wakeup time
+	} else {
+		mmc_bus_get(host);
+		if (host->bus_ops && !host->bus_dead) {
+			if (host->bus_ops->suspend)
+				err = host->bus_ops->suspend(host);
+		}
+		mmc_bus_put(host);
+
+		if (!err)
+			mmc_power_off(host);
 	}
-	mmc_bus_put(host);
-
-	if (!err)
-		mmc_power_off(host);
-
 	return err;
 }
 
@@ -1339,6 +1345,9 @@ EXPORT_SYMBOL(mmc_suspend_host);
 /**
  *	mmc_resume_host - resume a previously suspended host
  *	@host: mmc host
+ *  LGE_CHANGE
+ *  do nothing! for do not issue cmd0, cmd41 at wakeup time
+ *  patch from domestic Thunder issue
  */
 int mmc_resume_host(struct mmc_host *host)
 {
@@ -1351,16 +1360,20 @@ int mmc_resume_host(struct mmc_host *host)
 		return 0;
 	}
 
-	if (host->bus_ops && !host->bus_dead) {
-		mmc_power_up(host);
-		mmc_select_voltage(host, host->ocr);
-		BUG_ON(!host->bus_ops->resume);
-		err = host->bus_ops->resume(host);
-		if (err) {
-			printk(KERN_WARNING "%s: error %d during resume "
-					    "(card was removed?)\n",
-					    mmc_hostname(host), err);
-			err = 0;
+	if (!strncmp(mmc_hostname(host),"mmc0",4)) {
+		; // do nothing! for do not issue cmd0,cmd41 at wakekup time
+	} else {
+		if (host->bus_ops && !host->bus_dead) {
+			mmc_power_up(host);
+			mmc_select_voltage(host, host->ocr);
+			BUG_ON(!host->bus_ops->resume);
+			err = host->bus_ops->resume(host);
+			if (err) {
+				printk(KERN_WARNING "%s: error %d during resume "
+					   "(card was removed?)\n",
+					   mmc_hostname(host), err);
+				err = 0;
+			}
 		}
 	}
 	mmc_bus_put(host);

@@ -180,10 +180,24 @@ static void msm_otg_start_peripheral(struct otg_transceiver *xceiv, int on)
 		return;
 
 	if (on) {
+		/* increment the clk reference count so that
+		 * it would be still on when disabled from
+		 * low power mode routine
+		 */
+		if (dev->pdata->pclk_required_during_lpm)
+			clk_enable(dev->hs_pclk);
+
 		usb_gadget_vbus_connect(xceiv->gadget);
 	} else {
 		atomic_set(&dev->chg_type, USB_CHG_TYPE__INVALID);
 		usb_gadget_vbus_disconnect(xceiv->gadget);
+
+		/* decrement the clk reference count so that
+		 * it would be off when disabled from
+		 * low power mode routine
+		 */
+		if (dev->pdata->pclk_required_during_lpm)
+			clk_disable(dev->hs_pclk);
 	}
 }
 
@@ -194,31 +208,34 @@ static void msm_otg_start_host(struct otg_transceiver *xceiv, int on)
 	if (!xceiv->host)
 		return;
 
+	/* increment or decrement the clk reference count
+	 * to avoid usb h/w lockup issues when low power
+	 * mode is initiated and vbus is on.
+	 */
+	if (dev->pdata->pclk_required_during_lpm) {
+		if (on)
+			clk_enable(dev->hs_pclk);
+		else
+			clk_disable(dev->hs_pclk);
+	}
+
 	if (dev->start_host)
 		dev->start_host(xceiv->host, on);
 }
 
-static int msm_clk_enable(struct msm_otg *dev, int enable)
+static int msm_otg_are_interrupts_pending(struct msm_otg *dev)
 {
-	static int status;
+	unsigned otgsc = readl(USB_OTGSC);
 
-	if (status == enable)
-		return 0;
-
-	status = enable;
-
-	if (!dev->hs_pclk)
-		return -ENODEV;
-
-	if (enable) {
-		pr_info("%s: ******************CLK ENABLE\n", __func__);
-		clk_enable(dev->hs_pclk);
-	} else {
-		pr_info("%s: ******************CLK DISABLE\n", __func__);
-		clk_disable(dev->hs_pclk);
+	/* check if there are any pending otg interrupts */
+	if (((otgsc & OTGSC_INTR_MASK) >> 8) & otgsc) {
+		pr_info("%s: Interrupts while suspending phy: "
+			"otgsc:%08x\n", __func__, otgsc);
+		return 1;
 	}
 
 	return 0;
+
 }
 
 static int msm_otg_suspend(struct msm_otg *dev)
@@ -227,7 +244,6 @@ static int msm_otg_suspend(struct msm_otg *dev)
 	int vbus = 0;
 	unsigned otgsc;
 	enum chg_type curr_chg = atomic_read(&dev->chg_type);
-	int b_sess_vld = is_b_sess_vld();
 
 	disable_irq(dev->irq);
 	if (atomic_read(&dev->in_lpm))
@@ -259,17 +275,24 @@ static int msm_otg_suspend(struct msm_otg *dev)
 	disable_phy_clk();
 	while (!is_phy_clk_disabled()) {
 		if (time_after(jiffies, timeout)) {
+			if (msm_otg_are_interrupts_pending(dev))
+				goto out;
+
 			pr_err("%s: Unable to suspend phy\n", __func__);
+			/* check if there any pending interrupts
+			 * before re-setting the h/w
+			 */
 			otg_reset(&dev->otg);
 			goto out;
 		}
 		msleep(1);
+		if (msm_otg_are_interrupts_pending(dev))
+			goto out;
 	}
 
 	writel(readl(USB_USBCMD) | ASYNC_INTR_CTRL | ULPI_STP_CTRL, USB_USBCMD);
-
-	if (!b_sess_vld)
-		msm_clk_enable(dev, 0);
+	if (dev->hs_pclk)
+		clk_disable(dev->hs_pclk);
 	if (dev->hs_cclk)
 		clk_disable(dev->hs_cclk);
 	if (device_may_wakeup(dev->otg.dev)) {
@@ -303,7 +326,8 @@ static int msm_otg_resume(struct msm_otg *dev)
 		return 0;
 
 
-	msm_clk_enable(dev, 1);
+	if (dev->hs_pclk)
+		clk_enable(dev->hs_pclk);
 	if (dev->hs_cclk)
 		clk_enable(dev->hs_cclk);
 
@@ -872,7 +896,8 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 	}
 
 	/* enable clocks */
-	msm_clk_enable(dev, 1);
+	if (dev->hs_pclk)
+		clk_enable(dev->hs_pclk);
 	if (dev->hs_cclk)
 		clk_enable(dev->hs_cclk);
 
@@ -886,7 +911,8 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 			dev->pmic_notif_supp = 1;
 			dev->pdata->pmic_enable_ldo(1);
 		} else if (ret != -ENOTSUPP) {
-			msm_clk_enable(dev, 0);
+			if (dev->hs_pclk)
+				clk_disable(dev->hs_pclk);
 			if (dev->hs_cclk)
 				clk_disable(dev->hs_cclk);
 			goto free_regs;
@@ -899,7 +925,8 @@ static int __init msm_otg_probe(struct platform_device *pdev)
 					"msm_otg", dev);
 	if (ret) {
 		pr_info("%s: request irq failed\n", __func__);
-		msm_clk_enable(dev, 0);
+		if (dev->hs_pclk)
+			clk_disable(dev->hs_pclk);
 		if (dev->hs_cclk)
 			clk_disable(dev->hs_cclk);
 		goto free_regs;
@@ -983,10 +1010,10 @@ static int __exit msm_otg_remove(struct platform_device *pdev)
 		clk_disable(dev->hs_cclk);
 		clk_put(dev->hs_cclk);
 	}
-
-	msm_clk_enable(dev, 0);
-	clk_put(dev->hs_pclk);
-
+	if (dev->hs_pclk) {
+		clk_disable(dev->hs_pclk);
+		clk_put(dev->hs_pclk);
+	}
 	if (dev->hs_clk)
 		clk_put(dev->hs_clk);
 	if (dev->phy_reset_clk)

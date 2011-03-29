@@ -1798,6 +1798,7 @@ msmsdcc_suspend(struct platform_device *dev, pm_message_t state)
 
 		if (!mmc->card || mmc->card->type != MMC_TYPE_SDIO)
 			rc = mmc_suspend_host(mmc, state);
+
 /* LGE_CHANGE_S, [jisung.yang@lge.com], 2010-04-24, <never sleep policy - host wakeup> */
 #if defined(CONFIG_BRCM_LGE_WL_HOSTWAKEUP)
 		//else if (mmc->card && mmc->card->type == MMC_TYPE_SDIO) {
@@ -1875,6 +1876,7 @@ msmsdcc_resume(struct platform_device *dev)
 
 		if (!mmc->card || mmc->card->type != MMC_TYPE_SDIO)
 			mmc_resume_host(mmc);
+
 		if (host->plat->status_irq)
 			enable_irq(host->plat->status_irq);
 
