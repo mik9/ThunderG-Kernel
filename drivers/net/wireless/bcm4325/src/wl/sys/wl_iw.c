@@ -4877,12 +4877,13 @@ wl_iw_set_powermode(
 {
 	int mode = 0;
 	int error;
-/*
+
 	char *p = extra;
 
 	if (sscanf(extra, "%*s %d", &mode) != 1)
 		return -EINVAL;
-*/
+
+    mode = 0;
 
 	switch (mode) {
 	case 0: mode = 2; break; /* Fast PS mode */
