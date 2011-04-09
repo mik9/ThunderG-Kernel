@@ -171,6 +171,9 @@ wl_filter_tag_t filters[MAX_PKT_FILTERS];
 /* LGE_CHANGE_E, [yoohoo@lge.com], 2010-1-13, <Packet filter> */
 
 extern int dhdcdc_set_ioctl(dhd_pub_t *dhd, int ifidx, uint cmd, void *buf, uint len);
+
+extern void bcmsdh_set_irq(int flag);
+
 /* Private data for SDIO bus interaction */
 typedef struct dhd_bus {
 	dhd_pub_t *dhd;
@@ -5382,6 +5385,10 @@ dhd_bus_devreset(dhd_pub_t *dhdp, uint8 flag)
 			/* Expect app to have torn down any connection before calling */
 			/* Stop the bus, disable F2 */
 			dhd_bus_stop(bus, FALSE);
+			
+#if defined(OOB_INTR_ONLY)
+                       bcmsdh_set_irq(FALSE);
+#endif /* defined(OOB_INTR_ONLY) */
 
 			/* Clean tx/rx buffer pointers, detach from the dongle */
 			dhdsdio_release_dongle(bus, bus->dhd->osh);
@@ -5415,6 +5422,7 @@ dhd_bus_devreset(dhd_pub_t *dhdp, uint8 flag)
 					dhd_bus_init((dhd_pub_t *) bus->dhd, FALSE);
 
 #if defined(OOB_INTR_ONLY)
+					bcmsdh_set_irq(TRUE);
 					dhd_enable_oob_intr(bus, TRUE);
 #endif /* defined(OOB_INTR_ONLY) */
 
