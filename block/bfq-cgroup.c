@@ -6,10 +6,13 @@
  *
  * Copyright (C) 2008 Fabio Checconi <fabio@gandalf.sssup.it>
  *		      Paolo Valente <paolo.valente@unimore.it>
+ *
+ * Licensed under the GPL-2 as detailed in the accompanying COPYING.BFQ file.
  */
 
 #ifdef CONFIG_CGROUP_BFQIO
 static struct bfqio_cgroup bfqio_root_cgroup = {
+	.weight = BFQ_DEFAULT_GRP_WEIGHT,
 	.ioprio = BFQ_DEFAULT_GRP_IOPRIO,
 	.ioprio_class = BFQ_DEFAULT_GRP_CLASS,
 };
@@ -17,6 +20,8 @@ static struct bfqio_cgroup bfqio_root_cgroup = {
 static inline void bfq_init_entity(struct bfq_entity *entity,
 				   struct bfq_group *bfqg)
 {
+	entity->weight = entity->new_weight;
+	entity->orig_weight = entity->new_weight;
 	entity->ioprio = entity->new_ioprio;
 	entity->ioprio_class = entity->new_ioprio_class;
 	entity->parent = bfqg->my_entity;
@@ -54,6 +59,8 @@ static inline void bfq_group_init_entity(struct bfqio_cgroup *bgrp,
 {
 	struct bfq_entity *entity = &bfqg->entity;
 
+	entity->weight = entity->new_weight = bgrp->weight;
+	entity->orig_weight = entity->new_weight;
 	entity->ioprio = entity->new_ioprio = bgrp->ioprio;
 	entity->ioprio_class = entity->new_ioprio_class = bgrp->ioprio_class;
 	entity->ioprio_changed = 1;
@@ -301,6 +308,9 @@ static struct bfq_group *__bfq_cic_change_cgroup(struct bfq_data *bfqd,
 
 		if (entity->sched_data != &bfqg->sched_data) {
 			cic_set_bfqq(cic, NULL, 0);
+			bfq_log_bfqq(bfqd, async_bfqq,
+				     "cic_change_group: %p %d",
+				     async_bfqq, async_bfqq->ref);
 			bfq_put_queue(async_bfqq);
 		}
 	}
@@ -453,6 +463,7 @@ static void bfq_disconnect_groups(struct bfq_data *bfqd)
 	struct hlist_node *pos, *n;
 	struct bfq_group *bfqg;
 
+	bfq_log(bfqd, "disconnect_groups beginning") ;
 	hlist_for_each_entry_safe(bfqg, pos, n, &bfqd->group_list, bfqd_node) {
 		hlist_del(&bfqg->bfqd_node);
 
@@ -466,6 +477,9 @@ static void bfq_disconnect_groups(struct bfq_data *bfqd)
 		 * to the list.
 		 */
 		rcu_assign_pointer(bfqg->bfqd, NULL);
+
+		bfq_log(bfqd, "disconnect_groups: put async for group %p",
+			bfqg) ;
 		bfq_put_async_queues(bfqd, bfqg);
 	}
 }
@@ -474,6 +488,8 @@ static inline void bfq_free_root_group(struct bfq_data *bfqd)
 {
 	struct bfqio_cgroup *bgrp = &bfqio_root_cgroup;
 	struct bfq_group *bfqg = bfqd->root_group;
+
+	bfq_put_async_queues(bfqd, bfqg);
 
 	spin_lock_irq(&bgrp->lock);
 	hlist_del_rcu(&bfqg->group_node);
@@ -529,6 +545,7 @@ static u64 bfqio_cgroup_##__VAR##_read(struct cgroup *cgroup,		\
 	return ret;							\
 }
 
+SHOW_FUNCTION(weight);
 SHOW_FUNCTION(ioprio);
 SHOW_FUNCTION(ioprio_class);
 #undef SHOW_FUNCTION
@@ -551,9 +568,9 @@ static int bfqio_cgroup_##__VAR##_write(struct cgroup *cgroup,		\
 	bgrp = cgroup_to_bfqio(cgroup);					\
 									\
 	spin_lock_irq(&bgrp->lock);					\
-	bgrp->__VAR = (unsigned char)val;				\
+	bgrp->__VAR = (unsigned short)val;				\
 	hlist_for_each_entry(bfqg, n, &bgrp->group_data, group_node) {	\
-		bfqg->entity.new_##__VAR = (unsigned char)val;		\
+		bfqg->entity.new_##__VAR = (unsigned short)val;		\
 		smp_wmb();						\
 		bfqg->entity.ioprio_changed = 1;			\
 	}								\
@@ -564,11 +581,17 @@ static int bfqio_cgroup_##__VAR##_write(struct cgroup *cgroup,		\
 	return 0;							\
 }
 
+STORE_FUNCTION(weight, BFQ_MIN_WEIGHT, BFQ_MAX_WEIGHT);
 STORE_FUNCTION(ioprio, 0, IOPRIO_BE_NR - 1);
 STORE_FUNCTION(ioprio_class, IOPRIO_CLASS_RT, IOPRIO_CLASS_IDLE);
 #undef STORE_FUNCTION
 
 static struct cftype bfqio_files[] = {
+	{
+		.name = "weight",
+		.read_u64 = bfqio_cgroup_weight_read,
+		.write_u64 = bfqio_cgroup_weight_write,
+	},
 	{
 		.name = "ioprio",
 		.read_u64 = bfqio_cgroup_ioprio_read,
@@ -616,7 +639,7 @@ static struct cgroup_subsys_state *bfqio_create(struct cgroup_subsys *subsys,
  * will not be destroyed until the tasks sharing the ioc die.
  */
 static int bfqio_can_attach(struct cgroup_subsys *subsys, struct cgroup *cgroup,
-			    struct task_struct *tsk)
+			    struct task_struct *tsk, bool threadgroup)
 {
 	struct io_context *ioc;
 	int ret = 0;
@@ -638,7 +661,8 @@ static int bfqio_can_attach(struct cgroup_subsys *subsys, struct cgroup *cgroup,
 }
 
 static void bfqio_attach(struct cgroup_subsys *subsys, struct cgroup *cgroup,
-			 struct cgroup *prev, struct task_struct *tsk)
+			 struct cgroup *prev, struct task_struct *tsk,
+			 bool threadgroup)
 {
 	struct io_context *ioc;
 	struct cfq_io_context *cic;
@@ -697,6 +721,8 @@ struct cgroup_subsys bfqio_subsys = {
 static inline void bfq_init_entity(struct bfq_entity *entity,
 				   struct bfq_group *bfqg)
 {
+	entity->weight = entity->new_weight;
+	entity->orig_weight = entity->new_weight;
 	entity->ioprio = entity->new_ioprio;
 	entity->ioprio_class = entity->new_ioprio_class;
 	entity->sched_data = &bfqg->sched_data;

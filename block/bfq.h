@@ -1,5 +1,5 @@
 /*
- * BFQ: data structures and common functions prototypes.
+ * BFQ-v2 for 2.6.37: data structures and common functions prototypes.
  *
  * Based on ideas and code from CFQ:
  * Copyright (C) 2003 Jens Axboe <axboe@kernel.dk>
@@ -16,17 +16,15 @@
 #include <linux/ioprio.h>
 #include <linux/rbtree.h>
 
-#define ASYNC			0
-#define SYNC			1
-
 #define BFQ_IOPRIO_CLASSES	3
+#define BFQ_CL_IDLE_TIMEOUT	HZ/5
 
-#define BFQ_DEFAULT_GRP_IOPRIO	4
+#define BFQ_MIN_WEIGHT	1
+#define BFQ_MAX_WEIGHT	1000
+
+#define BFQ_DEFAULT_GRP_WEIGHT	10
+#define BFQ_DEFAULT_GRP_IOPRIO	0
 #define BFQ_DEFAULT_GRP_CLASS	IOPRIO_CLASS_BE
-
-typedef u64 bfq_timestamp_t;
-typedef unsigned long bfq_weight_t;
-typedef unsigned long bfq_service_t;
 
 struct bfq_entity;
 
@@ -51,8 +49,8 @@ struct bfq_service_tree {
 	struct bfq_entity *first_idle;
 	struct bfq_entity *last_idle;
 
-	bfq_timestamp_t vtime;
-	bfq_weight_t wsum;
+	u64 vtime;
+	unsigned long wsum;
 };
 
 /**
@@ -92,17 +90,19 @@ struct bfq_sched_data {
  *             this entity; used for O(log N) lookups into active trees.
  * @service: service received during the last round of service.
  * @budget: budget used to calculate F_i; F_i = S_i + @budget / @weight.
- * @weight: weight of the queue, calculated as IOPRIO_BE_NR - @ioprio.
+ * @weight: weight of the queue
  * @parent: parent entity, for hierarchical scheduling.
  * @my_sched_data: for non-leaf nodes in the cgroup hierarchy, the
  *                 associated scheduler queue, %NULL on leaf nodes.
  * @sched_data: the scheduler queue this entity belongs to.
  * @ioprio: the ioprio in use.
- * @new_ioprio: when an ioprio change is requested, the new ioprio value
+ * @new_weight: when a weight change is requested, the new weight value.
+ * @orig_weight: original weight, used to implement weight boosting
+ * @new_ioprio: when an ioprio change is requested, the new ioprio value.
  * @ioprio_class: the ioprio_class in use.
  * @new_ioprio_class: when an ioprio_class change is requested, the new
  *                    ioprio_class value.
- * @ioprio_changed: flag, true when the user requested an ioprio or
+ * @ioprio_changed: flag, true when the user requested a weight, ioprio or
  *                  ioprio_class change.
  *
  * A bfq_entity is used to represent either a bfq_queue (leaf node in the
@@ -111,36 +111,39 @@ struct bfq_sched_data {
  * hierarchy.  Non-leaf entities have also their own sched_data, stored
  * in @my_sched_data.
  *
- * Each entity stores independently its priority values; this would allow
- * different weights on different devices, but this functionality is not
- * exported to userspace by now.  Priorities are updated lazily, first
- * storing the new values into the new_* fields, then setting the
- * @ioprio_changed flag.  As soon as there is a transition in the entity
- * state that allows the priority update to take place the effective and
- * the requested priority values are synchronized.
+ * Each entity stores independently its priority values; this would
+ * allow different weights on different devices, but this
+ * functionality is not exported to userspace by now.  Priorities and
+ * weights are updated lazily, first storing the new values into the
+ * new_* fields, then setting the @ioprio_changed flag.  As soon as
+ * there is a transition in the entity state that allows the priority
+ * update to take place the effective and the requested priority
+ * values are synchronized.
  *
- * The weight value is calculated from the ioprio to export the same
- * interface as CFQ.  When dealing with ``well-behaved'' queues (i.e.,
- * queues that do not spend too much time to consume their budget and
- * have true sequential behavior, and when there are no external factors
- * breaking anticipation) the relative weights at each level of the
- * cgroups hierarchy should be guaranteed.
- * All the fields are protected by the queue lock of the containing bfqd.
+ * Unless cgroups are used, the weight value is calculated from the
+ * ioprio to export the same interface as CFQ.  When dealing with
+ * ``well-behaved'' queues (i.e., queues that do not spend too much
+ * time to consume their budget and have true sequential behavior, and
+ * when there are no external factors breaking anticipation) the
+ * relative weights at each level of the cgroups hierarchy should be
+ * guaranteed.  All the fields are protected by the queue lock of the
+ * containing bfqd.
  */
 struct bfq_entity {
 	struct rb_node rb_node;
 
 	int on_st;
 
-	bfq_timestamp_t finish;
-	bfq_timestamp_t start;
+	u64 finish;
+	u64 start;
 
 	struct rb_root *tree;
 
-	bfq_timestamp_t min_start;
+	u64 min_start;
 
-	bfq_service_t service, budget;
-	bfq_weight_t weight;
+	unsigned long service, budget;
+	unsigned short weight, new_weight;
+	unsigned short orig_weight;
 
 	struct bfq_entity *parent;
 
@@ -168,6 +171,7 @@ struct bfq_group;
  *		      completed requests .
  * @hw_tag_samples: nr of samples used to calculate hw_tag.
  * @hw_tag: flag set to one if the driver is showing a queueing behavior.
+ * @budgets_assigned: number of budgets assigned.
  * @idle_slice_timer: timer set when idling for the next sequential request
  *                    from the queue under service.
  * @unplug_work: delayed work to restart dispatching on the request queue.
@@ -179,6 +183,7 @@ struct bfq_group;
  * @peak_rate: peak transfer rate observed for a budget.
  * @peak_rate_samples: number of samples used to calculate @peak_rate.
  * @bfq_max_budget: maximum budget allotted to a bfq_queue before rescheduling.
+ * @cic_index: use small consequent indexes as radix tree keys to reduce depth
  * @cic_list: list of all the cics active on the bfq_data device.
  * @group_list: list of all the bfq_groups active on the device.
  * @active_list: list of all the bfq_queues active on the device.
@@ -199,6 +204,13 @@ struct bfq_group;
  *               they are charged for the whole allocated budget, to try
  *               to preserve a behavior reasonably fair among them, but
  *               without service-domain guarantees).
+ * @bfq_raising_coeff: Maximum factor by which the weight of a boosted
+ *                            queue is multiplied
+ * @bfq_raising_max_time: maximum duration of a weight-raising period (jiffies)
+ * @bfq_raising_min_idle_time: minimum idle period after which weight-raising
+ *			       may be reactivated for a queue (in jiffies)
+ * @bfq_raising_max_softrt_rate: max service-rate for a soft real-time queue,
+ *			         sectors per seconds
  *
  * All the fields are protected by the @queue lock.
  */
@@ -209,12 +221,14 @@ struct bfq_data {
 
 	int busy_queues;
 	int queued;
-	int rq_in_driver[2];
+	int rq_in_driver;
 	int sync_flight;
 
 	int max_rq_in_driver;
 	int hw_tag_samples;
 	int hw_tag;
+
+	int budgets_assigned;
 
 	struct timer_list idle_slice_timer;
 	struct work_struct unplug_work;
@@ -228,8 +242,9 @@ struct bfq_data {
 	ktime_t last_idling_start;
 	int peak_rate_samples;
 	u64 peak_rate;
-	bfq_service_t bfq_max_budget;
+	unsigned long bfq_max_budget;
 
+	unsigned int cic_index;
 	struct list_head cic_list;
 	struct hlist_head group_list;
 	struct list_head active_list;
@@ -240,11 +255,19 @@ struct bfq_data {
 	unsigned int bfq_back_penalty;
 	unsigned int bfq_back_max;
 	unsigned int bfq_slice_idle;
-	unsigned int bfq_desktop;
+	u64 bfq_class_idle_last_service;
 
 	unsigned int bfq_user_max_budget;
 	unsigned int bfq_max_budget_async_rq;
 	unsigned int bfq_timeout[2];
+
+	bool low_latency;
+
+	/* parameters of the low_latency heuristics */
+	unsigned int bfq_raising_coeff;
+	unsigned int bfq_raising_max_time;
+	unsigned int bfq_raising_min_idle_time;
+	unsigned int bfq_raising_max_softrt_rate;
 };
 
 /**
@@ -261,12 +284,17 @@ struct bfq_data {
  * @max_budget: maximum budget allowed from the feedback mechanism.
  * @budget_timeout: budget expiration (in jiffies).
  * @dispatched: number of requests on the dispatch list or inside driver.
- * @budgets_assigned: number of budgets assigned.
  * @org_ioprio: saved ioprio during boosted periods.
  * @org_ioprio_class: saved ioprio_class during boosted periods.
  * @flags: status flags.
  * @bfqq_list: node for active/idle bfqq list inside our bfqd.
+ * @seek_samples: number of seeks sampled
+ * @seek_total: sum of the distances of the seeks sampled
+ * @seek_mean: mean seek distance
+ * @last_request_pos: position of the last request enqueued
  * @pid: pid of the process owning the queue, used for logging purposes.
+ * @last_rais_start_time: last (idle -> weight-raised) transition attempt
+ * @high_weight_budget: number of sectors left to serve with boosted weight
  *
  * A bfq_queue is a leaf request queue; it can be associated to an io_context
  * or more (if it is an async one).  @cgroup holds a reference to the
@@ -288,11 +316,10 @@ struct bfq_queue {
 
 	struct bfq_entity entity;
 
-	bfq_service_t max_budget;
+	unsigned long max_budget;
 	unsigned long budget_timeout;
 
 	int dispatched;
-	int budgets_assigned;
 
 	unsigned short org_ioprio;
 	unsigned short org_ioprio_class;
@@ -301,7 +328,16 @@ struct bfq_queue {
 
 	struct list_head bfqq_list;
 
+	unsigned int seek_samples;
+	u64 seek_total;
+	sector_t seek_mean;
+	sector_t last_request_pos;
+
 	pid_t pid;
+
+	/* weight-raising fileds */
+	u64 last_rais_start_finish, soft_rt_next_start;
+	unsigned int raising_coeff;
 };
 
 enum bfqq_state_flags {
@@ -401,6 +437,7 @@ struct bfq_group {
 /**
  * struct bfqio_cgroup - bfq cgroup data structure.
  * @css: subsystem state for bfq in the containing cgroup.
+ * @weight: cgroup weight.
  * @ioprio: cgroup ioprio.
  * @ioprio_class: cgroup ioprio_class.
  * @lock: spinlock that protects @ioprio, @ioprio_class and @group_data.
@@ -412,7 +449,7 @@ struct bfq_group {
 struct bfqio_cgroup {
 	struct cgroup_subsys_state css;
 
-	unsigned short ioprio, ioprio_class;
+	unsigned short weight, ioprio, ioprio_class;
 
 	spinlock_t lock;
 	struct hlist_head group_data;
@@ -436,11 +473,6 @@ bfq_entity_service_tree(struct bfq_entity *entity)
 	BUG_ON(sched_data == NULL);
 
 	return sched_data->service_tree + idx;
-}
-
-static inline int rq_in_driver(struct bfq_data *bfqd)
-{
-        return bfqd->rq_in_driver[0] + bfqd->rq_in_driver[1];
 }
 
 static inline struct bfq_queue *cic_to_bfqq(struct cfq_io_context *cic,
@@ -468,6 +500,14 @@ static inline void call_for_each_cic(struct io_context *ioc,
 	rcu_read_unlock();
 }
 
+#define CIC_DEAD_KEY    1ul
+#define CIC_DEAD_INDEX_SHIFT    1
+
+static inline void *bfqd_dead_key(struct bfq_data *bfqd)
+{
+	return (void *)(bfqd->cic_index << CIC_DEAD_INDEX_SHIFT | CIC_DEAD_KEY);
+}
+
 /**
  * bfq_get_bfqd_locked - get a lock to a bfqd using a RCU protected pointer.
  * @ptr: a pointer to a bfqd.
@@ -489,14 +529,15 @@ static inline struct bfq_data *bfq_get_bfqd_locked(void **ptr,
 
 	rcu_read_lock();
 	bfqd = rcu_dereference(*(struct bfq_data **)ptr);
-	if (bfqd != NULL) {
+
+	if (bfqd != NULL && !((unsigned long) bfqd & CIC_DEAD_KEY)) {
 		spin_lock_irqsave(bfqd->queue->queue_lock, *flags);
 		if (*ptr == bfqd)
 			goto out;
 		spin_unlock_irqrestore(bfqd->queue->queue_lock, *flags);
-		bfqd = NULL;
 	}
 
+	bfqd = NULL;
 out:
 	rcu_read_unlock();
 	return bfqd;

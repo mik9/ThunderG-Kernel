@@ -16,7 +16,8 @@
 	for (; entity && ({ parent = entity->parent; 1; }); entity = parent)
 
 static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
-						 int extract);
+						 int extract,
+						 struct bfq_data *bfqd);
 
 static int bfq_update_next_active(struct bfq_sched_data *sd)
 {
@@ -28,13 +29,13 @@ static int bfq_update_next_active(struct bfq_sched_data *sd)
 		return 0;
 
 	/*
-	 * NOTE: this can be improved in may ways, such as returning
+	 * NOTE: this can be improved in many ways, such as returning
 	 * 1 (and thus propagating upwards the update) only when the
 	 * budget changes, or caching the bfqq that will be scheduled
 	 * next from this subtree.  By now we worry more about
 	 * correctness than about performance...
 	 */
-	next_active = bfq_lookup_next_entity(sd, 0);
+	next_active = bfq_lookup_next_entity(sd, 0, NULL);
 	sd->next_active = next_active;
 
 	if (next_active != NULL) {
@@ -85,20 +86,33 @@ static inline void bfq_check_next_active(struct bfq_sched_data *sd,
  *
  * Return @a > @b, dealing with wrapping correctly.
  */
-static inline int bfq_gt(bfq_timestamp_t a, bfq_timestamp_t b)
+static inline int bfq_gt(u64 a, u64 b)
 {
 	return (s64)(a - b) > 0;
 }
 
+static inline struct bfq_queue *bfq_entity_to_bfqq(struct bfq_entity *entity)
+{
+	struct bfq_queue *bfqq = NULL;
+
+	BUG_ON(entity == NULL);
+
+	if (entity->my_sched_data == NULL)
+		bfqq = container_of(entity, struct bfq_queue, entity);
+
+	return bfqq;
+}
+
+
 /**
  * bfq_delta - map service into the virtual time domain.
  * @service: amount of service.
- * @weight: scale factor.
+ * @weight: scale factor (weight of an entity or weight sum).
  */
-static inline bfq_timestamp_t bfq_delta(bfq_service_t service,
-					bfq_weight_t weight)
+static inline u64 bfq_delta(unsigned long service,
+					unsigned long weight)
 {
-	bfq_timestamp_t d = (bfq_timestamp_t)service << WFQ_SERVICE_SHIFT;
+	u64 d = (u64)service << WFQ_SERVICE_SHIFT;
 
 	do_div(d, weight);
 	return d;
@@ -110,11 +124,24 @@ static inline bfq_timestamp_t bfq_delta(bfq_service_t service,
  * @service: the service to be charged to the entity.
  */
 static inline void bfq_calc_finish(struct bfq_entity *entity,
-				   bfq_service_t service)
+				   unsigned long service)
 {
+	struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
+
 	BUG_ON(entity->weight == 0);
 
-	entity->finish = entity->start + bfq_delta(service, entity->weight);
+	entity->finish = entity->start +
+		bfq_delta(service, entity->weight);
+
+	if (bfqq != NULL) {
+		bfq_log_bfqq(bfqq->bfqd, bfqq,
+			"calc_finish: serv %lu, w %lu",
+			service, entity->weight);
+		bfq_log_bfqq(bfqq->bfqd, bfqq,
+			"calc_finish: start %llu, finish %llu, delta %llu",
+			entity->start, entity->finish,
+			bfq_delta(service, entity->weight));
+	}
 }
 
 /**
@@ -148,18 +175,6 @@ static inline void bfq_extract(struct rb_root *root,
 
 	entity->tree = NULL;
 	rb_erase(&entity->rb_node, root);
-}
-
-static inline struct bfq_queue *bfq_entity_to_bfqq(struct bfq_entity *entity)
-{
-	struct bfq_queue *bfqq = NULL;
-
-	BUG_ON(entity == NULL);
-
-	if (entity->my_sched_data == NULL)
-		bfqq = container_of(entity, struct bfq_queue, entity);
-
-	return bfqq;
 }
 
 /**
@@ -325,10 +340,24 @@ static void bfq_active_insert(struct bfq_service_tree *st,
  * bfq_ioprio_to_weight - calc a weight from an ioprio.
  * @ioprio: the ioprio value to convert.
  */
-static bfq_weight_t bfq_ioprio_to_weight(int ioprio)
+static unsigned short bfq_ioprio_to_weight(int ioprio)
 {
 	WARN_ON(ioprio < 0 || ioprio >= IOPRIO_BE_NR);
 	return IOPRIO_BE_NR - ioprio;
+}
+
+/**
+ * bfq_weight_to_ioprio - calc an ioprio from a weight.
+ * @weight: the weight value to convert.
+ *
+ * To preserve as mush as possible the old only-ioprio user interface,
+ * 0 is used as an escape ioprio value for weights (numerically) equal or
+ * larger than IOPRIO_BE_NR
+ */
+static unsigned short bfq_weight_to_ioprio(int weight)
+{
+	WARN_ON(weight < BFQ_MIN_WEIGHT || weight > BFQ_MAX_WEIGHT);
+	return IOPRIO_BE_NR - weight < 0 ? 0 : IOPRIO_BE_NR - weight;
 }
 
 static inline void bfq_get_entity(struct bfq_entity *entity)
@@ -339,6 +368,8 @@ static inline void bfq_get_entity(struct bfq_entity *entity)
 	if (bfqq != NULL) {
 		sd = entity->sched_data;
 		atomic_inc(&bfqq->ref);
+		bfq_log_bfqq(bfqq->bfqd, bfqq, "get_entity: %p %d",
+			     bfqq, bfqq->ref);
 	}
 }
 
@@ -437,6 +468,8 @@ static void bfq_forget_entity(struct bfq_service_tree *st,
 	st->wsum -= entity->weight;
 	if (bfqq != NULL) {
 		sd = entity->sched_data;
+		bfq_log_bfqq(bfqq->bfqd, bfqq, "forget_entity: %p %d",
+			     bfqq, bfqq->ref);
 		bfq_put_queue(bfqq);
 	}
 }
@@ -478,6 +511,52 @@ static void bfq_forget_idle(struct bfq_service_tree *st)
 		bfq_put_idle_entity(st, first_idle);
 }
 
+static struct bfq_service_tree *
+__bfq_entity_update_weight_prio(struct bfq_service_tree *old_st,
+			 struct bfq_entity *entity)
+{
+	struct bfq_service_tree *new_st = old_st;
+
+	if (entity->ioprio_changed) {
+		struct bfq_queue *bfqq = bfq_entity_to_bfqq(entity);
+
+		BUG_ON(old_st->wsum < entity->weight);
+		old_st->wsum -= entity->weight;
+
+		if (entity->new_weight != entity->orig_weight) {
+			entity->orig_weight = entity->new_weight;
+			entity->ioprio =
+				bfq_weight_to_ioprio(entity->orig_weight);
+		} else if (entity->new_ioprio != entity->ioprio) {
+			entity->ioprio = entity->new_ioprio;
+			entity->orig_weight =
+					bfq_ioprio_to_weight(entity->ioprio);
+		} else
+			entity->new_weight = entity->orig_weight =
+				bfq_ioprio_to_weight(entity->ioprio);
+
+		entity->ioprio_class = entity->new_ioprio_class;
+		entity->ioprio_changed = 0;
+
+		/*
+		 * NOTE: here we may be changing the weight too early,
+		 * this will cause unfairness.  The correct approach
+		 * would have required additional complexity to defer
+		 * weight changes to the proper time instants (i.e.,
+		 * when entity->finish <= old_st->vtime).
+		 */
+		new_st = bfq_entity_service_tree(entity);
+		entity->weight = entity->orig_weight *
+			(bfqq != NULL ? bfqq->raising_coeff : 1);
+		new_st->wsum += entity->weight;
+
+		if (new_st != old_st)
+			entity->start = new_st->vtime;
+	}
+
+	return new_st;
+}
+
 /**
  * bfq_bfqq_served - update the scheduler status after selection for service.
  * @bfqq: the queue being served.
@@ -487,7 +566,7 @@ static void bfq_forget_idle(struct bfq_service_tree *st)
  * are synchronized every time a new bfqq is selected for service.  By now,
  * we keep it to better check consistency.
  */
-static void bfq_bfqq_served(struct bfq_queue *bfqq, bfq_service_t served)
+static void bfq_bfqq_served(struct bfq_queue *bfqq, unsigned long served)
 {
 	struct bfq_entity *entity = &bfqq->entity;
 	struct bfq_service_tree *st;
@@ -496,13 +575,13 @@ static void bfq_bfqq_served(struct bfq_queue *bfqq, bfq_service_t served)
 		st = bfq_entity_service_tree(entity);
 
 		entity->service += served;
-
 		WARN_ON_ONCE(entity->service > entity->budget);
 		BUG_ON(st->wsum == 0);
 
 		st->vtime += bfq_delta(served, st->wsum);
 		bfq_forget_idle(st);
 	}
+	bfq_log_bfqq(bfqq->bfqd, bfqq, "bfqq_served %lu secs", served);
 }
 
 /**
@@ -515,42 +594,13 @@ static void bfq_bfqq_served(struct bfq_queue *bfqq, bfq_service_t served)
  * budget.  In this way we should obtain a sort of time-domain
  * fairness among all the seeky/slow queues.
  */
-static void bfq_bfqq_charge_full_budget(struct bfq_queue *bfqq)
+static inline void bfq_bfqq_charge_full_budget(struct bfq_queue *bfqq)
 {
 	struct bfq_entity *entity = &bfqq->entity;
 
+	bfq_log_bfqq(bfqq->bfqd, bfqq, "charge_full_budget");
+
 	bfq_bfqq_served(bfqq, entity->budget - entity->service);
-}
-
-static struct bfq_service_tree *
-__bfq_entity_update_prio(struct bfq_service_tree *old_st,
-			 struct bfq_entity *entity)
-{
-	struct bfq_service_tree *new_st = old_st;
-
-	if (entity->ioprio_changed) {
-		entity->ioprio = entity->new_ioprio;
-		entity->ioprio_class = entity->new_ioprio_class;
-		entity->ioprio_changed = 0;
-
-		old_st->wsum -= entity->weight;
-		entity->weight = bfq_ioprio_to_weight(entity->ioprio);
-
-		/*
-		 * NOTE: here we may be changing the weight too early,
-		 * this will cause unfairness.  The correct approach
-		 * would have required additional complexity to defer
-		 * weight changes to the proper time instants (i.e.,
-		 * when entity->finish <= old_st->vtime).
-		 */
-		new_st = bfq_entity_service_tree(entity);
-		new_st->wsum += entity->weight;
-
-		if (new_st != old_st)
-			entity->start = new_st->vtime;
-	}
-
-	return new_st;
 }
 
 /**
@@ -607,7 +657,7 @@ static void __bfq_activate_entity(struct bfq_entity *entity)
 		entity->on_st = 1;
 	}
 
-	st = __bfq_entity_update_prio(st, entity);
+	st = __bfq_entity_update_weight_prio(st, entity);
 	bfq_calc_finish(entity, entity->budget);
 	bfq_active_insert(st, entity);
 }
@@ -833,20 +883,30 @@ static struct bfq_entity *__bfq_lookup_next_entity(struct bfq_service_tree *st)
  * structures.
  */
 static struct bfq_entity *bfq_lookup_next_entity(struct bfq_sched_data *sd,
-						 int extract)
+						 int extract,
+						 struct bfq_data *bfqd)
 {
 	struct bfq_service_tree *st = sd->service_tree;
 	struct bfq_entity *entity;
-	int i;
+	int i=0;
 
 	BUG_ON(sd->active_entity != NULL);
 
-	for (i = 0; i < BFQ_IOPRIO_CLASSES; i++, st++) {
-		entity = __bfq_lookup_next_entity(st);
+	if (bfqd != NULL &&
+	    jiffies - bfqd->bfq_class_idle_last_service > BFQ_CL_IDLE_TIMEOUT) {
+		entity = __bfq_lookup_next_entity(st + BFQ_IOPRIO_CLASSES - 1);
+		if (entity != NULL) {
+			i = BFQ_IOPRIO_CLASSES - 1;
+			bfqd->bfq_class_idle_last_service = jiffies;
+			sd->next_active = entity;
+		}
+	}
+	for (; i < BFQ_IOPRIO_CLASSES; i++) {
+		entity = __bfq_lookup_next_entity(st + i);
 		if (entity != NULL) {
 			if (extract) {
 				bfq_check_next_active(sd, entity);
-				bfq_active_extract(st, entity);
+				bfq_active_extract(st + i, entity);
 				sd->active_entity = entity;
 				sd->next_active = NULL;
 			}
@@ -873,7 +933,7 @@ static struct bfq_queue *bfq_get_next_queue(struct bfq_data *bfqd)
 
 	sd = &bfqd->root_group->sched_data;
 	for (; sd != NULL; sd = entity->my_sched_data) {
-		entity = bfq_lookup_next_entity(sd, 1);
+		entity = bfq_lookup_next_entity(sd, 1, bfqd);
 		BUG_ON(entity == NULL);
 		entity->service = 0;
 	}
