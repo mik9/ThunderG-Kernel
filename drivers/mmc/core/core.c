@@ -241,7 +241,8 @@ void mmc_wait_for_req(struct mmc_host *host, struct mmc_request *mrq)
 
 	mmc_start_request(host, mrq);
 
-	wait_for_completion(&complete);
+	wait_for_completion_io(&complete);
+
 }
 
 EXPORT_SYMBOL(mmc_wait_for_req);
