@@ -41,6 +41,11 @@
 #include <mach/gpio.h>
 #include <mach/clk.h>
 
+#ifdef CONFIG_HAS_EARLYSUSPEND
+#undef CONFIG_HAS_EARLYSUSPEND
+#endif
+
+
 static int mddi_probe(struct platform_device *pdev);
 static int mddi_remove(struct platform_device *pdev);
 
