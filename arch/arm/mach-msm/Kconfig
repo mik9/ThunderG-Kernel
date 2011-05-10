@@ -160,6 +160,13 @@ config MACH_MSM7X27_FFA
 	help
 	  Support for the Qualcomm MSM7x27 FFA eval board.
 
+config JESUS_PHONE
+	bool "Enable Jesus Phone mode (DANGEROUS)"
+	depends on MSM_CPU_FREQ_SET_MIN_MAX
+	default n
+	help
+	  Enable support for dangerous acpuclock frequencies/voltages.
+
 config MACH_MSM7X30_SURF
        depends on ARCH_MSM7X30
        depends on !MSM_STACKED_MEMORY
