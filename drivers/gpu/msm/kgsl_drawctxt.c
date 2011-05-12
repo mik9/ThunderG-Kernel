@@ -471,6 +471,9 @@ static void build_regsave_cmds(struct kgsl_device *device,
 {
 	unsigned int *start = ctx->cmd;
 	unsigned int *cmd = start;
+	unsigned int pm_override1;
+
+	kgsl_yamato_regread(device, REG_RBBM_PM_OVERRIDE1, &pm_override1);
 
 	*cmd++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
 	*cmd++ = 0;
@@ -482,6 +485,10 @@ static void build_regsave_cmds(struct kgsl_device *device,
 	*cmd++ = 0;
 #endif
 
+	/* Enable clock override for REG_FIFOS_SCLK */
+	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmd++ = pm_override1 | (1 << 6);
+
 #ifdef DISABLE_SHADOW_WRITES
 	/* Write HW registers into shadow */
 	build_reg_to_mem_range(REG_RB_SURFACE_INFO, REG_RB_DEPTH_INFO, &cmd,
@@ -490,24 +497,61 @@ static void build_regsave_cmds(struct kgsl_device *device,
 			       REG_PA_SC_SCREEN_SCISSOR_BR, &cmd, drawctxt);
 	build_reg_to_mem_range(REG_PA_SC_WINDOW_OFFSET,
 			       REG_PA_SC_WINDOW_SCISSOR_BR, &cmd, drawctxt);
-	build_reg_to_mem_range(REG_VGT_MAX_VTX_INDX, REG_RB_FOG_COLOR, &cmd,
-			       drawctxt);
+	if (device->chip_id != KGSL_CHIPID_LEIA_REV470) {
+		build_reg_to_mem_range(REG_VGT_MAX_VTX_INDX,
+				       REG_RB_FOG_COLOR, &cmd,
+				       drawctxt);
+	} else {
+		build_reg_to_mem_range(REG_VGT_MAX_VTX_INDX,
+				       REG_PC_INDEX_OFFSET, &cmd,
+				       drawctxt);
+		build_reg_to_mem_range(REG_RB_COLOR_MASK,
+				       REG_RB_FOG_COLOR, &cmd,
+				       drawctxt);
+	}
+
 	build_reg_to_mem_range(REG_RB_STENCILREFMASK_BF,
 			       REG_PA_CL_VPORT_ZOFFSET, &cmd, drawctxt);
 	build_reg_to_mem_range(REG_SQ_PROGRAM_CNTL, REG_SQ_WRAPPING_1, &cmd,
 			       drawctxt);
-	build_reg_to_mem_range(REG_RB_DEPTHCONTROL, REG_RB_MODECONTROL, &cmd,
-			       drawctxt);
-	build_reg_to_mem_range(REG_PA_SU_POINT_SIZE, REG_PA_SC_LINE_STIPPLE,
-			       &cmd, drawctxt);
-	build_reg_to_mem_range(REG_PA_SC_VIZ_QUERY, REG_PA_SC_VIZ_QUERY, &cmd,
-			       drawctxt);
+	if (device->chip_id != KGSL_CHIPID_LEIA_REV470) {
+		build_reg_to_mem_range(REG_RB_DEPTHCONTROL, REG_RB_MODECONTROL,
+					&cmd, drawctxt);
+	} else {
+		build_reg_to_mem_range(REG_RB_DEPTHCONTROL, REG_RB_COLORCONTROL,
+				       &cmd, drawctxt);
+		build_reg_to_mem_range(REG_RA_CL_CLIP_CNTL, REG_PA_CL_VTE_CNTL,
+				       &cmd, drawctxt);
+		build_reg_to_mem_range(REG_RB_MODECONTROL, REG_RB_SAMPLE_POS,
+				       &cmd, drawctxt);
+	}
+
+	if (device->chip_id != KGSL_CHIPID_LEIA_REV470) {
+		build_reg_to_mem_range(REG_PA_SU_POINT_SIZE,
+					REG_PA_SC_LINE_STIPPLE,
+					&cmd, drawctxt);
+		build_reg_to_mem_range(REG_PA_SC_VIZ_QUERY,
+					REG_PA_SC_VIZ_QUERY,
+					&cmd, drawctxt);
+	} else {
+		build_reg_to_mem_range(REG_PA_SU_POINT_SIZE,
+					REG_PA_SC_LINE_CNTL,
+					&cmd, drawctxt);
+	}
 	build_reg_to_mem_range(REG_PA_SC_LINE_CNTL, REG_SQ_PS_CONST, &cmd,
 			       drawctxt);
 	build_reg_to_mem_range(REG_PA_SC_AA_MASK, REG_PA_SC_AA_MASK, &cmd,
 			       drawctxt);
-	build_reg_to_mem_range(REG_VGT_VERTEX_REUSE_BLOCK_CNTL,
-			       REG_RB_DEPTH_CLEAR, &cmd, drawctxt);
+	if (device->chip_id != KGSL_CHIPID_LEIA_REV470) {
+		build_reg_to_mem_range(REG_VGT_VERTEX_REUSE_BLOCK_CNTL,
+				       REG_RB_DEPTH_CLEAR, &cmd, drawctxt);
+	} else {
+		build_reg_to_mem_range(REG_VGT_VERTEX_REUSE_BLOCK_CNTL,
+				       REG_VGT_VERTEX_REUSE_BLOCK_CNTL,
+					&cmd, drawctxt);
+		build_reg_to_mem_range(REG_RB_COPY_CONTROL,
+				       REG_RB_DEPTH_CLEAR, &cmd, drawctxt);
+	}
 	build_reg_to_mem_range(REG_RB_SAMPLE_COUNT_CTL, REG_RB_COLOR_DEST_MASK,
 			       &cmd, drawctxt);
 	build_reg_to_mem_range(REG_PA_SU_POLY_OFFSET_FRONT_SCALE,
@@ -570,8 +614,12 @@ static void build_regsave_cmds(struct kgsl_device *device,
 	*cmd++ = ctx->reg_values[1];
 
 	*cmd++ = pm4_type3_packet(PM4_REG_TO_MEM, 2);
-	*cmd++ = REG_RBBM_PM_OVERRIDE2;
+	*cmd++ = REG_RBBM_PM_OVERRIDE1;
 	*cmd++ = ctx->reg_values[2];
+
+	*cmd++ = pm4_type3_packet(PM4_REG_TO_MEM, 2);
+	*cmd++ = REG_RBBM_PM_OVERRIDE2;
+	*cmd++ = ctx->reg_values[3];
 
 	/* Copy Boolean constants */
 	cmd = reg_to_mem(cmd, ctx->bool_shadow, REG_SQ_CF_BOOLEANS,
@@ -579,6 +627,12 @@ static void build_regsave_cmds(struct kgsl_device *device,
 
 	/* Copy Loop constants */
 	cmd = reg_to_mem(cmd, ctx->loop_shadow, REG_SQ_CF_LOOP, LOOP_CONSTANTS);
+
+	/* Restore RBBM_PM_OVERRIDE1 */
+	*cmd++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
+	*cmd++ = 0;
+	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmd++ = pm_override1;
 
 	/* create indirect buffer command for above command sequence */
 	create_ib1(drawctxt, drawctxt->reg_save, start, cmd);
@@ -594,11 +648,14 @@ static unsigned int *build_gmem2sys_cmds(struct kgsl_device *device,
 {
 	unsigned int *cmds = shadow->gmem_save_commands;
 	unsigned int *start = cmds;
+	unsigned int pm_override1;
 	/* Calculate the new offset based on the adjusted base */
 	unsigned int bytesperpixel = format2bytesperpixel[shadow->format];
 	unsigned int addr =
 	    (shadow->gmemshadow.gpuaddr + shadow->offset * bytesperpixel);
 	unsigned int offset = (addr - (addr & 0xfffff000)) / bytesperpixel;
+
+	kgsl_yamato_regread(device, REG_RBBM_PM_OVERRIDE1, &pm_override1);
 
 	/* Store TP0_CHICKEN register */
 	*cmds++ = pm4_type3_packet(PM4_REG_TO_MEM, 2);
@@ -610,6 +667,10 @@ static unsigned int *build_gmem2sys_cmds(struct kgsl_device *device,
 
 	*cmds++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
 	*cmds++ = 0;
+
+	/* Enable clock override for REG_FIFOS_SCLK */
+	*cmds++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmds++ = pm_override1 | (1 << 6);
 
 	/* Set TP0_CHICKEN to zero */
 	*cmds++ = pm4_type0_packet(REG_TP0_CHICKEN, 1);
@@ -689,7 +750,10 @@ static unsigned int *build_gmem2sys_cmds(struct kgsl_device *device,
 	/* disable Z */
 	*cmds++ = pm4_type3_packet(PM4_SET_CONSTANT, 2);
 	*cmds++ = PM4_REG(REG_RB_DEPTHCONTROL);
-	*cmds++ = 0;
+	if (device->chip_id == KGSL_CHIPID_LEIA_REV470)
+		*cmds++ = 0x08;
+	else
+		*cmds++ = 0;
 
 	/* set REG_PA_SU_SC_MODE_CNTL
 	 *              Front_ptype = draw triangles
@@ -743,12 +807,26 @@ static unsigned int *build_gmem2sys_cmds(struct kgsl_device *device,
 	*cmds++ = PM4_REG(REG_RB_MODECONTROL);
 	*cmds++ = 0x6;		/* EDRAM copy */
 
-	/* queue the draw packet */
-	*cmds++ = pm4_type3_packet(PM4_DRAW_INDX, 2);
-	*cmds++ = 0;		/* viz query info. */
-	/* PrimType=RectList, NumIndices=3, SrcSel=AutoIndex */
-	*cmds++ = 0x00030088;
+	if (device->chip_id == KGSL_CHIPID_LEIA_REV470) {
+		*cmds++ = 0xc0043600; /* packet 3 3D_DRAW_INDX_2 */
+		*cmds++ = 0x0;
+		*cmds++ = 0x00004046; /* tristrip */
+		*cmds++ = 0x00000004; /* NUM_INDICES */
+		*cmds++ = 0x00010000; /* index: 0x00, 0x01 */
+		*cmds++ = 0x00030002; /* index: 0x02, 0x03 */
+	} else {
+		/* queue the draw packet */
+		*cmds++ = pm4_type3_packet(PM4_DRAW_INDX, 2);
+		*cmds++ = 0;		/* viz query info. */
+		/* PrimType=RectList, NumIndices=3, SrcSel=AutoIndex */
+		*cmds++ = 0x00030088;
+	}
 
+	/* Restore RBBM_PM_OVERRIDE1 */
+	*cmds++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
+	*cmds++ = 0;
+	*cmds++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmds++ = pm_override1;
 	/* create indirect buffer command for above command sequence */
 	create_ib1(drawctxt, shadow->gmem_save, start, cmds);
 
@@ -765,6 +843,9 @@ static unsigned int *build_sys2gmem_cmds(struct kgsl_device *device,
 {
 	unsigned int *cmds = shadow->gmem_restore_commands;
 	unsigned int *start = cmds;
+	unsigned int pm_override1;
+
+	kgsl_yamato_regread(device, REG_RBBM_PM_OVERRIDE1, &pm_override1);
 
 	/* Store TP0_CHICKEN register */
 	*cmds++ = pm4_type3_packet(PM4_REG_TO_MEM, 2);
@@ -776,6 +857,10 @@ static unsigned int *build_sys2gmem_cmds(struct kgsl_device *device,
 
 	*cmds++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
 	*cmds++ = 0;
+
+	/* Enable clock override for REG_FIFOS_SCLK */
+	*cmds++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmds++ = pm_override1 | (1 << 6);
 
 	/* Set TP0_CHICKEN to zero */
 	*cmds++ = pm4_type0_packet(REG_TP0_CHICKEN, 1);
@@ -821,10 +906,12 @@ static unsigned int *build_sys2gmem_cmds(struct kgsl_device *device,
 	*cmds++ = PM4_REG(REG_PA_SC_AA_MASK);
 	*cmds++ = 0x0000ffff;	/* REG_PA_SC_AA_MASK */
 
-	/* PA_SC_VIZ_QUERY */
-	*cmds++ = pm4_type3_packet(PM4_SET_CONSTANT, 2);
-	*cmds++ = PM4_REG(REG_PA_SC_VIZ_QUERY);
-	*cmds++ = 0x0;		/*REG_PA_SC_VIZ_QUERY */
+	if (device->chip_id != KGSL_CHIPID_LEIA_REV470) {
+		/* PA_SC_VIZ_QUERY */
+		*cmds++ = pm4_type3_packet(PM4_SET_CONSTANT, 2);
+		*cmds++ = PM4_REG(REG_PA_SC_VIZ_QUERY);
+		*cmds++ = 0x0;		/*REG_PA_SC_VIZ_QUERY */
+	}
 
 	/* RB_COLORCONTROL */
 	*cmds++ = pm4_type3_packet(PM4_SET_CONSTANT, 2);
@@ -896,7 +983,11 @@ static unsigned int *build_sys2gmem_cmds(struct kgsl_device *device,
 	/* RB_DEPTHCONTROL */
 	*cmds++ = pm4_type3_packet(PM4_SET_CONSTANT, 2);
 	*cmds++ = PM4_REG(REG_RB_DEPTHCONTROL);
-	*cmds++ = 0;		/* disable Z */
+
+	if (device->chip_id == KGSL_CHIPID_LEIA_REV470)
+		*cmds++ = 8;		/* disable Z */
+	else
+		*cmds++ = 0;		/* disable Z */
 
 	/* Use maximum scissor values -- quad vertices already
 	 * have the correct bounds */
@@ -941,11 +1032,26 @@ static unsigned int *build_sys2gmem_cmds(struct kgsl_device *device,
 	/* draw pixels with color and depth/stencil component */
 	*cmds++ = 0x4;
 
-	/* queue the draw packet */
-	*cmds++ = pm4_type3_packet(PM4_DRAW_INDX, 2);
-	*cmds++ = 0;		/* viz query info. */
-	/* PrimType=RectList, NumIndices=3, SrcSel=AutoIndex */
-	*cmds++ = 0x00030088;
+	if (device->chip_id == KGSL_CHIPID_LEIA_REV470) {
+		*cmds++ = 0xc0043600; /* packet 3 3D_DRAW_INDX_2 */
+		*cmds++ = 0x0;
+		*cmds++ = 0x00004046; /* tristrip */
+		*cmds++ = 0x00000004; /* NUM_INDICES */
+		*cmds++ = 0x00010000; /* index: 0x00, 0x01 */
+		*cmds++ = 0x00030002; /* index: 0x02, 0x03 */
+	} else {
+		/* queue the draw packet */
+		*cmds++ = pm4_type3_packet(PM4_DRAW_INDX, 2);
+		*cmds++ = 0;		/* viz query info. */
+		/* PrimType=RectList, NumIndices=3, SrcSel=AutoIndex */
+		*cmds++ = 0x00030088;
+	}
+
+	/* Restore RBBM_PM_OVERRIDE1 */
+	*cmds++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
+	*cmds++ = 0;
+	*cmds++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmds++ = pm_override1;
 
 	/* create indirect buffer command for above command sequence */
 	create_ib1(drawctxt, shadow->gmem_restore, start, cmds);
@@ -968,9 +1074,16 @@ static void build_regrestore_cmds(struct kgsl_device *device,
 {
 	unsigned int *start = ctx->cmd;
 	unsigned int *cmd = start;
+	unsigned int pm_override1;
+
+	kgsl_yamato_regread(device, REG_RBBM_PM_OVERRIDE1, &pm_override1);
 
 	*cmd++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
 	*cmd++ = 0;
+
+	/* Enable clock override for REG_FIFOS_SCLK */
+	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmd++ = pm_override1 | (1 << 6);
 
 	/* H/W Registers */
 	/* deferred pm4_type3_packet(PM4_LOAD_CONSTANT_CONTEXT, ???); */
@@ -988,8 +1101,14 @@ static void build_regrestore_cmds(struct kgsl_device *device,
 	cmd = reg_range(cmd, REG_VGT_MAX_VTX_INDX, REG_PA_CL_VPORT_ZOFFSET);
 	cmd = reg_range(cmd, REG_SQ_PROGRAM_CNTL, REG_SQ_WRAPPING_1);
 	cmd = reg_range(cmd, REG_RB_DEPTHCONTROL, REG_RB_MODECONTROL);
-	cmd = reg_range(cmd, REG_PA_SU_POINT_SIZE,
-			REG_PA_SC_VIZ_QUERY); /*REG_VGT_ENHANCE */
+
+	if (device->chip_id != KGSL_CHIPID_LEIA_REV470)
+		cmd = reg_range(cmd, REG_PA_SU_POINT_SIZE,
+				REG_PA_SC_VIZ_QUERY); /*REG_VGT_ENHANCE */
+	else
+		cmd = reg_range(cmd, REG_PA_SU_POINT_SIZE,
+				REG_PA_SU_LINE_CNTL);
+
 	cmd = reg_range(cmd, REG_PA_SC_LINE_CNTL, REG_RB_COLOR_DEST_MASK);
 	cmd = reg_range(cmd, REG_PA_SU_POLY_OFFSET_FRONT_SCALE,
 			REG_PA_SU_POLY_OFFSET_BACK_OFFSET);
@@ -997,13 +1116,13 @@ static void build_regrestore_cmds(struct kgsl_device *device,
 	/* Now we know how many register blocks we have, we can compute command
 	 * length
 	 */
-	start[2] =
-	    pm4_type3_packet(PM4_LOAD_CONSTANT_CONTEXT, (cmd - start) - 3);
+	start[4] =
+	    pm4_type3_packet(PM4_LOAD_CONSTANT_CONTEXT, (cmd - start) - 5);
 	/* Enable shadowing for the entire register block. */
 #ifdef DISABLE_SHADOW_WRITES
-	start[4] |= (0 << 24) | (4 << 16);	/* Disable shadowing. */
+	start[6] |= (0 << 24) | (4 << 16);	/* Disable shadowing. */
 #else
-	start[4] |= (1 << 24) | (4 << 16);
+	start[6] |= (1 << 24) | (4 << 16);
 #endif
 
 	/* Need to handle some of the registers separately */
@@ -1017,8 +1136,12 @@ static void build_regrestore_cmds(struct kgsl_device *device,
 	ctx->reg_values[1] = gpuaddr(cmd, &drawctxt->gpustate);
 	*cmd++ = 0x00000000;
 
-	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE2, 1);
+	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
 	ctx->reg_values[2] = gpuaddr(cmd, &drawctxt->gpustate);
+	*cmd++ = 0x00000000;
+
+	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE2, 1);
+	ctx->reg_values[3] = gpuaddr(cmd, &drawctxt->gpustate);
 	*cmd++ = 0x00000000;
 
 	/* ALU Constants */
@@ -1061,6 +1184,12 @@ static void build_regrestore_cmds(struct kgsl_device *device,
 	 */
 	ctx->loop_shadow = gpuaddr(cmd, &drawctxt->gpustate);
 	cmd += LOOP_CONSTANTS;
+
+	/* Restore RBBM_PM_OVERRIDE1 */
+	*cmd++ = pm4_type3_packet(PM4_WAIT_FOR_IDLE, 1);
+	*cmd++ = 0;
+	*cmd++ = pm4_type0_packet(REG_RBBM_PM_OVERRIDE1, 1);
+	*cmd++ = pm_override1;
 
 	/* create indirect buffer command for above command sequence */
 	create_ib1(drawctxt, drawctxt->reg_restore, start, cmd);
@@ -1777,7 +1906,8 @@ kgsl_drawctxt_switch(struct kgsl_yamato_device *yamato_device,
 
 		cmds[0] = pm4_type3_packet(PM4_SET_BIN_BASE_OFFSET, 1);
 		cmds[1] = drawctxt->bin_base_offset;
-		kgsl_ringbuffer_issuecmds(device, 0, cmds, 2);
+		if (device->chip_id != KGSL_CHIPID_LEIA_REV470)
+			kgsl_ringbuffer_issuecmds(device, 0, cmds, 2);
 
 	} else
 		kgsl_mmu_setstate(device, device->mmu.defaultpagetable);
