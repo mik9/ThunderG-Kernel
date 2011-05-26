@@ -273,7 +273,7 @@ static void mcs6000_work(struct work_struct *work)
 	}
 
 	input_type = read_buf[0] & 0x0f;
-	key_touch = (read_buf[0] & 0xf0) >> 4;
+//	key_touch = (read_buf[0] & 0xf0) >> 4;
 
 	x1 = y1 =0;
 #ifdef LG_FW_MULTI_TOUCH
@@ -296,10 +296,10 @@ static void mcs6000_work(struct work_struct *work)
 #endif
 
 	if (dev->pendown) { /* touch pressed case */
-		if(key_touch) {
+/*		if(key_touch) {
 			mcs6000_key_event_touch(key_touch, PRESSED, dev);
 			key_pressed = key_touch;
-		}
+		}*/
 
 		if(input_type) {
 			touch_pressed = 1;
@@ -329,10 +329,10 @@ static void mcs6000_work(struct work_struct *work)
 		}
 	} 
 	else { /* touch released case */
-		if(key_pressed) {
+/*		if(key_pressed) {
 			mcs6000_key_event_touch(key_pressed, RELEASED, dev);
 			key_pressed = 0;
-		}
+		}*/
 
 		if(touch_pressed) {
 #ifdef LG_FW_MULTI_TOUCH
