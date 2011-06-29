@@ -982,8 +982,8 @@ static ssize_t store_mode_value(struct device *dev, struct device_attribute *att
 {
 	int mode = 0;
 	sscanf(buf, "%d", &mode);	
-    //echo ¡§1¡¨ > /sys/bus/i2c/devices/0-0030/mode: may switch the sensor to sensor trigger mode, the sampling rate is set to be 25hz in the sample code. 
-    //echo ¡§0¡¨ > /sys/bus/i2c/devices/0-0030/mode: may switch the sensor to host trigger mode	
+    //echo ??1?? > /sys/bus/i2c/devices/0-0030/mode: may switch the sensor to sensor trigger mode, the sampling rate is set to be 25hz in the sample code. 
+    //echo ??0?? > /sys/bus/i2c/devices/0-0030/mode: may switch the sensor to host trigger mode	
 	AMI602_SetMode(mode);
 
 	AMI602_Init_SensorTrigger();

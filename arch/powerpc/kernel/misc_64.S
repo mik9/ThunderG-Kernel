@@ -28,7 +28,6 @@
 
 	.text
 
-#ifdef CONFIG_IRQSTACKS
 _GLOBAL(call_do_softirq)
 	mflr	r0
 	std	r0,16(r1)
@@ -52,7 +51,6 @@ _GLOBAL(call_handle_irq)
 	ld	r0,16(r1)
 	mtlr	r0
 	blr
-#endif /* CONFIG_IRQSTACKS */
 
 	.section	".toc","aw"
 PPC64_CACHES:
@@ -463,8 +461,7 @@ _GLOBAL(disable_kernel_fp)
  * wait for the flag to change, indicating this kernel is going away but
  * the slave code for the next one is at addresses 0 to 100.
  *
- * This is used by all slaves, even those that did not find a matching
- * paca in the secondary startup code.
+ * This is used by all slaves.
  *
  * Physical (hardware) cpu id should be in r3.
  */
@@ -472,6 +469,10 @@ _GLOBAL(kexec_wait)
 	bl	1f
 1:	mflr	r5
 	addi	r5,r5,kexec_flag-1b
+
+	li	r4,KEXEC_STATE_REAL_MODE
+	stb	r4,PACAKEXECSTATE(r13)
+	SYNC
 
 99:	HMT_LOW
 #ifdef CONFIG_KEXEC		/* use no memory without kexec */
@@ -497,17 +498,11 @@ kexec_flag:
  *
  * get phys id from paca
  * switch to real mode
- * mark the paca as no longer used
  * join other cpus in kexec_wait(phys_id)
  */
 _GLOBAL(kexec_smp_wait)
 	lhz	r3,PACAHWCPUID(r13)
 	bl	real_mode
-
-	li	r4,KEXEC_STATE_REAL_MODE
-	stb	r4,PACAKEXECSTATE(r13)
-	SYNC
-
 	b	.kexec_wait
 
 /*

@@ -15,6 +15,7 @@
 #include <linux/init.h>
 #include <linux/agp_backend.h>
 #include <linux/log2.h>
+#include <linux/slab.h>
 
 #include <asm/acpi-ext.h>
 
@@ -507,6 +508,9 @@ zx1_gart_probe (acpi_handle obj, u32 depth, void *context, void **ret)
 		status = acpi_get_parent(handle, &parent);
 		handle = parent;
 	} while (ACPI_SUCCESS(status));
+
+	if (ACPI_FAILURE(status))
+		return AE_OK;	/* found no enclosing IOC */
 
 	if (hp_zx1_setup(sba_hpa + HP_ZX1_IOC_OFFSET, lba_hpa))
 		return AE_OK;

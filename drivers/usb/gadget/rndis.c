@@ -28,6 +28,7 @@
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/proc_fs.h>
+#include <linux/slab.h>
 #include <linux/seq_file.h>
 #include <linux/netdevice.h>
 
@@ -1150,7 +1151,7 @@ static struct proc_dir_entry *rndis_connect_state [RNDIS_MAX_CONFIGS];
 #endif	/* CONFIG_USB_GADGET_DEBUG_FILES */
 
 
-int rndis_init(void)
+int __init rndis_init (void)
 {
 	u8 i;
 

@@ -4,6 +4,7 @@ OUTPUT_FORMAT(CONFIG_OUTPUT_FORMAT, CONFIG_OUTPUT_FORMAT, CONFIG_OUTPUT_FORMAT)
 
 #undef i386
 
+#include <asm/cache.h>
 #include <asm/page_types.h>
 
 #ifdef CONFIG_X86_64
@@ -25,8 +26,8 @@ SECTIONS
 		HEAD_TEXT
 		_ehead = . ;
 	}
-	.rodata.compressed : {
-		*(.rodata.compressed)
+	.rodata..compressed : {
+		*(.rodata..compressed)
 	}
 	.text :	{
 		_text = .; 	/* Text */
@@ -46,7 +47,7 @@ SECTIONS
 		*(.data.*)
 		_edata = . ;
 	}
-	. = ALIGN(CONFIG_X86_L1_CACHE_BYTES);
+	. = ALIGN(L1_CACHE_BYTES);
 	.bss : {
 		_bss = . ;
 		*(.bss)

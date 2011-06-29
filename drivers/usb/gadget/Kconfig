@@ -209,17 +209,6 @@ config USB_OMAP
 	default USB_GADGET
 	select USB_GADGET_SELECTED
 
-config USB_OTG
-	boolean "OTG Support"
-	depends on USB_GADGET_OMAP && ARCH_OMAP_OTG && USB_OHCI_HCD
-	help
-	   The most notable feature of USB OTG is support for a
-	   "Dual-Role" device, which can act as either a device
-	   or a host.  The initial role choice can be changed
-	   later, when two dual-role devices talk to each other.
-
-	   Select this only if your OMAP board has a Mini-AB connector.
-
 config USB_GADGET_PXA25X
 	boolean "PXA 25x or IXP 4xx"
 	depends on (ARCH_PXA && PXA25x) || ARCH_IXP4XX
@@ -295,6 +284,7 @@ config USB_GADGET_S3C_HSOTG
 	boolean "S3C HS/OtG USB Device controller"
 	depends on S3C_DEV_USB_HSOTG
 	select USB_GADGET_S3C_HSOTG_PIO
+	select USB_GADGET_DUALSPEED
 	help
 	  The Samsung S3C64XX USB2.0 high-speed gadget controller
 	  integrated into the S3C64XX series SoC.
@@ -514,7 +504,6 @@ config USB_GADGET_MSM_72K
 	depends on ARCH_MSM
 	select USB_GADGET_SELECTED
 	select USB_GADGET_DUALSPEED
-	select USB_OTG if USB_EHCI_MSM && PM
 	help
 	   USB gadget driver for Qualcomm MSM 72K architecture.
 
@@ -729,6 +718,43 @@ config USB_GADGETFS
 	  Say "y" to link the driver statically, or "m" to build a
 	  dynamically linked module called "gadgetfs".
 
+config USB_FUNCTIONFS
+	tristate "Function Filesystem (EXPERIMENTAL)"
+	depends on EXPERIMENTAL
+	help
+	  The Function Filesystem (FunctioFS) lets one create USB
+	  composite functions in user space in the same way as GadgetFS
+	  lets one create USB gadgets in user space.  This allows creation
+	  of composite gadgets such that some of the functions are
+	  implemented in kernel space (for instance Ethernet, serial or
+	  mass storage) and other are implemented in user space.
+
+	  Say "y" to link the driver statically, or "m" to build
+	  a dynamically linked module called "g_ffs".
+
+config USB_FUNCTIONFS_ETH
+	bool "Include CDC ECM (Ethernet) function"
+	depends on USB_FUNCTIONFS && NET
+	help
+	  Include an CDC ECM (Ethernet) funcion in the CDC ECM (Funcion)
+	  Filesystem.  If you also say "y" to the RNDIS query below the
+	  gadget will have two configurations.
+
+config USB_FUNCTIONFS_RNDIS
+	bool "Include RNDIS (Ethernet) function"
+	depends on USB_FUNCTIONFS && NET
+	help
+	  Include an RNDIS (Ethernet) funcion in the Funcion Filesystem.
+	  If you also say "y" to the CDC ECM query above the gadget will
+	  have two configurations.
+
+config USB_FUNCTIONFS_GENERIC
+	bool "Include 'pure' configuration"
+	depends on USB_FUNCTIONFS && (USB_FUNCTIONFS_ETH || USB_FUNCTIONFS_RNDIS)
+	help
+	  Include a configuration with FunctionFS and no Ethernet
+	  configuration.
+
 config USB_FILE_STORAGE
 	tristate "File-backed Storage Gadget"
 	depends on BLOCK
@@ -750,6 +776,24 @@ config USB_FILE_STORAGE_TEST
 	  File-backed Storage Gadget, useful for probing the
 	  behavior of USB Mass Storage hosts.  Not needed for
 	  normal operation.
+
+config USB_MASS_STORAGE
+	tristate "Mass Storage Gadget"
+	depends on BLOCK
+	help
+	  The Mass Storage Gadget acts as a USB Mass Storage disk drive.
+	  As its storage repository it can use a regular file or a block
+	  device (in much the same way as the "loop" device driver),
+	  specified as a module parameter or sysfs option.
+
+	  This is heavily based on File-backed Storage Gadget and in most
+	  cases you will want to use FSG instead.  This gadget is mostly
+	  here to test the functionality of the Mass Storage Function
+	  which may be used with composite framework.
+
+	  Say "y" to link the driver statically, or "m" to build
+	  a dynamically linked module called "g_mass_storage".  If unsure,
+	  consider File-backed Storage Gadget.
 
 config USB_G_SERIAL
 	tristate "Serial Gadget (with CDC ACM and CDC OBEX support)"
@@ -800,20 +844,72 @@ config USB_G_PRINTER
 	  which includes sample code for accessing the device file.
 
 config USB_ANDROID
-	tristate "Android Gadget"
+	boolean "Android Gadget"
+	depends on SWITCH
 	help
-	  The Android gadget provides mass storage and adb transport.
+	  The Android gadget driver supports multiple USB functions.
+	  The functions can be configured via a board file and may be
+	  enabled and disabled dynamically.
 
-	  Say "y" to link the driver statically, or "m" to build a
-	  dynamically linked module called "g_android".
-
-config USB_ANDROID_DIAG
-	tristate "diag function driver"
+config USB_ANDROID_ACM
+	boolean "Android gadget ACM serial function"
 	depends on USB_ANDROID
 	default n
 	help
-	  Say "y" to link the driver statically, or "m" to build
-	  as a part of "g_android"
+	  Provides ACM serial function for android gadget driver.
+
+config USB_ANDROID_ADB
+	boolean "Android gadget adb function"
+	depends on USB_ANDROID
+	default y
+	help
+	  Provides adb function for android gadget driver.
+
+config USB_ANDROID_DIAG
+	boolean "USB MSM7K Diag Function"
+	depends on USB_ANDROID
+	default y
+	help
+	  Qualcomm diagnostics interface support.
+
+config USB_ANDROID_MASS_STORAGE
+	boolean "Android gadget mass storage function"
+	depends on USB_ANDROID && SWITCH
+	default y
+	help
+	  Provides USB mass storage function for android gadget driver.
+
+config USB_CSW_HACK
+	boolean "USB Mass storage csw hack Feature"
+	depends on USB_ANDROID_MASS_STORAGE
+	default y
+	help
+	 This csw hack feature is for increasing the performance of the mass
+	 storage
+
+
+config USB_ANDROID_MTP
+	boolean "Android MTP function"
+	depends on USB_ANDROID
+	help
+	  Provides Media Transfer Protocol (MTP) support for android gadget driver.
+
+config USB_ANDROID_RNDIS
+	boolean "Android gadget RNDIS ethernet function"
+	depends on USB_ANDROID
+	default n
+	help
+	  Provides RNDIS ethernet function for android gadget driver.
+
+config USB_ANDROID_RNDIS_WCEIS
+        boolean "Use Windows Internet Sharing Class/SubClass/Protocol"
+        depends on USB_ANDROID_RNDIS
+        help
+         Causes the driver to look like a Windows-compatible Internet
+         Sharing device, so Windows auto-detects it.
+
+         If you enable this option, the device is no longer CDC ethernet
+         compatible.
 
 config USB_ANDROID_CDC_ECM
 	tristate "cdc ecm function driver"
@@ -824,27 +920,9 @@ config USB_ANDROID_CDC_ECM
 	  android gadget.
 	  Say "y" to link the CDC-ECM as a part of android gadget
 
-config USB_ANDROID_RNDIS
-	bool "RNDIS function driver"
-	depends on USB_ANDROID
-	default n
-	help
-	  enabling this option adds RNDIS support to the
-	  android gadget.
-
-config USB_ANDROID_RNDIS_WCEIS
-	boolean "Use Windows Internet Sharing Class/SubClass/Protocol"
-	depends on USB_ANDROID_RNDIS
-	default n
-	help
-	 Causes the driver to look like a Windows-compatible Internet
-	 Sharing device, so Windows auto-detects it
-
-	 If you enable this option, the device is no longer CDC ethernet
-	 compatible.
 
 config USB_ANDROID_RMNET
-	bool "RmNet function driver"
+	boolean "RmNet function driver"
 	depends on USB_ANDROID
 	default n
 	help
@@ -868,8 +946,31 @@ config RMNET_SMD_DATA_CHANNEL
 	help
 	  Data SMD channel for transferring network data
 
+config USB_ANDROID_RMNET_SDIO
+       boolean "RmNet over SDIO function driver"
+       depends on USB_ANDROID && MSM_SDIO_CMUX && MSM_SDIO_DMUX
+       default n
+       help
+         Enabling this option adds rmnet over sdio support to the
+         android gadget. Rmnet is an alternative to CDC-ECM
+         and Windows RNDIS. It uses QUALCOMM MSM Interface
+         for control transfers. It acts like a bridge between
+         Host and modem found in MSM chipsets.
+
+config RMNET_SDIO_CTL_CHANNEL
+       int "control SDIO channel id"
+       depends on USB_ANDROID_RMNET_SDIO
+       help
+         Control SDIO channel for transferring QMI messages
+
+config RMNET_SDIO_DATA_CHANNEL
+       int "Data SDIO channel id"
+       depends on USB_ANDROID_RMNET_SDIO
+       help
+         Data SDIO channel for transferring network data
+
 config USB_F_SERIAL
-	tristate "generic serial function driver"
+	boolean "generic serial function driver"
 	depends on USB_ANDROID
 	default n
 	help
@@ -877,9 +978,9 @@ config USB_F_SERIAL
 	  as a part of "g_android"
 
 config MODEM_SUPPORT
-	tristate "modem support in generic serial function driver"
+	boolean "modem support in generic serial function driver"
 	depends on USB_F_SERIAL
-	default n
+	default y
 	help
           This feature enables the modem functionality in the
 	  generic serial.
@@ -888,15 +989,6 @@ config MODEM_SUPPORT
 	  adds CDC descriptors to enumerate the generic serial as MODEM.
 	  adds CDC class requests to configure MODEM line settings.
 	  Say "y" to enable MODEM support in the generic serial driver.
-
-config USB_CSW_HACK
-	boolean "USB Mass storage csw hack Feature"
-	depends on USB_ANDROID
-	help
-	 This csw hack feature is for increasing the performance of the mass
-	 storage
-
-	default y
 
 config USB_CDC_COMPOSITE
 	tristate "CDC Composite Device (Ethernet and ACM)"
@@ -912,17 +1004,124 @@ config USB_CDC_COMPOSITE
 	  Say "y" to link the driver statically, or "m" to build a
 	  dynamically linked module.
 
+config USB_G_NOKIA
+	tristate "Nokia composite gadget"
+	depends on PHONET
+	help
+	  The Nokia composite gadget provides support for acm, obex
+	  and phonet in only one composite gadget driver.
+
+	  It's only really useful for N900 hardware. If you're building
+	  a kernel for N900, say Y or M here. If unsure, say N.
+
+config USB_G_MULTI
+	tristate "Multifunction Composite Gadget (EXPERIMENTAL)"
+	depends on BLOCK && NET
+	help
+	  The Multifunction Composite Gadget provides Ethernet (RNDIS
+	  and/or CDC Ethernet), mass storage and ACM serial link
+	  interfaces.
+
+	  You will be asked to choose which of the two configurations is
+	  to be available in the gadget.  At least one configuration must
+	  be chosen to make the gadget usable.  Selecting more than one
+	  configuration will prevent Windows from automatically detecting
+	  the gadget as a composite gadget, so an INF file will be needed to
+	  use the gadget.
+
+	  Say "y" to link the driver statically, or "m" to build a
+	  dynamically linked module called "g_multi".
+
+config USB_G_MULTI_RNDIS
+	bool "RNDIS + CDC Serial + Storage configuration"
+	depends on USB_G_MULTI
+	default y
+	help
+	  This option enables a configuration with RNDIS, CDC Serial and
+	  Mass Storage functions available in the Multifunction Composite
+	  Gadget.  This is the configuration dedicated for Windows since RNDIS
+	  is Microsoft's protocol.
+
+	  If unsure, say "y".
+
+config USB_G_MULTI_CDC
+	bool "CDC Ethernet + CDC Serial + Storage configuration"
+	depends on USB_G_MULTI
+	default n
+	help
+	  This option enables a configuration with CDC Ethernet (ECM), CDC
+	  Serial and Mass Storage functions available in the Multifunction
+	  Composite Gadget.
+
+	  If unsure, say "y".
+
+config USB_G_HID
+	tristate "HID Gadget"
+	help
+	  The HID gadget driver provides generic emulation of USB
+	  Human Interface Devices (HID).
+
+	  For more information, see Documentation/usb/gadget_hid.txt which
+	  includes sample code for accessing the device files.
+
+	  Say "y" to link the driver statically, or "m" to build a
+	  dynamically linked module called "g_hid".
+
 # put drivers that need isochronous transfer support (for audio
 # or video class gadget drivers), or specific hardware, here.
+config USB_G_WEBCAM
+	tristate "USB Webcam Gadget"
+	depends on VIDEO_DEV
+	help
+	  The Webcam Gadget acts as a composite USB Audio and Video Class
+	  device. It provides a userspace API to process UVC control requests
+	  and stream video data to the host.
 
-# - none yet
+	  Say "y" to link the driver statically, or "m" to build a
+	  dynamically linked module called "g_webcam".
+
+config USB_QCOM_MAEMO
+        tristate "Qcom gadget compositon for Maemo"
+	select MODEM_SUPPORT
+	select USB_CSW_HACK
+	help
+          Enable USB Composition for Maemo.
+          It supports RNDIS + DIAG + MODEM + NMEA + RMNET + MSC composition.
+
+config USB_MAEMO_RNDIS_WCEIS
+        boolean "Use Windows Internet Sharing Class/SubClass/Protocol"
+	depends on USB_QCOM_MAEMO
+	default y
+        help
+         Causes the driver to look like a Windows-compatible Internet
+         Sharing device, so Windows auto-detects it.
+
+         If you enable this option, the device is no longer CDC ethernet
+         compatible.
+
+config RMNET_SMD_CTL_CHANNEL
+        string "control SMD channel name"
+        depends on USB_QCOM_MAEMO
+        default ""
+        help
+          Control SMD channel for transferring QMI messages
+
+config RMNET_SMD_DATA_CHANNEL
+        string "Data SMD channel name"
+        depends on USB_QCOM_MAEMO
+        default ""
+        help
+          Data SMD channel for transferring network data
+
 
 endchoice
 
-# LGE_CHANGE_S [hyunhui.park@lge.com] 2010-04-27, Refine LG USB Kconfig
-# LGE_CHANGE_S [younsuk.song@lge.com] 2010-06-28 Add LG USB Kconfig for Gadget framework
+# LGE_CHANGE
+# Porting from Froyo
+# 2011-01-18, hyunhui.park@lge.com
+#
 config USB_SUPPORT_LGE_ANDROID_GADGET
-	tristate "USB Support LG Driver"
+	boolean "USB Support LG Driver"
 	depends on USB_ANDROID
 	help
 	  Gadget USB framework can support LG USB driver
@@ -978,48 +1177,85 @@ config USB_SUPPORT_LGE_SERIAL_FROM_ARM9_IMEI
 
 	default n
 
-# LGE_CHANGE_E [younsuk.song@lge.com] 2010-06-28 
-# LGE_CHANGE_E [hyunhui.park@lge.com] 2010-04-27
-
-# LGE_CHANGE_S [jaeho.cho@lge.com] 2010-07-16, LG_FW_MTP_DRIVER
-config USB_GADGET_LG_MTP_DRIVER
-	boolean "LG MTP Driver(CDMA class)"
-	depends on USB_SUPPORT_LGE_ANDROID_GADGET
-	help
-	  Supports LG MTP driver
-	
-	default n
-# LGE_CHANGE_E [jaeho.cho@lge.com] 2010-07-16
-
-# LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-11, Autorun Support
 config USB_SUPPORT_LGE_ANDROID_AUTORUN
-	boolean "Autorun support in LGE Android model(common)"
+	boolean "Autorun support in LGE Android(common)"
 	depends on USB_SUPPORT_LGE_ANDROID_GADGET
 	help
-	  It supports Autorun feature in LGE Android model if it is needed.
+	  It supports Autorun feature in LGE Android if it is needed.
 
 	default n
-# LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-11 	
 
-# LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-11, GPS fix for LG Driver 
+# LGE Fixup Series
+
+config USB_SUPPORT_LGE_ANDROID_GADGET_FIX
+	boolean "Fixup Android Gadget for LGE Android"
+	depends on USB_SUPPORT_LGE_ANDROID_GADGET
+	help
+	  Fixup codes for Android Gadget USB framework for LGE USB driver.
+
+	  1. It is from following android git commit:
+
+	  http://android.git.kernel.org/?p=kernel/common.git;a=commit;h=8da1d5c2542e4adcb45c4e77d876852a6e1d8a47
+	  usb: gadget: Fixed Android gadget function discovery & product matching
+
+	  - Do not bind until all required functions have registered
+	  - Consider multi-instance functions when matching products
+
+	  2. Handle IAD for composite function.
+
+	  Google android gadget cannot handle interface association descriptor
+	  (IAD) properly. By the fixup, android gadget can assign interface number
+	  of IAD dynamically.
+
+	default n
+
+config USB_SUPPORT_LGE_ANDROID_ACM_FIX
+	boolean "CDC ACM interface support in LGE Android model(common)"
+	depends on USB_SUPPORT_LGE_ANDROID_GADGET
+	help
+	  Fixup codes for CDC ACM interface in LGE Android.
+
+	  1. LG host modem driver use 16 bytes as max packet size of notify ep,
+	  but QCT use 10 bytes. Therefore we apply non-public patch for matching
+	  with LG host driver.
+
+	default n
+
 config USB_SUPPORT_LGE_ANDROID_NMEA_FIX
 	boolean "NMEA interface support in LGE Android model(common)"
 	depends on USB_SUPPORT_LGE_ANDROID_GADGET
 	select MODEM_SUPPORT
 	help
-	  It supports LG NMEA interface in LGE Android model.
+	  Fixup codes for NMEA interface in LGE Android.
+
+	  1. To match for LGE NMEA function which is slightly different from 
+	  NMEA descriptors of Android Gadget.
 
 	default n
-# LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-11 	
 
-# LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, CDC ECM fix for LG Driver 
 config USB_SUPPORT_LGE_ANDROID_ECM_FIX
 	boolean "CDC ECM interface support in LGE Android model(common)"
 	depends on USB_SUPPORT_LGE_ANDROID_GADGET
 	help
-	  It supports LG CDC ECM interface in LGE Android model.
+	  Fixup codes for CDC ECM interface in LGE Android.
+
+	  1. To match for LGE CDC ECM function which is slightly different from 
+	  CDC ECM descriptors of Android Gadget.
+
+	  2. Add function named "ecm" for CDC ECM binding to android gadget.
+	default n
+
+# LGE misc
+
+config USB_SUPPORT_LGE_ANDROID_FACTORY_CABLE_WQ
+	boolean "Detection of factory cable using workqueue in LGE Android model(common)"
+	depends on USB_SUPPORT_LGE_ANDROID_GADGET
+	help
+	  It supports factory cable detection using workqueue in LGE Android model.
+
+	  NOTE : This option must be used with factory cable kernel feature
+	  together(i.e. USB_SUPPORT_LGE_FACTORY_USB or USB_SUPPORT_LGE_FACTORY_USB_GSM).
 
 	default n
-# LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 	
 
 endif # USB_GADGET

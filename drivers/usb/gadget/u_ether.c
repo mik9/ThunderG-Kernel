@@ -23,6 +23,7 @@
 /* #define VERBOSE_DEBUG */
 
 #include <linux/kernel.h>
+#include <linux/gfp.h>
 #include <linux/device.h>
 #include <linux/ctype.h>
 #include <linux/etherdevice.h>
@@ -704,7 +705,7 @@ module_param(host_addr, charp, S_IRUGO);
 MODULE_PARM_DESC(host_addr, "Host Ethernet Address");
 
 
-static u8 nibble(unsigned char c)
+static u8 __init nibble(unsigned char c)
 {
 	if (isdigit(c))
 		return c - '0';
@@ -744,6 +745,10 @@ static const struct net_device_ops eth_netdev_ops = {
 	.ndo_change_mtu		= ueth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
+};
+
+static struct device_type gadget_type = {
+	.name	= "gadget",
 };
 
 /**
@@ -808,6 +813,7 @@ int gether_setup(struct usb_gadget *g, u8 ethaddr[ETH_ALEN])
 
 	dev->gadget = g;
 	SET_NETDEV_DEV(net, &g->dev);
+	SET_NETDEV_DEVTYPE(net, &gadget_type);
 
 	status = register_netdev(net);
 	if (status < 0) {
@@ -941,7 +947,6 @@ void gether_disconnect(struct gether *link)
 	struct eth_dev		*dev = link->ioport;
 	struct usb_request	*req;
 
-	WARN_ON(!dev);
 	if (!dev)
 		return;
 
@@ -970,8 +975,6 @@ void gether_disconnect(struct gether *link)
 	link->in = NULL;
 
 	usb_ep_disable(link->out_ep);
-	usb_ep_fifo_flush(link->in_ep);
-	usb_ep_fifo_flush(link->out_ep);
 	spin_lock(&dev->req_lock);
 	while (!list_empty(&dev->rx_reqs)) {
 		req = container_of(dev->rx_reqs.next,

@@ -59,20 +59,8 @@ static struct usb_device_id btusb_table[] = {
 	/* Generic Bluetooth USB device */
 	{ USB_DEVICE_INFO(0xe0, 0x01, 0x01) },
 
-	/* Apple MacBookPro 7,1 */
-	{ USB_DEVICE(0x05ac, 0x8213) },
-
 	/* Apple iMac11,1 */
 	{ USB_DEVICE(0x05ac, 0x8215) },
-
-	/* Apple MacBookPro6,2 */
-	{ USB_DEVICE(0x05ac, 0x8218) },
-
-	/* Apple MacBookAir3,1, MacBookAir3,2 */
-	{ USB_DEVICE(0x05ac, 0x821b) },
-
-	/* Apple MacBookPro8,2 */
-	{ USB_DEVICE(0x05ac, 0x821a) },
 
 	/* AVM BlueFRITZ! USB v2.0 */
 	{ USB_DEVICE(0x057c, 0x3800) },
@@ -954,7 +942,7 @@ static int btusb_probe(struct usb_interface *intf,
 		return -ENOMEM;
 	}
 
-	hdev->type = HCI_USB;
+	hdev->bus = HCI_USB;
 	hdev->driver_data = data;
 
 	data->hdev = hdev;
@@ -1082,7 +1070,7 @@ static int btusb_suspend(struct usb_interface *intf, pm_message_t message)
 		return 0;
 
 	spin_lock_irq(&data->txlock);
-	if (!(interface_to_usbdev(intf)->auto_pm && data->tx_in_flight)) {
+	if (!((message.event & PM_EVENT_AUTO) && data->tx_in_flight)) {
 		set_bit(BTUSB_SUSPENDING, &data->flags);
 		spin_unlock_irq(&data->txlock);
 	} else {

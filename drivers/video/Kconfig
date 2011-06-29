@@ -5,6 +5,12 @@
 menu "Graphics support"
 	depends on HAS_IOMEM
 
+config HAVE_FB_ATMEL
+	bool
+
+config HAVE_FB_IMX
+	bool
+
 source "drivers/char/agp/Kconfig"
 
 source "drivers/gpu/vga/Kconfig"
@@ -401,7 +407,7 @@ config FB_SA1100
 
 config FB_IMX
 	tristate "Motorola i.MX LCD support"
-	depends on FB && (ARCH_MX1 || ARCH_MX2)
+	depends on FB && (HAVE_FB_IMX || ARCH_MX1 || ARCH_MX2)
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
@@ -613,6 +619,21 @@ config FB_BFIN_T350MCQB
 	 This display is a QVGA 320x240 24-bit RGB display interfaced by an 8-bit wide PPI
 	 It uses PPI[0..7] PPI_FS1, PPI_FS2 and PPI_CLK.
 
+config FB_BFIN_LQ035Q1
+	tristate "SHARP LQ035Q1DH02 TFT LCD"
+	depends on FB && BLACKFIN && SPI
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	select BFIN_GPTIMERS
+	help
+	  This is the framebuffer device driver for a SHARP LQ035Q1DH02 TFT display found on
+	  the Blackfin Landscape LCD EZ-Extender Card.
+	  This display is a QVGA 320x240 18-bit RGB display interfaced by an 16-bit wide PPI
+	  It uses PPI[0..15] PPI_FS1, PPI_FS2 and PPI_CLK.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called bfin-lq035q1-fb.
 
 config FB_STI
 	tristate "HP STI frame buffer device support"
@@ -893,6 +914,18 @@ config FB_XVR2500
 	  mostly initialized the card already.  It is treated as a
 	  completely dumb framebuffer device.
 
+config FB_XVR1000
+	bool "Sun XVR-1000 support"
+	depends on (FB = y) && SPARC64
+	select FB_CFB_FILLRECT
+	select FB_CFB_COPYAREA
+	select FB_CFB_IMAGEBLIT
+	help
+	  This is the framebuffer device for the Sun XVR-1000 and similar
+	  graphics cards.  The driver only works on sparc64 systems where
+	  the system firmware has mostly initialized the card already.  It
+	  is treated as a completely dumb framebuffer device.
+
 config FB_PVR2
 	tristate "NEC PowerVR 2 display support"
 	depends on FB && SH_DREAMCAST
@@ -939,7 +972,7 @@ config FB_S1D13XXX
 
 config FB_ATMEL
 	tristate "AT91/AT32 LCD Controller support"
-	depends on FB && (ARCH_AT91SAM9261 || ARCH_AT91SAM9G10 || ARCH_AT91SAM9263 || ARCH_AT91SAM9RL || ARCH_AT91SAM9G45 || ARCH_AT91CAP9 || AVR32)
+	depends on FB && HAVE_FB_ATMEL
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
@@ -1478,9 +1511,9 @@ config FB_VIA
        select FB_CFB_FILLRECT
        select FB_CFB_COPYAREA
        select FB_CFB_IMAGEBLIT
-       select FB_SOFT_CURSOR
        select I2C_ALGOBIT
        select I2C
+       select GPIOLIB
        help
 	  This is the frame buffer device driver for Graphics chips of VIA
 	  UniChrome (Pro) Family (CLE266,PM800/CN400,P4M800CE/P4M800Pro/
@@ -1490,6 +1523,21 @@ config FB_VIA
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called viafb.
+
+if FB_VIA
+
+config FB_VIA_DIRECT_PROCFS
+	bool "direct hardware access via procfs (DEPRECATED)(DANGEROUS)"
+	depends on FB_VIA
+	default n
+	help
+	  Allow direct hardware access to some output registers via procfs.
+	  This is dangerous but may provide the only chance to get the
+	  correct output device configuration.
+	  Its use is strongly discouraged.
+
+endif
+
 config FB_NEOMAGIC
 	tristate "NeoMagic display support"
 	depends on FB && PCI
@@ -1851,7 +1899,7 @@ config FB_W100
 
 config FB_SH_MOBILE_LCDC
 	tristate "SuperH Mobile LCDC framebuffer support"
-	depends on FB && SUPERH && HAVE_CLK
+	depends on FB && (SUPERH || ARCH_SHMOBILE) && HAVE_CLK
 	select FB_SYS_FILLRECT
 	select FB_SYS_COPYAREA
 	select FB_SYS_IMAGEBLIT
@@ -1928,6 +1976,27 @@ config FB_S3C2410_DEBUG
 	help
 	  Turn on debugging messages. Note that you can set/unset at run time
 	  through sysfs
+
+config FB_NUC900
+        bool "NUC900 LCD framebuffer support"
+        depends on FB && ARCH_W90X900
+        select FB_CFB_FILLRECT
+        select FB_CFB_COPYAREA
+        select FB_CFB_IMAGEBLIT
+        ---help---
+          Frame buffer driver for the built-in LCD controller in the Nuvoton
+          NUC900 processor
+
+config GPM1040A0_320X240
+        bool "Giantplus Technology GPM1040A0 320x240 Color TFT LCD"
+        depends on FB_NUC900
+
+config FB_NUC900_DEBUG
+        bool "NUC900 lcd debug messages"
+        depends on FB_NUC900
+        help
+          Turn on debugging messages. Note that you can set/unset at run time
+          through sysfs
 
 config FB_SM501
 	tristate "Silicon Motion SM501 framebuffer support"
@@ -2065,6 +2134,7 @@ config XEN_FBDEV_FRONTEND
 	select FB_SYS_IMAGEBLIT
 	select FB_SYS_FOPS
 	select FB_DEFERRED_IO
+	select XEN_XENBUS_FRONTEND
 	default y
 	help
 	  This driver implements the front-end of the Xen virtual
@@ -2129,7 +2199,7 @@ config FB_PRE_INIT_FB
 	  the bootloader.
 
 config FB_MSM
-	tristate "MSM Frame Buffer support"
+	tristate "MSM Framebuffer support"
 	depends on FB && ARCH_MSM
 	select FB_BACKLIGHT if FB_MSM_BACKLIGHT
 	select NEW_LEDS
@@ -2150,8 +2220,9 @@ config FB_MSM_BACKLIGHT
 
 config FB_MSM_LOGO
 	bool "MSM Frame Buffer Logo"
+	default n
 	---help---
-	  Show /logo.rle during boot.
+	  Show /initlogo.rle during boot.
 
 config FB_MSM_LCDC_HW
 	bool
@@ -2197,6 +2268,10 @@ config FB_MSM_MDDI
 	bool
 	default n
 
+config FB_MSM_MIPI_DSI
+	bool
+	default n
+
 config FB_MSM_LCDC
 	bool
 	default n
@@ -2234,14 +2309,34 @@ config FB_MSM_MDDI_ORISE
 	select FB_MSM_MDDI
 	default n
 
+config FB_MSM_MDDI_QUICKVX
+	bool
+	select FB_MSM_MDDI
+	default n
+
 config FB_MSM_MDDI_AUTO_DETECT
 	bool
 	select FB_MSM_MDDI
 	default n
 
+config FB_MSM_LCDC_AUTO_DETECT
+	bool
+	select FB_MSM_LCDC
+	default n
+
 config FB_MSM_LCDC_PANEL
 	bool
 	select FB_MSM_LCDC
+	default n
+
+config FB_MSM_MIPI_DSI_TOSHIBA
+	bool
+	select FB_MSM_MIPI_DSI
+	default n
+
+config FB_MSM_MIPI_DSI_NOVATEK
+	bool
+	select FB_MSM_MIPI_DSI
 	default n
 
 config FB_MSM_LCDC_ST15_WXGA
@@ -2255,6 +2350,22 @@ config FB_MSM_LCDC_ST15_PANEL
     select FB_MSM_LCDC_ST15_WXGA
     ---help---
       Support for ST1.5 WXGA (1366x768) panel
+
+config FB_MSM_LCDC_QRDC_WXGA
+    bool
+    select FB_MSM_LCDC_PANEL
+    default n
+
+config FB_MSM_LCDC_QRDC_PANEL
+    depends on FB_MSM_LCDC_HW
+    bool "LCDC QRDC Panel"
+    select FB_MSM_LCDC_QRDC_WXGA
+    select SENSORS_WPCE775X
+    ---help---
+      Support for QRDC WXGA (1366x768) panel.
+      This will select the on-board WXGA display
+      used on the Quanta QRDC smartbook
+      reference design.
 
 config FB_MSM_LCDC_PRISM_WVGA
 	bool
@@ -2281,9 +2392,29 @@ config FB_MSM_LCDC_SHARP_WVGA_PT
 	select FB_MSM_LCDC_PANEL
 	default n
 
+config FB_MSM_LCDC_SAMSUNG_OLED_PT
+	bool
+	select FB_MSM_LCDC_PANEL
+	default n
+
 config FB_MSM_LCDC_WXGA
 	bool
 	select FB_MSM_LCDC_PANEL
+	default n
+
+config FB_MSM_MIPI_TOSHIBA_VIDEO_WVGA_PT
+	bool
+	select FB_MSM_MIPI_DSI_TOSHIBA
+	default n
+
+config FB_MSM_MIPI_NOVATEK_VIDEO_QHD_PT
+	bool
+	select FB_MSM_MIPI_DSI_NOVATEK
+	default n
+
+config FB_MSM_MIPI_NOVATEK_CMD_QHD_PT
+	bool
+	select FB_MSM_MIPI_DSI_NOVATEK
 	default n
 
 choice
@@ -2325,6 +2456,16 @@ config FB_MSM_LCDC_SHARP_WVGA_PT_PANEL
 	---help---
 	  Support for LCDC Sharp WVGA PT (480x800) panel
 
+config FB_MSM_LCDC_SAMSUNG_OLED_PT_PANEL
+	depends on FB_MSM_LCDC_HW
+	bool "LCDC Samsung OLED PT Panel"
+	select FB_MSM_LCDC_SAMSUNG_OLED_PT
+	---help---
+	  Support for LCDC Samsung OLED PT (480x800) panel
+	  .
+	  .
+	  .
+
 config FB_MSM_TRY_MDDI_CATCH_LCDC_PRISM
 	depends on FB_MSM_LCDC_HW
 	bool "MDDI Panel Auto Detect + LCDC Prism WVGA"
@@ -2339,11 +2480,30 @@ config FB_MSM_TRY_MDDI_CATCH_LCDC_PRISM
 	  Support for MDDI panel auto detect.
 	  If it can't find any MDDI panel, it will load an LCDC panel.
 
+config FB_MSM_MIPI_PANEL_DETECT
+	depends on FB_MSM_LCDC_HW
+	bool "MIPI Panel Detect + LCDC Panel Auto Detect"
+	select FB_MSM_MIPI_TOSHIBA_VIDEO_WVGA_PT
+	select FB_MSM_LCDC_AUTO_DETECT
+	select FB_MSM_LCDC_SAMSUNG_WSVGA
+	select FB_MSM_LCDC_SAMSUNG_OLED_PT
+
 config FB_MSM_MDDI_PANEL_AUTO_DETECT
 	bool "MDDI Panel Auto Detect"
 	select FB_MSM_MDDI_AUTO_DETECT
 	---help---
 	  Support for MDDI panel auto detect
+
+config FB_MSM_LCDC_PANEL_AUTO_DETECT
+	bool "LCDC Panel Auto Detect"
+	select FB_MSM_LCDC_AUTO_DETECT
+	select FB_MSM_LCDC_SAMSUNG_WSVGA
+	select FB_MSM_LCDC_SAMSUNG_OLED_PT
+	---help---
+	  Support for LCDC panel auto detect
+	  .
+	  .
+	  .
 
 config FB_MSM_MDDI_PRISM_WVGA
 	bool "MDDI Prism WVGA Panel"
@@ -2374,6 +2534,18 @@ config FB_MSM_MDDI_SHARP_QVGA_128x128
 	select FB_MSM_MDDI
 	---help---
 	  Support for MDDI Sharp QVGA (240x320) and 128x128 dual panel
+
+config FB_MSM_MIPI_TOSHIBA_VIDEO_WVGA_PT_PANEL
+	bool "MIPI Toshiba WVGA PT Panel"
+	select FB_MSM_MIPI_TOSHIBA_VIDEO_WVGA_PT
+
+config FB_MSM_MIPI_NOVATEK_VIDEO_QHD_PT_PANEL
+	bool "MIPI NOVATEK VIDEO QHD PT Panel"
+	select FB_MSM_MIPI_NOVATEK_VIDEO_QHD_PT
+
+config FB_MSM_MIPI_NOVATEK_CMD_QHD_PT_PANEL
+	bool "MIPI NOVATEK CMD QHD PT Panel"
+	select FB_MSM_MIPI_NOVATEK_CMD_QHD_PT
 
 config FB_MSM_EBI2_TMD_QVGA_EPSON_QCIF
 	bool "EBI2 TMD QVGA Epson QCIF Dual Panel"
@@ -2428,58 +2600,128 @@ config FB_MSM_SECONDARY_PANEL_NONE
 	  No secondary panel
 endchoice
 
+config FB_MSM_LCDC_DSUB
+	depends on FB_MSM_LCDC_SAMSUNG_WSVGA && FB_MSM_MDP40 && FB_MSM_LCDC_HW
+	bool "External DSUB support"
+	default n
+	---help---
+	  Support for external DSUB (VGA) display up to 1440x900.  The DSUB
+	  display shares the same video bus as the primary LCDC attached display.
+	  Typically only one of the two displays can be used at one time.
+
+config FB_MSM_EXT_INTERFACE_COMMON
+	bool
+	default n
+
+config FB_MSM_HDMI_COMMON
+	bool
+	default n
+
+config FB_MSM_HDMI_3D
+	bool
+	default n
+
 config FB_MSM_HDMI_ADV7520_PANEL
 	depends on FB_MSM_MDP40 && FB_MSM_OVERLAY
         bool "LCDC HDMI ADV7520 720p Panel"
         select FB_MSM_DTV
+        select FB_MSM_EXT_INTERFACE_COMMON
+	select FB_MSM_HDMI_COMMON
 	default n
         ---help---
         Support for LCDC 720p HDMI panel attached to ADV7520
 
-config FB_MSM_TVOUT_NTSC
-	bool
-	select FB_MSM_TVOUT
-	default n
+config FB_MSM_HDMI_ADV7520_PANEL_HDCP_SUPPORT
+        depends on FB_MSM_HDMI_ADV7520_PANEL
+        bool "Use HDCP mode"
+        default y
+        ---help---
+          Support for HDCP mode for ADV7520 HDMI 720p Panel
+          Choose to enable HDCP
 
-config FB_MSM_TVOUT_PAL
-	bool
-	select FB_MSM_TVOUT
+
+config FB_MSM_HDMI_MSM_PANEL
+	depends on FB_MSM_MDP40
+	bool "MSM HDMI 1080p Panel"
+	select FB_MSM_DTV
+        select FB_MSM_EXT_INTERFACE_COMMON
+	select FB_MSM_HDMI_COMMON
+	select FB_MSM_HDMI_3D
 	default n
+	---help---
+	  Support for 480p/720p/1080i/1080p output through MSM HDMI
+
+config FB_MSM_HDMI_MSM_PANEL_DVI_SUPPORT
+	depends on FB_MSM_HDMI_MSM_PANEL
+	bool "Use DVI mode"
+	default n
+	---help---
+	  Support for DVI mode for MSM HDMI 1080p Panel
+
+config FB_MSM_HDMI_MSM_PANEL_HDCP_SUPPORT
+	depends on FB_MSM_HDMI_MSM_PANEL
+	bool "Use HDCP mode"
+	default y
+	---help---
+	  Support for HDCP mode for MSM HDMI 1080p Panel
+	  Choose to enable HDCP
+	  .
+	  .
 
 choice
-	depends on  (FB_MSM_MDP22 || FB_MSM_MDP31)
+	depends on  (FB_MSM_MDP22 || FB_MSM_MDP31 || FB_MSM_MDP40)
 	prompt "TVOut Region"
-	default FB_MSM_TVOUT_NTSC_M
+	default FB_MSM_TVOUT_NONE
 
 config FB_MSM_TVOUT_NTSC_M
 	bool "NTSC M"
-	select FB_MSM_TVOUT_NTSC
+	select FB_MSM_TVOUT
+        select FB_MSM_EXT_INTERFACE_COMMON
 	---help---
 	  Support for NTSC M region (North American and Korea)
+          .
+          .
+          .
 
 config FB_MSM_TVOUT_NTSC_J
-	select FB_MSM_TVOUT_NTSC
 	bool "NTSC J"
+	select FB_MSM_TVOUT
+        select FB_MSM_EXT_INTERFACE_COMMON
 	---help---
 	  Support for NTSC J region (Japan)
+          .
+          .
+          .
 
 config FB_MSM_TVOUT_PAL_BDGHIN
-	select FB_MSM_TVOUT_PAL
 	bool "PAL BDGHIN"
+	select FB_MSM_TVOUT
+        select FB_MSM_EXT_INTERFACE_COMMON
 	---help---
 	  Support for PAL BDGHIN region (Non-argentina PAL-N)
+          .
+          .
+          .
 
 config FB_MSM_TVOUT_PAL_M
-	select FB_MSM_TVOUT_PAL
 	bool "PAL M"
+	select FB_MSM_TVOUT
+        select FB_MSM_EXT_INTERFACE_COMMON
 	---help---
 	  Support for PAL M region
+          .
+          .
+          .
 
 config FB_MSM_TVOUT_PAL_N
-	select FB_MSM_TVOUT_PAL
 	bool "PAL N"
+	select FB_MSM_TVOUT
+        select FB_MSM_EXT_INTERFACE_COMMON
 	---help---
 	  Support for PAL N region (Argentina PAL-N)
+          .
+          .
+          .
 
 config FB_MSM_TVOUT_NONE
 	bool "NONE"
@@ -2560,6 +2802,7 @@ config FB_BROADSHEET
 source "drivers/video/msm/Kconfig"
 
 source "drivers/video/omap/Kconfig"
+source "drivers/video/omap2/Kconfig"
 
 source "drivers/video/backlight/Kconfig"
 source "drivers/video/display/Kconfig"

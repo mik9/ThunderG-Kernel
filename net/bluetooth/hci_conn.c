@@ -117,17 +117,8 @@ void hci_add_sco(struct hci_conn *conn, __u16 handle)
 {
 	struct hci_dev *hdev = conn->hdev;
 	struct hci_cp_add_sco cp;
-	struct hci_conn *acl = conn->link;
 
 	BT_DBG("%p", conn);
-
-	if (acl->mode == HCI_CM_SNIFF &&
-		test_bit(HCI_CONN_MODE_CHANGE_PEND, &acl->pend)) {
-		set_bit(HCI_CONN_SCO_PEND, &conn->pend);
-		return;
-	}
-
-	clear_bit(HCI_CONN_SCO_PEND, &conn->pend);
 
 	conn->state = BT_CONNECT;
 	conn->out = 1;
@@ -144,17 +135,8 @@ void hci_setup_sync(struct hci_conn *conn, __u16 handle)
 {
 	struct hci_dev *hdev = conn->hdev;
 	struct hci_cp_setup_sync_conn cp;
-	struct hci_conn *acl = conn->link;
 
 	BT_DBG("%p", conn);
-
-	if (acl->mode == HCI_CM_SNIFF &&
-		test_bit(HCI_CONN_MODE_CHANGE_PEND, &acl->pend)) {
-		set_bit(HCI_CONN_SCO_PEND, &conn->pend);
-		return;
-	}
-
-	clear_bit(HCI_CONN_SCO_PEND, &conn->pend);
 
 	conn->state = BT_CONNECT;
 	conn->out = 1;
@@ -171,6 +153,27 @@ void hci_setup_sync(struct hci_conn *conn, __u16 handle)
 	cp.retrans_effort = 0xff;
 
 	hci_send_cmd(hdev, HCI_OP_SETUP_SYNC_CONN, sizeof(cp), &cp);
+}
+
+/* Device _must_ be locked */
+void hci_sco_setup(struct hci_conn *conn, __u8 status)
+{
+	struct hci_conn *sco = conn->link;
+
+	BT_DBG("%p", conn);
+
+	if (!sco)
+		return;
+
+	if (!status) {
+		if (lmp_esco_capable(conn->hdev))
+			hci_setup_sync(sco, conn->handle);
+		else
+			hci_add_sco(sco, conn->handle);
+	} else {
+		hci_proto_connect_cfm(sco, status);
+		hci_conn_del(sco);
+	}
 }
 
 static void hci_conn_timeout(unsigned long arg)
@@ -387,6 +390,11 @@ struct hci_conn *hci_connect(struct hci_dev *hdev, int type,
 		acl->sec_level = sec_level;
 		acl->auth_type = auth_type;
 		hci_acl_connect(acl);
+	} else {
+		if (acl->sec_level < sec_level)
+			acl->sec_level = sec_level;
+		if (acl->auth_type < auth_type)
+			acl->auth_type = auth_type;
 	}
 
 	if (type == ACL_LINK)
@@ -409,10 +417,13 @@ struct hci_conn *hci_connect(struct hci_dev *hdev, int type,
 		acl->power_save = 1;
 		hci_conn_enter_active_mode(acl);
 
-		if (lmp_esco_capable(hdev))
-			hci_setup_sync(sco, acl->handle);
-		else
-			hci_add_sco(sco, acl->handle);
+		if (test_bit(HCI_CONN_MODE_CHANGE_PEND, &acl->pend)) {
+			/* defer SCO setup until mode change completed */
+			set_bit(HCI_CONN_SCO_SETUP_PEND, &acl->pend);
+			return sco;
+		}
+
+		hci_sco_setup(acl, 0x00);
 	}
 
 	return sco;

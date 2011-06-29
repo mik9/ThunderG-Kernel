@@ -51,6 +51,9 @@
 #include <linux/string.h>
 #include <linux/errno.h>
 #include <linux/i2c.h>
+#if defined(CONFIG_SPI)
+#include <linux/spi/spi.h>
+#endif
 #include <asm/uaccess.h>
 #include <asm/system.h>
 #include <asm/pgtable.h>
@@ -85,10 +88,9 @@ MODULE_LICENSE("GPL");
 			      val == V4L2_PRIORITY_INTERACTIVE  || \
 			      val == V4L2_PRIORITY_RECORD)
 
-int v4l2_prio_init(struct v4l2_prio_state *global)
+void v4l2_prio_init(struct v4l2_prio_state *global)
 {
-	memset(global,0,sizeof(*global));
-	return 0;
+	memset(global, 0, sizeof(*global));
 }
 EXPORT_SYMBOL(v4l2_prio_init);
 
@@ -108,17 +110,16 @@ int v4l2_prio_change(struct v4l2_prio_state *global, enum v4l2_priority *local,
 }
 EXPORT_SYMBOL(v4l2_prio_change);
 
-int v4l2_prio_open(struct v4l2_prio_state *global, enum v4l2_priority *local)
+void v4l2_prio_open(struct v4l2_prio_state *global, enum v4l2_priority *local)
 {
-	return v4l2_prio_change(global,local,V4L2_PRIORITY_DEFAULT);
+	v4l2_prio_change(global, local, V4L2_PRIORITY_DEFAULT);
 }
 EXPORT_SYMBOL(v4l2_prio_open);
 
-int v4l2_prio_close(struct v4l2_prio_state *global, enum v4l2_priority *local)
+void v4l2_prio_close(struct v4l2_prio_state *global, enum v4l2_priority local)
 {
-	if (V4L2_PRIO_VALID(*local))
-		atomic_dec(&global->prios[*local]);
-	return 0;
+	if (V4L2_PRIO_VALID(local))
+		atomic_dec(&global->prios[local]);
 }
 EXPORT_SYMBOL(v4l2_prio_close);
 
@@ -134,11 +135,9 @@ enum v4l2_priority v4l2_prio_max(struct v4l2_prio_state *global)
 }
 EXPORT_SYMBOL(v4l2_prio_max);
 
-int v4l2_prio_check(struct v4l2_prio_state *global, enum v4l2_priority *local)
+int v4l2_prio_check(struct v4l2_prio_state *global, enum v4l2_priority local)
 {
-	if (*local < v4l2_prio_max(global))
-		return -EBUSY;
-	return 0;
+	return (local < v4l2_prio_max(global)) ? -EBUSY : 0;
 }
 EXPORT_SYMBOL(v4l2_prio_check);
 
@@ -340,6 +339,13 @@ const char **v4l2_ctrl_get_menu(u32 id)
 		"None",
 		"Black & White",
 		"Sepia",
+		"Negative",
+		"Emboss",
+		"Sketch",
+		"Sky blue",
+		"Grass green",
+		"Skin whiten",
+		"Vivid",
 		NULL
 	};
 	static const char *tune_preemphasis[] = {
@@ -429,8 +435,13 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_SHARPNESS:		return "Sharpness";
 	case V4L2_CID_BACKLIGHT_COMPENSATION:	return "Backlight Compensation";
 	case V4L2_CID_CHROMA_AGC:		return "Chroma AGC";
+	case V4L2_CID_CHROMA_GAIN:		return "Chroma Gain";
 	case V4L2_CID_COLOR_KILLER:		return "Color Killer";
 	case V4L2_CID_COLORFX:			return "Color Effects";
+	case V4L2_CID_AUTOBRIGHTNESS:		return "Brightness, Automatic";
+	case V4L2_CID_BAND_STOP_FILTER:		return "Band-Stop Filter";
+	case V4L2_CID_ROTATE:			return "Rotate";
+	case V4L2_CID_BG_COLOR:			return "Background Color";
 
 	/* MPEG controls */
 	case V4L2_CID_MPEG_CLASS: 		return "MPEG Encoder Controls";
@@ -481,6 +492,8 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_FOCUS_ABSOLUTE:		return "Focus, Absolute";
 	case V4L2_CID_FOCUS_RELATIVE:		return "Focus, Relative";
 	case V4L2_CID_FOCUS_AUTO:		return "Focus, Automatic";
+	case V4L2_CID_IRIS_ABSOLUTE:		return "Iris, Absolute";
+	case V4L2_CID_IRIS_RELATIVE:		return "Iris, Relative";
 	case V4L2_CID_ZOOM_ABSOLUTE:		return "Zoom, Absolute";
 	case V4L2_CID_ZOOM_RELATIVE:		return "Zoom, Relative";
 	case V4L2_CID_ZOOM_CONTINUOUS:		return "Zoom, Continuous";
@@ -587,6 +600,13 @@ int v4l2_ctrl_query_fill(struct v4l2_queryctrl *qctrl, s32 min, s32 max, s32 ste
 		qctrl->flags |= V4L2_CTRL_FLAG_READ_ONLY;
 		min = max = step = def = 0;
 		break;
+	case V4L2_CID_BG_COLOR:
+		qctrl->type = V4L2_CTRL_TYPE_INTEGER;
+		step = 1;
+		min = 0;
+		/* Max is calculated as RGB888 that is 2^24 */
+		max = 0xFFFFFF;
+		break;
 	default:
 		qctrl->type = V4L2_CTRL_TYPE_INTEGER;
 		break;
@@ -611,6 +631,7 @@ int v4l2_ctrl_query_fill(struct v4l2_queryctrl *qctrl, s32 min, s32 max, s32 ste
 	case V4L2_CID_BLUE_BALANCE:
 	case V4L2_CID_GAMMA:
 	case V4L2_CID_SHARPNESS:
+	case V4L2_CID_CHROMA_GAIN:
 	case V4L2_CID_RDS_TX_DEVIATION:
 	case V4L2_CID_AUDIO_LIMITER_RELEASE_TIME:
 	case V4L2_CID_AUDIO_LIMITER_DEVIATION:
@@ -627,6 +648,7 @@ int v4l2_ctrl_query_fill(struct v4l2_queryctrl *qctrl, s32 min, s32 max, s32 ste
 	case V4L2_CID_PAN_RELATIVE:
 	case V4L2_CID_TILT_RELATIVE:
 	case V4L2_CID_FOCUS_RELATIVE:
+	case V4L2_CID_IRIS_RELATIVE:
 	case V4L2_CID_ZOOM_RELATIVE:
 		qctrl->flags |= V4L2_CTRL_FLAG_WRITE_ONLY;
 		break;
@@ -942,6 +964,66 @@ EXPORT_SYMBOL_GPL(v4l2_i2c_tuner_addrs);
 
 #endif /* defined(CONFIG_I2C) */
 
+#if defined(CONFIG_SPI)
+
+/* Load a spi sub-device. */
+
+void v4l2_spi_subdev_init(struct v4l2_subdev *sd, struct spi_device *spi,
+		const struct v4l2_subdev_ops *ops)
+{
+	v4l2_subdev_init(sd, ops);
+	sd->flags |= V4L2_SUBDEV_FL_IS_SPI;
+	/* the owner is the same as the spi_device's driver owner */
+	sd->owner = spi->dev.driver->owner;
+	/* spi_device and v4l2_subdev point to one another */
+	v4l2_set_subdevdata(sd, spi);
+	spi_set_drvdata(spi, sd);
+	/* initialize name */
+	strlcpy(sd->name, spi->dev.driver->name, sizeof(sd->name));
+}
+EXPORT_SYMBOL_GPL(v4l2_spi_subdev_init);
+
+struct v4l2_subdev *v4l2_spi_new_subdev(struct v4l2_device *v4l2_dev,
+		struct spi_master *master, struct spi_board_info *info)
+{
+	struct v4l2_subdev *sd = NULL;
+	struct spi_device *spi = NULL;
+
+	BUG_ON(!v4l2_dev);
+
+	if (info->modalias)
+		request_module(info->modalias);
+
+	spi = spi_new_device(master, info);
+
+	if (spi == NULL || spi->dev.driver == NULL)
+		goto error;
+
+	if (!try_module_get(spi->dev.driver->owner))
+		goto error;
+
+	sd = spi_get_drvdata(spi);
+
+	/* Register with the v4l2_device which increases the module's
+	   use count as well. */
+	if (v4l2_device_register_subdev(v4l2_dev, sd))
+		sd = NULL;
+
+	/* Decrease the module use count to match the first try_module_get. */
+	module_put(spi->dev.driver->owner);
+
+error:
+	/* If we have a client but no subdev, then something went wrong and
+	   we must unregister the client. */
+	if (spi && sd == NULL)
+		spi_unregister_device(spi);
+
+	return sd;
+}
+EXPORT_SYMBOL_GPL(v4l2_spi_new_subdev);
+
+#endif /* defined(CONFIG_SPI) */
+
 /* Clamp x to be between min and max, aligned to a multiple of 2^align.  min
  * and max don't have to be aligned, but there must be at least one valid
  * value.  E.g., min=17,max=31,align=4 is not allowed as there are no multiples
@@ -1015,3 +1097,50 @@ void v4l_bound_align_image(u32 *w, unsigned int wmin, unsigned int wmax,
 	}
 }
 EXPORT_SYMBOL_GPL(v4l_bound_align_image);
+
+/**
+ * v4l_fill_dv_preset_info - fill description of a digital video preset
+ * @preset - preset value
+ * @info - pointer to struct v4l2_dv_enum_preset
+ *
+ * drivers can use this helper function to fill description of dv preset
+ * in info.
+ */
+int v4l_fill_dv_preset_info(u32 preset, struct v4l2_dv_enum_preset *info)
+{
+	static const struct v4l2_dv_preset_info {
+		u16 width;
+		u16 height;
+		const char *name;
+	} dv_presets[] = {
+		{ 0, 0, "Invalid" },		/* V4L2_DV_INVALID */
+		{ 720,  480, "480p@59.94" },	/* V4L2_DV_480P59_94 */
+		{ 720,  576, "576p@50" },	/* V4L2_DV_576P50 */
+		{ 1280, 720, "720p@24" },	/* V4L2_DV_720P24 */
+		{ 1280, 720, "720p@25" },	/* V4L2_DV_720P25 */
+		{ 1280, 720, "720p@30" },	/* V4L2_DV_720P30 */
+		{ 1280, 720, "720p@50" },	/* V4L2_DV_720P50 */
+		{ 1280, 720, "720p@59.94" },	/* V4L2_DV_720P59_94 */
+		{ 1280, 720, "720p@60" },	/* V4L2_DV_720P60 */
+		{ 1920, 1080, "1080i@29.97" },	/* V4L2_DV_1080I29_97 */
+		{ 1920, 1080, "1080i@30" },	/* V4L2_DV_1080I30 */
+		{ 1920, 1080, "1080i@25" },	/* V4L2_DV_1080I25 */
+		{ 1920, 1080, "1080i@50" },	/* V4L2_DV_1080I50 */
+		{ 1920, 1080, "1080i@60" },	/* V4L2_DV_1080I60 */
+		{ 1920, 1080, "1080p@24" },	/* V4L2_DV_1080P24 */
+		{ 1920, 1080, "1080p@25" },	/* V4L2_DV_1080P25 */
+		{ 1920, 1080, "1080p@30" },	/* V4L2_DV_1080P30 */
+		{ 1920, 1080, "1080p@50" },	/* V4L2_DV_1080P50 */
+		{ 1920, 1080, "1080p@60" },	/* V4L2_DV_1080P60 */
+	};
+
+	if (info == NULL || preset >= ARRAY_SIZE(dv_presets))
+		return -EINVAL;
+
+	info->preset = preset;
+	info->width = dv_presets[preset].width;
+	info->height = dv_presets[preset].height;
+	strlcpy(info->name, dv_presets[preset].name, sizeof(info->name));
+	return 0;
+}
+EXPORT_SYMBOL_GPL(v4l_fill_dv_preset_info);

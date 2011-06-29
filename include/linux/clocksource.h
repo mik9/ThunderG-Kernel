@@ -154,6 +154,7 @@ extern u64 timecounter_cyc2time(struct timecounter *tc,
  * @max_idle_ns:	max idle time permitted by the clocksource (nsecs)
  * @flags:		flags describing special properties
  * @vread:		vsyscall based read
+ * @suspend:		suspend function for the clocksource, if necessary
  * @resume:		resume function for the clocksource, if necessary
  */
 struct clocksource {
@@ -172,7 +173,8 @@ struct clocksource {
 	u64 max_idle_ns;
 	unsigned long flags;
 	cycle_t (*vread)(void);
-	void (*resume)(void);
+	void (*suspend)(struct clocksource *cs);
+	void (*resume)(struct clocksource *cs);
 #ifdef CONFIG_IA64
 	void *fsys_mmio;        /* used by fsyscall asm code */
 #define CLKSRC_FSYS_MMIO_SET(mmio, addr)      ((mmio) = (addr))
@@ -276,6 +278,7 @@ extern void clocksource_unregister(struct clocksource*);
 extern void clocksource_touch_watchdog(void);
 extern struct clocksource* clocksource_get_next(void);
 extern void clocksource_change_rating(struct clocksource *cs, int rating);
+extern void clocksource_suspend(void);
 extern void clocksource_resume(void);
 extern struct clocksource * __init __weak clocksource_default_clock(void);
 extern void clocksource_mark_unstable(struct clocksource *cs);
@@ -289,8 +292,6 @@ clocks_calc_mult_shift(u32 *mult, u32 *shift, u32 from, u32 to, u32 minsec);
  */
 extern int
 __clocksource_register_scale(struct clocksource *cs, u32 scale, u32 freq);
-extern void
-__clocksource_updatefreq_scale(struct clocksource *cs, u32 scale, u32 freq);
 
 static inline int clocksource_register_hz(struct clocksource *cs, u32 hz)
 {
@@ -302,15 +303,6 @@ static inline int clocksource_register_khz(struct clocksource *cs, u32 khz)
 	return __clocksource_register_scale(cs, 1000, khz);
 }
 
-static inline void __clocksource_updatefreq_hz(struct clocksource *cs, u32 hz)
-{
-	__clocksource_updatefreq_scale(cs, 1, hz);
-}
-
-static inline void __clocksource_updatefreq_khz(struct clocksource *cs, u32 khz)
-{
-	__clocksource_updatefreq_scale(cs, 1000, khz);
-}
 
 static inline void
 clocksource_calc_mult_shift(struct clocksource *cs, u32 freq, u32 minsec)

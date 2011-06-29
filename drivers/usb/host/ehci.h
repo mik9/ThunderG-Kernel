@@ -122,6 +122,8 @@ struct ehci_hcd {			/* one per controller */
 	ktime_t			last_periodic_enable;
 	u32			command;
 
+	void (*start_hnp)(struct ehci_hcd *ehci);
+
 	/* SILICON QUIRKS */
 	unsigned		no_selective_suspend:1;
 	unsigned		has_fsl_port_bug:1; /* FreeScale */
@@ -130,7 +132,7 @@ struct ehci_hcd {			/* one per controller */
 	unsigned		has_amcc_usb23:1;
 	unsigned		need_io_watchdog:1;
 	unsigned		broken_periodic:1;
-	unsigned		amd_l1_fix:1;
+	unsigned		fs_i_thresh:1;	/* Intel iso scheduling */
 
 	/* required for usb32 quirk */
 	#define OHCI_CTRL_HCFS          (3 << 6)
@@ -537,6 +539,16 @@ struct ehci_fstn {
 
 /*-------------------------------------------------------------------------*/
 
+/* Prepare the PORTSC wakeup flags during controller suspend/resume */
+
+#define ehci_prepare_ports_for_controller_suspend(ehci)		\
+		ehci_adjust_port_wakeup_flags(ehci, true);
+
+#define ehci_prepare_ports_for_controller_resume(ehci)		\
+		ehci_adjust_port_wakeup_flags(ehci, false);
+
+/*-------------------------------------------------------------------------*/
+
 #ifdef CONFIG_USB_EHCI_ROOT_HUB_TT
 
 /*
@@ -557,20 +569,20 @@ ehci_port_speed(struct ehci_hcd *ehci, unsigned int portsc)
 		case 0:
 			return 0;
 		case 1:
-			return (1<<USB_PORT_FEAT_LOWSPEED);
+			return USB_PORT_STAT_LOW_SPEED;
 		case 2:
 		default:
-			return (1<<USB_PORT_FEAT_HIGHSPEED);
+			return USB_PORT_STAT_HIGH_SPEED;
 		}
 	}
-	return (1<<USB_PORT_FEAT_HIGHSPEED);
+	return USB_PORT_STAT_HIGH_SPEED;
 }
 
 #else
 
 #define	ehci_is_TDI(e)			(0)
 
-#define	ehci_port_speed(ehci, portsc)	(1<<USB_PORT_FEAT_HIGHSPEED)
+#define	ehci_port_speed(ehci, portsc)	USB_PORT_STAT_HIGH_SPEED
 #endif
 
 /*-------------------------------------------------------------------------*/

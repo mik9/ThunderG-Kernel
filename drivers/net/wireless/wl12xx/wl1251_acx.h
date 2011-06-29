@@ -450,6 +450,11 @@ struct acx_beacon_filter_option {
 			   (BEACON_FILTER_TABLE_MAX_VENDOR_SPECIFIC_IE_NUM * \
 			    BEACON_FILTER_TABLE_EXTRA_VENDOR_SPECIFIC_IE_SIZE))
 
+#define BEACON_RULE_PASS_ON_CHANGE                     BIT(0)
+#define BEACON_RULE_PASS_ON_APPEARANCE                 BIT(1)
+
+#define BEACON_FILTER_IE_ID_CHANNEL_SWITCH_ANN         (37)
+
 struct acx_beacon_filter_ie_table {
 	struct acx_header header;
 
@@ -457,6 +462,16 @@ struct acx_beacon_filter_ie_table {
 	u8 table[BEACON_FILTER_TABLE_MAX_SIZE];
 	u8 pad[3];
 } __attribute__ ((packed));
+
+#define SYNCH_FAIL_DEFAULT_THRESHOLD    10     /* number of beacons */
+#define NO_BEACON_DEFAULT_TIMEOUT       (500) /* in microseconds */
+
+struct acx_conn_monit_params {
+	struct acx_header header;
+
+	u32 synch_fail_thold; /* number of beacons missed */
+	u32 bss_lose_timeout; /* number of TU's from synch fail */
+};
 
 enum {
 	SG_ENABLE = 0,
@@ -1134,6 +1149,104 @@ struct wl1251_acx_mem_map {
 	u32 num_rx_mem_blocks;
 } __attribute__ ((packed));
 
+
+struct wl1251_acx_wr_tbtt_and_dtim {
+
+	struct acx_header header;
+
+	/* Time in TUs between two consecutive beacons */
+	u16 tbtt;
+
+	/*
+	 * DTIM period
+	 * For BSS: Number of TBTTs in a DTIM period (range: 1-10)
+	 * For IBSS: value shall be set to 1
+	*/
+	u8  dtim;
+	u8  padding;
+} __attribute__ ((packed));
+
+struct wl1251_acx_ac_cfg {
+	struct acx_header header;
+
+	/*
+	 * Access Category - The TX queue's access category
+	 * (refer to AccessCategory_enum)
+	 */
+	u8 ac;
+
+	/*
+	 * The contention window minimum size (in slots) for
+	 * the access class.
+	 */
+	u8 cw_min;
+
+	/*
+	 * The contention window maximum size (in slots) for
+	 * the access class.
+	 */
+	u16 cw_max;
+
+	/* The AIF value (in slots) for the access class. */
+	u8 aifsn;
+
+	u8 reserved;
+
+	/* The TX Op Limit (in microseconds) for the access class. */
+	u16 txop_limit;
+} __attribute__ ((packed));
+
+
+enum wl1251_acx_channel_type {
+	CHANNEL_TYPE_DCF	= 0,
+	CHANNEL_TYPE_EDCF	= 1,
+	CHANNEL_TYPE_HCCA	= 2,
+};
+
+enum wl1251_acx_ps_scheme {
+	/* regular ps: simple sending of packets */
+	WL1251_ACX_PS_SCHEME_LEGACY	= 0,
+
+	/* sending a packet triggers a unscheduled apsd downstream */
+	WL1251_ACX_PS_SCHEME_UPSD_TRIGGER	= 1,
+
+	/* a pspoll packet will be sent before every data packet */
+	WL1251_ACX_PS_SCHEME_LEGACY_PSPOLL	= 2,
+
+	/* scheduled apsd mode */
+	WL1251_ACX_PS_SCHEME_SAPSD		= 3,
+};
+
+enum wl1251_acx_ack_policy {
+	WL1251_ACX_ACK_POLICY_LEGACY	= 0,
+	WL1251_ACX_ACK_POLICY_NO_ACK	= 1,
+	WL1251_ACX_ACK_POLICY_BLOCK	= 2,
+};
+
+struct wl1251_acx_tid_cfg {
+	struct acx_header header;
+
+	/* tx queue id number (0-7) */
+	u8 queue;
+
+	/* channel access type for the queue, enum wl1251_acx_channel_type */
+	u8 type;
+
+	/* EDCA: ac index (0-3), HCCA: traffic stream id (8-15) */
+	u8 tsid;
+
+	/* ps scheme of the specified queue, enum wl1251_acx_ps_scheme */
+	u8 ps_scheme;
+
+	/* the tx queue ack policy, enum wl1251_acx_ack_policy */
+	u8 ack_policy;
+
+	u8 padding[3];
+
+	/* not supported */
+	u32 apsdconf[2];
+} __attribute__ ((packed));
+
 /*************************************************************************
 
     Host Interrupt Register (WiLink -> Host)
@@ -1273,8 +1386,9 @@ int wl1251_acx_slot(struct wl1251 *wl, enum acx_slot_type slot_time);
 int wl1251_acx_group_address_tbl(struct wl1251 *wl);
 int wl1251_acx_service_period_timeout(struct wl1251 *wl);
 int wl1251_acx_rts_threshold(struct wl1251 *wl, u16 rts_threshold);
-int wl1251_acx_beacon_filter_opt(struct wl1251 *wl);
+int wl1251_acx_beacon_filter_opt(struct wl1251 *wl, bool enable_filter);
 int wl1251_acx_beacon_filter_table(struct wl1251 *wl);
+int wl1251_acx_conn_monit_params(struct wl1251 *wl);
 int wl1251_acx_sg_enable(struct wl1251 *wl);
 int wl1251_acx_sg_cfg(struct wl1251 *wl);
 int wl1251_acx_cca_threshold(struct wl1251 *wl);
@@ -1288,5 +1402,12 @@ int wl1251_acx_statistics(struct wl1251 *wl, struct acx_statistics *stats);
 int wl1251_acx_tsf_info(struct wl1251 *wl, u64 *mactime);
 int wl1251_acx_rate_policies(struct wl1251 *wl);
 int wl1251_acx_mem_cfg(struct wl1251 *wl);
+int wl1251_acx_wr_tbtt_and_dtim(struct wl1251 *wl, u16 tbtt, u8 dtim);
+int wl1251_acx_ac_cfg(struct wl1251 *wl, u8 ac, u8 cw_min, u16 cw_max,
+		      u8 aifs, u16 txop);
+int wl1251_acx_tid_cfg(struct wl1251 *wl, u8 queue,
+		       enum wl1251_acx_channel_type type,
+		       u8 tsid, enum wl1251_acx_ps_scheme ps_scheme,
+		       enum wl1251_acx_ack_policy ack_policy);
 
 #endif /* __WL1251_ACX_H__ */

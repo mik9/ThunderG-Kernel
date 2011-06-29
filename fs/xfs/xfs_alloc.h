@@ -22,6 +22,7 @@ struct xfs_buf;
 struct xfs_mount;
 struct xfs_perag;
 struct xfs_trans;
+struct xfs_busy_extent;
 
 /*
  * Freespace allocation types.  Argument to xfs_alloc_[v]extent.
@@ -36,6 +37,15 @@ typedef enum xfs_alloctype
 	XFS_ALLOCTYPE_NEAR_BNO,		/* in this a.g. and near this block */
 	XFS_ALLOCTYPE_THIS_BNO		/* at exactly this block */
 } xfs_alloctype_t;
+
+#define XFS_ALLOC_TYPES \
+	{ XFS_ALLOCTYPE_ANY_AG,		"ANY_AG" }, \
+	{ XFS_ALLOCTYPE_FIRST_AG,	"FIRST_AG" }, \
+	{ XFS_ALLOCTYPE_START_AG,	"START_AG" }, \
+	{ XFS_ALLOCTYPE_THIS_AG,	"THIS_AG" }, \
+	{ XFS_ALLOCTYPE_START_BNO,	"START_BNO" }, \
+	{ XFS_ALLOCTYPE_NEAR_BNO,	"NEAR_BNO" }, \
+	{ XFS_ALLOCTYPE_THIS_BNO,	"THIS_BNO" }
 
 /*
  * Flags for xfs_alloc_fix_freelist.
@@ -109,34 +119,14 @@ xfs_alloc_longest_free_extent(struct xfs_mount *mp,
 
 #ifdef __KERNEL__
 
-#if defined(XFS_ALLOC_TRACE)
-/*
- * Allocation tracing buffer size.
- */
-#define	XFS_ALLOC_TRACE_SIZE	4096
-extern ktrace_t *xfs_alloc_trace_buf;
-
-/*
- * Types for alloc tracing.
- */
-#define	XFS_ALLOC_KTRACE_ALLOC	1
-#define	XFS_ALLOC_KTRACE_FREE	2
-#define	XFS_ALLOC_KTRACE_MODAGF	3
-#define	XFS_ALLOC_KTRACE_BUSY	4
-#define	XFS_ALLOC_KTRACE_UNBUSY	5
-#define	XFS_ALLOC_KTRACE_BUSYSEARCH	6
-#endif
-
 void
-xfs_alloc_mark_busy(xfs_trans_t *tp,
+xfs_alloc_busy_insert(xfs_trans_t *tp,
 		xfs_agnumber_t agno,
 		xfs_agblock_t bno,
 		xfs_extlen_t len);
 
 void
-xfs_alloc_clear_busy(xfs_trans_t *tp,
-		xfs_agnumber_t ag,
-		int idx);
+xfs_alloc_busy_clear(struct xfs_mount *mp, struct xfs_busy_extent *busyp);
 
 #endif	/* __KERNEL__ */
 

@@ -24,6 +24,7 @@
 #include <linux/i2c.h>
 #include <linux/uaccess.h>
 #include <linux/miscdevice.h>
+#include <linux/slab.h>
 #include <media/msm_camera.h>
 #include <mach/gpio.h>
 #include <linux/kthread.h>
@@ -31,7 +32,7 @@
 #include "isx005.h"
 #if defined (CONFIG_ISX005_VDF)
 #include "isx005_reg_vdf.h"
-#else
+#else 
 #include "isx005_reg.h"
 #endif
 
@@ -1657,7 +1658,7 @@ static ssize_t pclk_store(struct device *dev, struct device_attribute *attr,
 	return size;
 }
 
-static DEVICE_ATTR(pclk, S_IRWXUGO, pclk_show, pclk_store);
+static DEVICE_ATTR(pclk, 0775, pclk_show, pclk_store);
 
 static ssize_t mclk_show(struct device *dev, struct device_attribute *attr,
 	char *buf)
@@ -1678,7 +1679,7 @@ static ssize_t mclk_store(struct device *dev, struct device_attribute *attr,
 	return size;
 }
 
-static DEVICE_ATTR(mclk, S_IRWXUGO, mclk_show, mclk_store);
+static DEVICE_ATTR(mclk, 0775, mclk_show, mclk_store);
 
 static ssize_t always_on_show(struct device *dev,
 	struct device_attribute *attr, char *buf)
@@ -1699,7 +1700,7 @@ static ssize_t always_on_store(struct device *dev,
 	return size;
 }
 
-static DEVICE_ATTR(always_on, S_IRWXUGO, always_on_show, always_on_store);
+static DEVICE_ATTR(always_on, 0775, always_on_show, always_on_store);
 
 static int isx005_sensor_probe(const struct msm_camera_sensor_info *info,
 				struct msm_sensor_ctrl *s)

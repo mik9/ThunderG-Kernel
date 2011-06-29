@@ -12,6 +12,7 @@
 #define MSR_FS_BASE		0xc0000100 /* 64bit FS base */
 #define MSR_GS_BASE		0xc0000101 /* 64bit GS base */
 #define MSR_KERNEL_GS_BASE	0xc0000102 /* SwapGS GS shadow */
+#define MSR_TSC_AUX		0xc0000103 /* Auxiliary TSC */
 
 /* EFER bits: */
 #define _EFER_SCE		0  /* SYSCALL/SYSRET */
@@ -70,25 +71,24 @@
 #define MSR_IA32_LASTINTTOIP		0x000001de
 
 /* DEBUGCTLMSR bits (others vary by model): */
-#define _DEBUGCTLMSR_LBR	0 /* last branch recording */
-#define _DEBUGCTLMSR_BTF	1 /* single-step on branches */
-
-#define DEBUGCTLMSR_LBR		(1UL << _DEBUGCTLMSR_LBR)
-#define DEBUGCTLMSR_BTF		(1UL << _DEBUGCTLMSR_BTF)
+#define DEBUGCTLMSR_LBR			(1UL <<  0) /* last branch recording */
+#define DEBUGCTLMSR_BTF			(1UL <<  1) /* single-step on branches */
+#define DEBUGCTLMSR_TR			(1UL <<  6)
+#define DEBUGCTLMSR_BTS			(1UL <<  7)
+#define DEBUGCTLMSR_BTINT		(1UL <<  8)
+#define DEBUGCTLMSR_BTS_OFF_OS		(1UL <<  9)
+#define DEBUGCTLMSR_BTS_OFF_USR		(1UL << 10)
+#define DEBUGCTLMSR_FREEZE_LBRS_ON_PMI	(1UL << 11)
 
 #define MSR_IA32_MC0_CTL		0x00000400
 #define MSR_IA32_MC0_STATUS		0x00000401
 #define MSR_IA32_MC0_ADDR		0x00000402
 #define MSR_IA32_MC0_MISC		0x00000403
 
-#define MSR_AMD64_MC0_MASK		0xc0010044
-
 #define MSR_IA32_MCx_CTL(x)		(MSR_IA32_MC0_CTL + 4*(x))
 #define MSR_IA32_MCx_STATUS(x)		(MSR_IA32_MC0_STATUS + 4*(x))
 #define MSR_IA32_MCx_ADDR(x)		(MSR_IA32_MC0_ADDR + 4*(x))
 #define MSR_IA32_MCx_MISC(x)		(MSR_IA32_MC0_MISC + 4*(x))
-
-#define MSR_AMD64_MCx_MASK(x)		(MSR_AMD64_MC0_MASK + (x))
 
 /* These are consecutive and not in the normal 4er MCE bank block */
 #define MSR_IA32_MC0_CTL2		0x00000280
@@ -237,6 +237,8 @@
 
 #define MSR_IA32_MISC_ENABLE		0x000001a0
 
+#define MSR_IA32_TEMPERATURE_TARGET	0x000001a2
+
 /* MISC_ENABLE bits: architectural */
 #define MSR_IA32_MISC_ENABLE_FAST_STRING	(1ULL << 0)
 #define MSR_IA32_MISC_ENABLE_TCC		(1ULL << 1)
@@ -363,6 +365,8 @@
 #define MSR_P4_TC_ESCR1			0x000003c5
 #define MSR_P4_U2L_ESCR0		0x000003b0
 #define MSR_P4_U2L_ESCR1		0x000003b1
+
+#define MSR_P4_PEBS_MATRIX_VERT		0x000003f2
 
 /* Intel Core-based CPU performance counters */
 #define MSR_CORE_PERF_FIXED_CTR0	0x00000309

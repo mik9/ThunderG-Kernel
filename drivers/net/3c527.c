@@ -443,7 +443,7 @@ static int __init mc32_probe1(struct net_device *dev, int slot)
 	 *	Grab the IRQ
 	 */
 
-	err = request_irq(dev->irq, &mc32_interrupt, IRQF_SHARED | IRQF_SAMPLE_RANDOM, DRV_NAME, dev);
+	err = request_irq(dev->irq, mc32_interrupt, IRQF_SHARED | IRQF_SAMPLE_RANDOM, DRV_NAME, dev);
 	if (err) {
 		release_region(dev->base_addr, MC32_IO_EXTENT);
 		pr_err("%s: unable to get IRQ %d.\n", DRV_NAME, dev->irq);
@@ -1168,8 +1168,8 @@ static void mc32_rx_ring(struct net_device *dev)
 
 			/* Try to save time by avoiding a copy on big frames */
 
-			if ((length > RX_COPYBREAK)
-			    && ((newskb=dev_alloc_skb(1532)) != NULL))
+			if ((length > RX_COPYBREAK) &&
+			    ((newskb=dev_alloc_skb(1532)) != NULL))
 			{
 				skb=lp->rx_ring[rx_ring_tail].skb;
 				skb_put(skb, length);
@@ -1526,32 +1526,29 @@ static void do_mc32_set_multicast_list(struct net_device *dev, int retry)
 
 	if ((dev->flags&IFF_PROMISC) ||
 	    (dev->flags&IFF_ALLMULTI) ||
-	    dev->mc_count > 10)
+	    netdev_mc_count(dev) > 10)
 		/* Enable promiscuous mode */
 		filt |= 1;
-	else if(dev->mc_count)
+	else if (!netdev_mc_empty(dev))
 	{
 		unsigned char block[62];
 		unsigned char *bp;
-		struct dev_mc_list *dmc=dev->mc_list;
-
-		int i;
+		struct netdev_hw_addr *ha;
 
 		if(retry==0)
 			lp->mc_list_valid = 0;
 		if(!lp->mc_list_valid)
 		{
 			block[1]=0;
-			block[0]=dev->mc_count;
+			block[0]=netdev_mc_count(dev);
 			bp=block+2;
 
-			for(i=0;i<dev->mc_count;i++)
-			{
-				memcpy(bp, dmc->dmi_addr, 6);
+			netdev_for_each_mc_addr(ha, dev) {
+				memcpy(bp, ha->addr, 6);
 				bp+=6;
-				dmc=dmc->next;
 			}
-			if(mc32_command_nowait(dev, 2, block, 2+6*dev->mc_count)==-1)
+			if(mc32_command_nowait(dev, 2, block,
+					       2+6*netdev_mc_count(dev))==-1)
 			{
 				lp->mc_reload_wait = 1;
 				return;

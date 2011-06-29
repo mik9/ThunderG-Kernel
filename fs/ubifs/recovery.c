@@ -23,7 +23,7 @@
 /*
  * This file implements functions needed to recover from unclean un-mounts.
  * When UBIFS is mounted, it checks a flag on the master node to determine if
- * an un-mount was completed sucessfully. If not, the process of mounting
+ * an un-mount was completed successfully. If not, the process of mounting
  * incorparates additional checking and fixing of on-flash data structures.
  * UBIFS always cleans away all remnants of an unclean un-mount, so that
  * errors do not accumulate. However UBIFS defers recovery if it is mounted
@@ -31,6 +31,7 @@
  */
 
 #include <linux/crc32.h>
+#include <linux/slab.h>
 #include "ubifs.h"
 
 /**
@@ -299,32 +300,6 @@ int ubifs_recover_master_node(struct ubifs_info *c)
 			goto out_free;
 		}
 		memcpy(c->rcvrd_mst_node, c->mst_node, UBIFS_MST_NODE_SZ);
-
-		/*
-		 * We had to recover the master node, which means there was an
-		 * unclean reboot. However, it is possible that the master node
-		 * is clean at this point, i.e., %UBIFS_MST_DIRTY is not set.
-		 * E.g., consider the following chain of events:
-		 *
-		 * 1. UBIFS was cleanly unmounted, so the master node is clean
-		 * 2. UBIFS is being mounted R/W and starts changing the master
-		 *    node in the first (%UBIFS_MST_LNUM). A power cut happens,
-		 *    so this LEB ends up with some amount of garbage at the
-		 *    end.
-		 * 3. UBIFS is being mounted R/O. We reach this place and
-		 *    recover the master node from the second LEB
-		 *    (%UBIFS_MST_LNUM + 1). But we cannot update the media
-		 *    because we are being mounted R/O. We have to defer the
-		 *    operation.
-		 * 4. However, this master node (@c->mst_node) is marked as
-		 *    clean (since the step 1). And if we just return, the
-		 *    mount code will be confused and won't recover the master
-		 *    node when it is re-mounter R/W later.
-		 *
-		 *    Thus, to force the recovery by marking the master node as
-		 *    dirty.
-		 */
-		c->mst_node->flags |= cpu_to_le32(UBIFS_MST_DIRTY);
 	} else {
 		/* Write the recovered master node */
 		c->max_sqnum = le64_to_cpu(mst->ch.sqnum) - 1;

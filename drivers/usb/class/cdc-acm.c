@@ -297,8 +297,6 @@ static void acm_ctrl_irq(struct urb *urb)
 	if (!ACM_READY(acm))
 		goto exit;
 
-	usb_mark_last_busy(acm->dev);
-
 	data = (unsigned char *)(dr + 1);
 	switch (dr->bNotificationType) {
 	case USB_CDC_NOTIFY_NETWORK_CONNECTION:
@@ -338,6 +336,7 @@ static void acm_ctrl_irq(struct urb *urb)
 		break;
 	}
 exit:
+	usb_mark_last_busy(acm->dev);
 	retval = usb_submit_urb(urb, GFP_ATOMIC);
 	if (retval)
 		dev_err(&urb->dev->dev, "%s - usb_submit_urb failed with "
@@ -429,7 +428,6 @@ next_buffer:
 		throttled = acm->throttle;
 		spin_unlock_irqrestore(&acm->throttle_lock, flags);
 		if (!throttled) {
-			tty_buffer_request_room(tty, buf->size);
 			tty_insert_flip_string(tty, buf->base, buf->size);
 			tty_flip_buffer_push(tty);
 		} else {
@@ -535,8 +533,6 @@ static void acm_softint(struct work_struct *work)
 	if (!ACM_READY(acm))
 		return;
 	tty = tty_port_tty_get(&acm->port);
-	if (!tty)
-		return;
 	tty_wakeup(tty);
 	tty_kref_put(tty);
 }
@@ -556,7 +552,7 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 
 	acm = acm_table[tty->index];
 	if (!acm || !acm->dev)
-		goto err_out;
+		goto out;
 	else
 		rv = 0;
 
@@ -572,8 +568,9 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 
 	mutex_lock(&acm->mutex);
 	if (acm->port.count++) {
+		mutex_unlock(&acm->mutex);
 		usb_autopm_put_interface(acm->control);
-		goto done;
+		goto out;
 	}
 
 	acm->ctrlurb->dev = acm->dev;
@@ -602,18 +599,18 @@ static int acm_tty_open(struct tty_struct *tty, struct file *filp)
 	set_bit(ASYNCB_INITIALIZED, &acm->port.flags);
 	rv = tty_port_block_til_ready(&acm->port, tty, filp);
 	tasklet_schedule(&acm->urb_task);
-done:
+
 	mutex_unlock(&acm->mutex);
-err_out:
+out:
 	mutex_unlock(&open_mutex);
 	return rv;
 
 full_bailout:
 	usb_kill_urb(acm->ctrlurb);
 bail_out:
-	usb_autopm_put_interface(acm->control);
 	acm->port.count--;
 	mutex_unlock(&acm->mutex);
+	usb_autopm_put_interface(acm->control);
 early_bail:
 	mutex_unlock(&open_mutex);
 	tty_port_tty_set(&acm->port, NULL);
@@ -655,10 +652,8 @@ static void acm_port_down(struct acm *acm, int drain)
 		usb_kill_urb(acm->ctrlurb);
 		for (i = 0; i < ACM_NW; i++)
 			usb_kill_urb(acm->wb[i].urb);
-		tasklet_disable(&acm->urb_task);
 		for (i = 0; i < nr; i++)
 			usb_kill_urb(acm->ru[i].urb);
-		tasklet_enable(&acm->urb_task);
 		acm->control->needs_remote_wakeup = 0;
 		usb_autopm_put_interface(acm->control);
 	}
@@ -897,7 +892,7 @@ static void acm_write_buffers_free(struct acm *acm)
 	struct usb_device *usb_dev = interface_to_usbdev(acm->control);
 
 	for (wb = &acm->wb[0], i = 0; i < ACM_NW; i++, wb++)
-		usb_buffer_free(usb_dev, acm->writesize, wb->buf, wb->dmah);
+		usb_free_coherent(usb_dev, acm->writesize, wb->buf, wb->dmah);
 }
 
 static void acm_read_buffers_free(struct acm *acm)
@@ -906,8 +901,8 @@ static void acm_read_buffers_free(struct acm *acm)
 	int i, n = acm->rx_buflimit;
 
 	for (i = 0; i < n; i++)
-		usb_buffer_free(usb_dev, acm->readsize,
-					acm->rb[i].base, acm->rb[i].dma);
+		usb_free_coherent(usb_dev, acm->readsize,
+				  acm->rb[i].base, acm->rb[i].dma);
 }
 
 /* Little helper: write buffers allocate */
@@ -917,13 +912,13 @@ static int acm_write_buffers_alloc(struct acm *acm)
 	struct acm_wb *wb;
 
 	for (wb = &acm->wb[0], i = 0; i < ACM_NW; i++, wb++) {
-		wb->buf = usb_buffer_alloc(acm->dev, acm->writesize, GFP_KERNEL,
+		wb->buf = usb_alloc_coherent(acm->dev, acm->writesize, GFP_KERNEL,
 		    &wb->dmah);
 		if (!wb->buf) {
 			while (i != 0) {
 				--i;
 				--wb;
-				usb_buffer_free(acm->dev, acm->writesize,
+				usb_free_coherent(acm->dev, acm->writesize,
 				    wb->buf, wb->dmah);
 			}
 			return -ENOMEM;
@@ -1016,7 +1011,7 @@ static int acm_probe(struct usb_interface *intf,
 		case USB_CDC_CALL_MANAGEMENT_TYPE:
 			call_management_function = buffer[3];
 			call_interface_num = buffer[4];
-			if ((call_management_function & 3) != 3)
+			if ( (quirks & NOT_A_MODEM) == 0 && (call_management_function & 3) != 3)
 				dev_err(&intf->dev, "This device cannot do calls on its own. It is not a modem.\n");
 			break;
 		default:
@@ -1183,7 +1178,7 @@ made_compressed_probe:
 	tty_port_init(&acm->port);
 	acm->port.ops = &acm_port_ops;
 
-	buf = usb_buffer_alloc(usb_dev, ctrlsize, GFP_KERNEL, &acm->ctrl_dma);
+	buf = usb_alloc_coherent(usb_dev, ctrlsize, GFP_KERNEL, &acm->ctrl_dma);
 	if (!buf) {
 		dev_dbg(&intf->dev, "out of memory (ctrl buffer alloc)\n");
 		goto alloc_fail2;
@@ -1216,11 +1211,11 @@ made_compressed_probe:
 	for (i = 0; i < num_rx_buf; i++) {
 		struct acm_rb *rb = &(acm->rb[i]);
 
-		rb->base = usb_buffer_alloc(acm->dev, readsize,
+		rb->base = usb_alloc_coherent(acm->dev, readsize,
 				GFP_KERNEL, &rb->dma);
 		if (!rb->base) {
 			dev_dbg(&intf->dev,
-				"out of memory (read bufs usb_buffer_alloc)\n");
+				"out of memory (read bufs usb_alloc_coherent)\n");
 			goto alloc_fail7;
 		}
 	}
@@ -1314,7 +1309,7 @@ alloc_fail6:
 alloc_fail5:
 	acm_write_buffers_free(acm);
 alloc_fail4:
-	usb_buffer_free(usb_dev, ctrlsize, acm->ctrl_buffer, acm->ctrl_dma);
+	usb_free_coherent(usb_dev, ctrlsize, acm->ctrl_buffer, acm->ctrl_dma);
 alloc_fail2:
 	kfree(acm);
 alloc_fail:
@@ -1364,8 +1359,8 @@ static void acm_disconnect(struct usb_interface *intf)
 	stop_data_traffic(acm);
 
 	acm_write_buffers_free(acm);
-	usb_buffer_free(usb_dev, acm->ctrlsize, acm->ctrl_buffer,
-								acm->ctrl_dma);
+	usb_free_coherent(usb_dev, acm->ctrlsize, acm->ctrl_buffer,
+			  acm->ctrl_dma);
 	acm_read_buffers_free(acm);
 
 	if (!acm->combined_interfaces)
@@ -1469,6 +1464,23 @@ err_out:
 	return rv;
 }
 
+static int acm_reset_resume(struct usb_interface *intf)
+{
+	struct acm *acm = usb_get_intfdata(intf);
+	struct tty_struct *tty;
+
+	mutex_lock(&acm->mutex);
+	if (acm->port.count) {
+		tty = tty_port_tty_get(&acm->port);
+		if (tty) {
+			tty_hangup(tty);
+			tty_kref_put(tty);
+		}
+	}
+	mutex_unlock(&acm->mutex);
+	return acm_resume(intf);
+}
+
 #endif /* CONFIG_PM */
 
 #define NOKIA_PCSUITE_ACM_INFO(x) \
@@ -1485,7 +1497,7 @@ err_out:
  * USB driver structure.
  */
 
-static struct usb_device_id acm_ids[] = {
+static const struct usb_device_id acm_ids[] = {
 	/* quirky and broken devices */
 	{ USB_DEVICE(0x0870, 0x0001), /* Metricom GS Modem */
 	.driver_info = NO_UNION_NORMAL, /* has no union descriptor */
@@ -1601,12 +1613,14 @@ static struct usb_device_id acm_ids[] = {
 	{ NOKIA_PCSUITE_ACM_INFO(0x0154), }, /* Nokia 5800 XpressMusic */
 	{ NOKIA_PCSUITE_ACM_INFO(0x04ce), }, /* Nokia E90 */
 	{ NOKIA_PCSUITE_ACM_INFO(0x01d4), }, /* Nokia E55 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0302), }, /* Nokia N8 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x0335), }, /* Nokia E7 */
-	{ NOKIA_PCSUITE_ACM_INFO(0x03cd), }, /* Nokia C7 */
 	{ SAMSUNG_PCSUITE_ACM_INFO(0x6651), }, /* Samsung GTi8510 (INNOV8) */
 
 	/* NOTE: non-Nokia COMM/ACM/0xff is likely MSFT RNDIS... NOT a modem! */
+
+	/* Support Lego NXT using pbLua firmware */
+	{ USB_DEVICE(0x0694, 0xff00),
+	.driver_info = NOT_A_MODEM,
+       	},
 
 	/* control interfaces without any protocol set */
 	{ USB_INTERFACE_INFO(USB_CLASS_COMM, USB_CDC_SUBCLASS_ACM,
@@ -1638,6 +1652,7 @@ static struct usb_driver acm_driver = {
 #ifdef CONFIG_PM
 	.suspend =	acm_suspend,
 	.resume =	acm_resume,
+	.reset_resume =	acm_reset_resume,
 #endif
 	.id_table =	acm_ids,
 #ifdef CONFIG_PM

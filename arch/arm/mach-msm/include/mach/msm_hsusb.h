@@ -1,7 +1,7 @@
 /* linux/include/mach/hsusb.h
  *
  * Copyright (C) 2008 Google, Inc.
- * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  * Author: Brian Swetland <swetland@google.com>
  *
  * This software is licensed under the terms of the GNU General Public
@@ -37,6 +37,21 @@
 #define REQUEST_STOP		0
 #define REQUEST_START		1
 #define REQUEST_RESUME		2
+#define REQUEST_HNP_SUSPEND	3
+#define REQUEST_HNP_RESUME	4
+
+/* Flags required to read ID state of PHY for ACA */
+#define PHY_ID_MASK		0xB0
+#define PHY_ID_GND		0
+#define PHY_ID_C		0x10
+#define PHY_ID_B		0x30
+#define PHY_ID_A		0x90
+
+#define phy_id_state(ints)	((ints) & PHY_ID_MASK)
+#define phy_id_state_a(ints)	(phy_id_state((ints)) == PHY_ID_A)
+#define phy_id_state_b(ints)	(phy_id_state((ints)) == PHY_ID_B)
+#define phy_id_state_c(ints)	(phy_id_state((ints)) == PHY_ID_C)
+#define phy_id_state_gnd(ints)	(phy_id_state((ints)) == PHY_ID_GND)
 
 enum hsusb_phy_type {
 	UNDEFINED,
@@ -45,11 +60,16 @@ enum hsusb_phy_type {
 };
 /* used to detect the OTG Mode */
 enum otg_mode {
-	OTG_ID = 0, /* ID pin detection */
-	OTG_SYSFS,  /* sysfs mode */
-	OTG_VCHG,   /* Based on VCHG interrupt */
+	OTG_ID = 0,   		/* ID pin detection */
+	OTG_USER_CONTROL,  	/* User configurable */
+	OTG_VCHG,     		/* Based on VCHG interrupt */
 };
 
+/* used to configure the default mode,if otg_mode is USER_CONTROL */
+enum usb_mode {
+	USB_HOST_MODE,
+	USB_PERIPHERAL_MODE,
+};
 struct usb_function_map {
 	char name[20];
 	unsigned bit_pos;
@@ -63,14 +83,12 @@ struct usb_composition {
 };
 #endif
 
-#ifdef CONFIG_USB_GADGET_MSM_72K
 enum chg_type {
 	USB_CHG_TYPE__SDP,
 	USB_CHG_TYPE__CARKIT,
 	USB_CHG_TYPE__WALLCHARGER,
 	USB_CHG_TYPE__INVALID
 };
-#endif
 
 enum pre_emphasis_level {
 	PRE_EMPHASIS_DEFAULT,
@@ -83,6 +101,13 @@ enum cdr_auto_reset {
 	CDR_AUTO_RESET_ENABLE,
 	CDR_AUTO_RESET_DISABLE,
 };
+
+enum se1_gate_state {
+	SE1_GATING_DEFAULT,
+	SE1_GATING_ENABLE,
+	SE1_GATING_DISABLE,
+};
+
 enum hs_drv_amplitude {
 	HS_DRV_AMPLITUDE_DEFAULT,
 	HS_DRV_AMPLITUDE_ZERO_PERCENT,
@@ -91,12 +116,19 @@ enum hs_drv_amplitude {
 	HS_DRV_AMPLITUDE_75_PERCENT = (3 << 2),
 };
 
+/* used to configure the analog switch to select b/w host and peripheral */
+enum usb_switch_control {
+	USB_SWITCH_PERIPHERAL = 0,	/* Configure switch in peripheral mode*/
+	USB_SWITCH_HOST,		/* Host mode */
+	USB_SWITCH_DISABLE,		/* No mode selected, shutdown power */
+};
+
 struct msm_hsusb_gadget_platform_data {
 	int *phy_init_seq;
 	void (*phy_reset)(void);
 
-	u32 swfi_latency;
 	int self_powered;
+	int is_phy_status_timer_on;
 };
 
 struct msm_hsusb_platform_data {
@@ -137,26 +169,52 @@ struct msm_otg_platform_data {
 	enum pre_emphasis_level	pemp_level;
 	enum cdr_auto_reset	cdr_autoreset;
 	enum hs_drv_amplitude	drv_ampl;
+	enum se1_gate_state	se1_gating;
 	int			phy_reset_sig_inverted;
+	int			phy_can_powercollapse;
 	int			pclk_required_during_lpm;
 
+	/* HSUSB core in 8660 has the capability to gate the
+	 * pclk when not being used. Though this feature is
+	 * now being disabled because of H/w issues
+	 */
+	int			pclk_is_hw_gated;
+	char			*pclk_src_name;
+
+	int (*ldo_init) (int init);
+	int (*ldo_enable) (int enable);
+	int (*ldo_set_voltage) (int mV);
+
+	u32 			swfi_latency;
 	/* pmic notfications apis */
-	int (*pmic_notif_init) (void);
-	void (*pmic_notif_deinit) (void);
+	int (*pmic_vbus_notif_init) (void (*callback)(int online), int init);
+	int (*pmic_id_notif_init) (void (*callback)(int online), int init);
 	int (*pmic_register_vbus_sn) (void (*callback)(int online));
 	void (*pmic_unregister_vbus_sn) (void (*callback)(int online));
 	int (*pmic_enable_ldo) (int);
-	void (*setup_gpio)(unsigned int config);
+	int (*init_gpio)(int on);
+	void (*setup_gpio)(enum usb_switch_control mode);
 	u8      otg_mode;
+	u8	usb_mode;
+	void (*vbus_power) (unsigned phy_info, int on);
+
+	/* charger notification apis */
+	void (*chg_connected)(enum chg_type chg_type);
+	void (*chg_vbus_draw)(unsigned ma);
+	int  (*chg_init)(int init);
+	int (*config_vddcx)(int high);
+	int (*init_vddcx)(int init);
+
+	struct pm_qos_request_list *pm_qos_req_dma;
 };
 
 struct msm_usb_host_platform_data {
 	unsigned phy_info;
 	unsigned int power_budget;
-	int (*phy_reset)(void __iomem *addr);
 	void (*config_gpio)(unsigned int config);
 	void (*vbus_power) (unsigned phy_info, int on);
 	int  (*vbus_init)(int init);
+	struct clk *ebi1_clk;
 };
 
 #endif

@@ -20,6 +20,9 @@
 #include <linux/rtc.h>
 #include <linux/mfd/pmic8058.h>
 #include <linux/pm.h>
+#include <linux/slab.h>
+#include <linux/rtc/rtc-pm8058.h>
+#include <linux/pm_runtime.h>
 
 #define PM8058_RTC_CTRL		0x1E8
 	#define PM8058_RTC_ENABLE	BIT(7)
@@ -27,6 +30,7 @@
 #define PM8058_RTC_ALARM_CTRL	0x1E9
 #define PM8058_RTC_TEST		0x1F6
 #define PM8058_RTC_READ_BASE	0x1EE
+#define PM8058_RTC_WRITE_BASE	0x1EA
 #define PM8058_RTC_ALARM_BASE	0x1F2
 
 struct pm8058_rtc {
@@ -34,7 +38,6 @@ struct pm8058_rtc {
 	int rtc_irq;
 	int rtc_alarm_irq;
 	struct pm8058_chip *pm_chip;
-	spinlock_t rtc_lock;
 };
 
 static int
@@ -64,7 +67,7 @@ pm8058_rtc_write_bytes(struct pm8058_rtc *rtc_dd, u8 *rtc_val, int base)
 
 	/*
 	 * Write the 32-bit Value.
-	 * These values have to be read 8-bit at a time.
+	 * These values have to be written 8-bit at a time.
 	 */
 	for (i = 0; i < 4; i++) {
 		rc = pm8058_write(rtc_dd->pm_chip, base + i, &rtc_val[i], 1);
@@ -76,6 +79,88 @@ pm8058_rtc_write_bytes(struct pm8058_rtc *rtc_dd, u8 *rtc_val, int base)
 
 	return 0;
 }
+
+/*
+ * Steps to write the RTC registers.
+ * 1. Disable alarm if enabled.
+ * 2. Write 0x00 to LSB.
+ * 3. Write Byte[1], Byte[2], Byte[3] then Byte[0].
+ * 4. Enable alarm if disabled earlier.
+ */
+#ifdef CONFIG_RTC_PM8058_WRITE_ENABLE
+static int
+pm8058_rtc0_set_time(struct device *dev, struct rtc_time *tm)
+{
+	int rc;
+	unsigned long secs = 0;
+	u8 value[4], reg = 0, alarm_enabled = 0, ctrl_reg = 0, i;
+	struct pm8058_rtc *rtc_dd = dev_get_drvdata(dev);
+
+	rtc_tm_to_time(tm, &secs);
+
+	value[0] = secs & 0xFF;
+	value[1] = (secs >> 8) & 0xFF;
+	value[2] = (secs >> 16) & 0xFF;
+	value[3] = (secs >> 24) & 0xFF;
+
+	pr_debug("%s: Seconds value to be written to RTC = %lu\n", __func__,
+								secs);
+
+	/* Disable alarm before updating RTC */
+	rc = pm8058_read(rtc_dd->pm_chip, PM8058_RTC_CTRL, &ctrl_reg, 1);
+	if (rc < 0) {
+		pr_err("%s: PM8058 read failed\n", __func__);
+		return rc;
+	}
+
+	if (ctrl_reg & PM8058_RTC_ALARM_ENABLE) {
+		alarm_enabled = 1;
+		ctrl_reg &= ~PM8058_RTC_ALARM_ENABLE;
+		rc = pm8058_write(rtc_dd->pm_chip, PM8058_RTC_CTRL,
+							&ctrl_reg, 1);
+		if (rc < 0) {
+			pr_err("%s: PM8058 write failed\n", __func__);
+			return rc;
+		}
+	}
+
+	/* Write Byte[1], Byte[2], Byte[3], Byte[0] */
+	reg = 0;
+	rc = pm8058_write(rtc_dd->pm_chip, PM8058_RTC_WRITE_BASE, &reg, 1);
+	if (rc < 0) {
+		pr_err("%s: PM8058 write failed\n", __func__);
+		return rc;
+	}
+
+	for (i = 1; i < 4; i++) {
+		rc = pm8058_write(rtc_dd->pm_chip, PM8058_RTC_WRITE_BASE + i,
+								&value[i], 1);
+		if (rc < 0) {
+			pr_err("%s:Write to RTC registers failed\n", __func__);
+			return rc;
+		}
+	}
+
+	rc = pm8058_write(rtc_dd->pm_chip, PM8058_RTC_WRITE_BASE,
+							&value[0], 1);
+	if (rc < 0) {
+		pr_err("%s: PM8058 write failed\n", __func__);
+		return rc;
+	}
+
+	if (alarm_enabled) {
+		ctrl_reg |= PM8058_RTC_ALARM_ENABLE;
+		rc = pm8058_write(rtc_dd->pm_chip, PM8058_RTC_CTRL,
+							&ctrl_reg, 1);
+		if (rc < 0) {
+			pr_err("%s: PM8058 write failed\n", __func__);
+			return rc;
+		}
+	}
+
+	return 0;
+}
+#endif
 
 static int
 pm8058_rtc0_read_time(struct device *dev, struct rtc_time *tm)
@@ -157,7 +242,7 @@ pm8058_rtc0_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 
 	rc = pm8058_read(rtc_dd->pm_chip, PM8058_RTC_CTRL, &reg, 1);
 	if (rc < 0) {
-		pr_err("%s: PM8058 read failed \n", __func__);
+		pr_err("%s: PM8058 read failed\n", __func__);
 		return rc;
 	}
 
@@ -166,7 +251,7 @@ pm8058_rtc0_set_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 
 	rc = pm8058_write(rtc_dd->pm_chip, PM8058_RTC_CTRL, &reg, 1);
 	if (rc < 0) {
-		pr_err("%s: PM8058 write failed \n", __func__);
+		pr_err("%s: PM8058 write failed\n", __func__);
 		return rc;
 	}
 
@@ -189,7 +274,7 @@ pm8058_rtc0_read_alarm(struct device *dev, struct rtc_wkalrm *alarm)
 	/* Check if the alarm is enabled */
 	rc = pm8058_read(rtc_dd->pm_chip, PM8058_RTC_CTRL, &reg, 1);
 	if (rc < 0) {
-		pr_err("%s: PM8058 read failed \n", __func__);
+		pr_err("%s: PM8058 read failed\n", __func__);
 		return rc;
 	}
 	alarm->enabled = !!(reg & PM8058_RTC_ALARM_ENABLE);
@@ -257,6 +342,12 @@ static int __devinit pm8058_rtc_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
+	/* Enable runtime PM ops, start in ACTIVE mode */
+	rc = pm_runtime_set_active(&pdev->dev);
+	if (rc < 0)
+		dev_dbg(&pdev->dev, "unable to set runtime pm state\n");
+	pm_runtime_enable(&pdev->dev);
+
 	rtc_dd->rtc_irq = platform_get_irq(pdev, 0);
 	rtc_dd->rtc_alarm_irq = platform_get_irq(pdev, 1);
 	if (!rtc_dd->rtc_alarm_irq || !rtc_dd->rtc_irq) {
@@ -270,7 +361,7 @@ static int __devinit pm8058_rtc_probe(struct platform_device *pdev)
 	/* Check if the RTC is on, else turn it on */
 	rc = pm8058_read(pm_chip, PM8058_RTC_CTRL, &reg, 1);
 	if (rc < 0) {
-		pr_err("%s: PM8058 read failed \n", __func__);
+		pr_err("%s: PM8058 read failed\n", __func__);
 		goto fail_rtc_enable;
 	}
 
@@ -278,10 +369,14 @@ static int __devinit pm8058_rtc_probe(struct platform_device *pdev)
 		reg |= PM8058_RTC_ENABLE;
 		rc = pm8058_write(pm_chip, PM8058_RTC_CTRL, &reg, 1);
 		if (rc < 0) {
-			pr_err("%s: PM8058 write failed \n", __func__);
+			pr_err("%s: PM8058 write failed\n", __func__);
 			goto fail_rtc_enable;
 		}
 	}
+
+#ifdef CONFIG_RTC_PM8058_WRITE_ENABLE
+	pm8058_rtc0_ops.set_time	= pm8058_rtc0_set_time,
+#endif
 
 	/* Register the RTC device */
 	rtc_dd->rtc0 = rtc_device_register("pm8058_rtc0", &pdev->dev,
@@ -296,8 +391,9 @@ static int __devinit pm8058_rtc_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, rtc_dd);
 
 	/* Request the alarm IRQ */
-	rc = request_irq(rtc_dd->rtc_alarm_irq, pm8058_alarm_trigger,
-			IRQF_TRIGGER_RISING, "pm8058_rtc_alarm", rtc_dd);
+	rc = request_threaded_irq(rtc_dd->rtc_alarm_irq, NULL,
+				 pm8058_alarm_trigger, IRQF_TRIGGER_RISING,
+				 "pm8058_rtc_alarm", rtc_dd);
 	if (rc < 0) {
 		pr_err("%s: Request IRQ failed (%d)\n", __func__, rc);
 		goto fail_req_irq;
@@ -312,6 +408,8 @@ static int __devinit pm8058_rtc_probe(struct platform_device *pdev)
 fail_req_irq:
 	rtc_device_unregister(rtc_dd->rtc0);
 fail_rtc_enable:
+	pm_runtime_set_suspended(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 	kfree(rtc_dd);
 	return rc;
 }
@@ -346,6 +444,9 @@ static struct dev_pm_ops pm8058_rtc_pm_ops = {
 static int __devexit pm8058_rtc_remove(struct platform_device *pdev)
 {
 	struct pm8058_rtc *rtc_dd = platform_get_drvdata(pdev);
+
+	pm_runtime_set_suspended(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 
 	device_init_wakeup(&pdev->dev, 0);
 	free_irq(rtc_dd->rtc_alarm_irq, rtc_dd);

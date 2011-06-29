@@ -21,11 +21,21 @@
 
 /* #define VERBOSE_DEBUG */
 
+#include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
+#ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
+#include <linux/platform_device.h>
 #include <linux/etherdevice.h>
+#include <linux/usb/android_composite.h>
+#endif
 
 #include "u_ether.h"
+
 
 /*
  * This function is a "CDC Ethernet Networking Control Model" (CDC ECM)
@@ -76,6 +86,14 @@ struct f_ecm {
 	 */
 };
 
+#ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
+static struct usb_ether_platform_data *ecm_pdata;
+#endif
+
 static inline struct f_ecm *func_to_ecm(struct usb_function *f)
 {
 	return container_of(f, struct f_ecm, port.func);
@@ -107,21 +125,26 @@ static inline unsigned ecm_bitrate(struct usb_gadget *g)
 
 #define LOG2_STATUS_INTERVAL_MSEC	5	/* 1 << 5 == 32 msec */
 
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
 #define ECM_STATUS_BYTECOUNT		64	/* 8 byte header + data */
 #else
 #define ECM_STATUS_BYTECOUNT		16	/* 8 byte header + data */
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 
 
 /* interface descriptor: */
 
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
 #define USB_DT_IAD_SIZE     8
-struct usb_interface_assoc_descriptor ecm_IAD = {
+struct usb_interface_assoc_descriptor ecm_iad = {
 	.bLength           = USB_DT_IAD_SIZE,
 	.bDescriptorType   = USB_DT_INTERFACE_ASSOCIATION,
 	.bInterfaceCount   = 2,
@@ -131,7 +154,6 @@ struct usb_interface_assoc_descriptor ecm_IAD = {
 	.iFunction         = 0,
 };
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 
 static struct usb_interface_descriptor ecm_control_intf = {
 	.bLength =		sizeof ecm_control_intf,
@@ -214,13 +236,15 @@ static struct usb_endpoint_descriptor fs_ecm_notify_desc = {
 	.bEndpointAddress =	USB_DIR_IN,
 	.bmAttributes =		USB_ENDPOINT_XFER_INT,
 	.wMaxPacketSize =	cpu_to_le16(ECM_STATUS_BYTECOUNT),
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+	/* LGE_CHANGE
+	 * LG Android CDC ECM function fixup for LG AndroidNet
+	 * 2011-01-12, hyunhui.park@lge.com
+	 */
 	.bInterval =		4,
 #else
 	.bInterval =		1 << LOG2_STATUS_INTERVAL_MSEC,
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 
 };
 
@@ -230,11 +254,13 @@ static struct usb_endpoint_descriptor fs_ecm_in_desc = {
 
 	.bEndpointAddress =	USB_DIR_IN,
 	.bmAttributes =		USB_ENDPOINT_XFER_BULK,
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+	/* LGE_CHANGE
+	 * LG Android CDC ECM function fixup for LG AndroidNet
+	 * 2011-01-12, hyunhui.park@lge.com
+	 */
 	.wMaxPacketSize =	cpu_to_le16(64),
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 };
 
 static struct usb_endpoint_descriptor fs_ecm_out_desc = {
@@ -243,18 +269,23 @@ static struct usb_endpoint_descriptor fs_ecm_out_desc = {
 
 	.bEndpointAddress =	USB_DIR_OUT,
 	.bmAttributes =		USB_ENDPOINT_XFER_BULK,
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+	/* LGE_CHANGE
+	 * LG Android CDC ECM function fixup for LG AndroidNet
+	 * 2011-01-12, hyunhui.park@lge.com
+	 */
 	.wMaxPacketSize =	cpu_to_le16(64),
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 };
 
 
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
 static struct usb_descriptor_header *ecm_fs_function[] = {
-	(struct usb_descriptor_header *) &ecm_IAD,
+	(struct usb_descriptor_header *) &ecm_iad,
 	/* CDC ECM control descriptors */
 	(struct usb_descriptor_header *) &ecm_control_intf,
 	(struct usb_descriptor_header *) &ecm_header_desc,
@@ -286,7 +317,6 @@ static struct usb_descriptor_header *ecm_fs_function[] = {
 	NULL,
 };
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 
 /* high speed support: */
 
@@ -297,13 +327,15 @@ static struct usb_endpoint_descriptor hs_ecm_notify_desc = {
 	.bEndpointAddress =	USB_DIR_IN,
 	.bmAttributes =		USB_ENDPOINT_XFER_INT,
 	.wMaxPacketSize =	cpu_to_le16(ECM_STATUS_BYTECOUNT),
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+	/* LGE_CHANGE
+	 * LG Android CDC ECM function fixup for LG AndroidNet
+	 * 2011-01-12, hyunhui.park@lge.com
+	 */
 	.bInterval =		4,
 #else
 	.bInterval =		LOG2_STATUS_INTERVAL_MSEC + 4,
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 };
 static struct usb_endpoint_descriptor hs_ecm_in_desc = {
 	.bLength =		USB_DT_ENDPOINT_SIZE,
@@ -323,10 +355,13 @@ static struct usb_endpoint_descriptor hs_ecm_out_desc = {
 	.wMaxPacketSize =	cpu_to_le16(512),
 };
 
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
 static struct usb_descriptor_header *ecm_hs_function[] = {
-	(struct usb_descriptor_header *) &ecm_IAD,
+	(struct usb_descriptor_header *) &ecm_iad,
 	/* CDC ECM control descriptors */
 	(struct usb_descriptor_header *) &ecm_control_intf,
 	(struct usb_descriptor_header *) &ecm_header_desc,
@@ -358,7 +393,6 @@ static struct usb_descriptor_header *ecm_hs_function[] = {
 	NULL,
 };
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 
 /* string descriptors: */
 
@@ -420,18 +454,10 @@ static void ecm_do_notify(struct f_ecm *ecm)
 
 		/* SPEED_CHANGE data is up/down speeds in bits/sec */
 		data = req->buf + sizeof *event;
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
-#ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
 		data[0] = cpu_to_le32(ecm_bitrate(cdev->gadget));
-#else
-		data[0] = cpu_to_le32(ecm_bitrate(cdev->gadget));
-#endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
-
 		data[1] = data[0];
 
 		DBG(cdev, "notify speed %d\n", ecm_bitrate(cdev->gadget));
-		pr_info("%s: notify speed %d\n", __func__, ecm_bitrate(cdev->gadget));
 		ecm->notify_state = ECM_NOTIFY_NONE;
 		break;
 	}
@@ -591,14 +617,22 @@ static int ecm_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 		if (alt == 1) {
 			struct net_device	*net;
 
-			/* Enable zlps by default for ECM conformance;
-			 * override for musb_hdrc (avoids txdma ovhead)
-			 * and sa1100 (can't).
+#ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+			/* LGE_CHANGE
+			 * Disable zlps in case of LG android USB and msm72k udc.
+			 * By this, host driver can handle null packet properly.
+			 * 2011-03-01, hyunhui.park@lge.com
 			 */
 			ecm->port.is_zlp_ok = !(
-				   gadget_is_sa1100(cdev->gadget)
-				|| gadget_is_musbhdrc(cdev->gadget)
-				);
+					gadget_is_musbhdrc(cdev->gadget)
+					|| gadget_is_msm72k(cdev->gadget)
+					);
+#else
+			/* Enable zlps by default for ECM conformance;
+			 * override for musb_hdrc (avoids txdma ovhead).
+			 */
+			ecm->port.is_zlp_ok = !(gadget_is_musbhdrc(cdev->gadget));
+#endif
 			ecm->port.cdc_filter = DEFAULT_FILTER;
 			DBG(cdev, "activate ecm\n");
 			net = gether_connect(&ecm->port);
@@ -645,7 +679,9 @@ static void ecm_disable(struct usb_function *f)
 
 	if (ecm->notify->driver_data) {
 		usb_ep_disable(ecm->notify);
+/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-12-03, Merged by Thunder's code */
 		usb_ep_fifo_flush(ecm->notify);
+/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-12-03 */
 		ecm->notify->driver_data = NULL;
 		ecm->notify_desc = NULL;
 	}
@@ -695,7 +731,8 @@ static void ecm_close(struct gether *geth)
 
 /* ethernet function driver setup/binding */
 
-static int ecm_bind(struct usb_configuration *c, struct usb_function *f)
+static int
+ecm_bind(struct usb_configuration *c, struct usb_function *f)
 {
 	struct usb_composite_dev *cdev = c->cdev;
 	struct f_ecm		*ecm = func_to_ecm(f);
@@ -709,11 +746,13 @@ static int ecm_bind(struct usb_configuration *c, struct usb_function *f)
 	ecm->ctrl_id = status;
 
 	ecm_control_intf.bInterfaceNumber = status;
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-08-31, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
-	ecm_IAD.bFirstInterface = status;
+	/* LGE_CHANGE
+	 * LG Android CDC ECM function fixup for LG AndroidNet
+	 * 2011-01-12, hyunhui.park@lge.com
+	 */
+	ecm_iad.bFirstInterface = status;
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-08-31 */
 	ecm_union_desc.bMasterInterface0 = status;
 
 	status = usb_interface_id(c, f);
@@ -865,7 +904,8 @@ ecm_unbind(struct usb_configuration *c, struct usb_function *f)
  * Caller must have called @gether_setup().  Caller is also responsible
  * for calling @gether_cleanup() before module unload.
  */
-int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
+int
+ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 {
 	struct f_ecm	*ecm;
 	int		status;
@@ -883,8 +923,11 @@ int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 		ecm_string_defs[0].id = status;
 		ecm_control_intf.iInterface = status;
 
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-09-04, Match for LG Android Net */
 #ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+		/* LGE_CHANGE
+		 * LG Android CDC ECM function fixup for LG AndroidNet
+		 * 2011-01-12, hyunhui.park@lge.com
+		 */
 		/* MAC address */
 		status = usb_string_id(c->cdev);
 		if (status < 0)
@@ -893,7 +936,6 @@ int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 		pr_info("%s: iMACAddress = %d\n", __func__, status);
 		ecm_desc.iMACAddress = status;
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-09-04 */
 
 		/* data interface label */
 		status = usb_string_id(c->cdev);
@@ -902,9 +944,13 @@ int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 		ecm_string_defs[2].id = status;
 		ecm_data_intf.iInterface = status;
 
-/* LGE_CHANGE_S [hyunhui.park@lge.com] 2010-09-04, Match for LG Android Net */
 /* NOTE : if NOT defined */
 #ifndef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+		/* LGE_CHANGE
+		 * LG Android CDC ECM function fixup for LG AndroidNet
+		 * 2011-01-12, hyunhui.park@lge.com
+		 */
+
 		/* MAC address */
 		status = usb_string_id(c->cdev);
 		if (status < 0)
@@ -913,7 +959,6 @@ int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 		pr_info("%s: iMACAddress = %d\n", __func__, status);
 		ecm_desc.iMACAddress = status;
 #endif
-/* LGE_CHANGE_E [hyunhui.park@lge.com] 2010-09-04 */
 	}
 
 	/* allocate and initialize one new instance */
@@ -927,11 +972,19 @@ int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 		ethaddr[0], ethaddr[1], ethaddr[2],
 		ethaddr[3], ethaddr[4], ethaddr[5]);
 	ecm_string_defs[1].s = ecm->ethaddr;
-	pr_info("%s: ecm_string_defs[1].s = %s\n", __func__, ecm_string_defs[1].s);
 
 	ecm->port.cdc_filter = DEFAULT_FILTER;
 
+#ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+	/* LGE_CHANGE
+	 * LG Android CDC ECM function fixup for LG AndroidNet
+	 * Change function name "cdc_ethernet" --> "ecm".
+	 * 2011-01-12, hyunhui.park@lge.com
+	 */
+	ecm->port.func.name = "ecm";
+#else
 	ecm->port.func.name = "cdc_ethernet";
+#endif
 	ecm->port.func.strings = ecm_strings;
 	/* descriptors are per-instance copies */
 	ecm->port.func.bind = ecm_bind;
@@ -948,3 +1001,55 @@ int ecm_bind_config(struct usb_configuration *c, u8 ethaddr[ETH_ALEN])
 	}
 	return status;
 }
+
+#ifdef CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX
+/* LGE_CHANGE
+ * LG Android CDC ECM function fixup for LG AndroidNet
+ * 2011-01-12, hyunhui.park@lge.com
+ */
+static int __init ecm_probe(struct platform_device *pdev)
+{
+	ecm_pdata = pdev->dev.platform_data;
+	return 0;
+}
+
+static struct platform_driver ecm_platform_driver __refdata = {
+	.driver = { .name = "ecm", },
+};
+
+int ecm_function_bind_config(struct usb_configuration *c)
+{
+	int ret;
+
+	if (!ecm_pdata) {
+		printk(KERN_ERR "ecm_pdata null in ecm_function_bind_config\n");
+		return -1;
+	}
+
+	printk(KERN_INFO
+		"ecm_function_bind_config MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+		ecm_pdata->ethaddr[0], ecm_pdata->ethaddr[1],
+		ecm_pdata->ethaddr[2], ecm_pdata->ethaddr[3],
+		ecm_pdata->ethaddr[4], ecm_pdata->ethaddr[5]);
+
+	ret = gether_setup(c->cdev->gadget, ecm_pdata->ethaddr);
+	if (ret == 0)
+		ret = ecm_bind_config(c, ecm_pdata->ethaddr);
+	return ret;
+}
+
+static struct android_usb_function ecm_function = {
+	.name = "ecm",
+	.bind_config = ecm_function_bind_config,
+};
+
+static int __init f_ecm_init(void)
+{
+	printk(KERN_INFO "f_ecm init\n");
+	platform_driver_probe(&ecm_platform_driver, ecm_probe);
+	android_register_function(&ecm_function);
+	return 0;
+}
+module_init(f_ecm_init);
+
+#endif /* CONFIG_USB_SUPPORT_LGE_ANDROID_ECM_FIX */

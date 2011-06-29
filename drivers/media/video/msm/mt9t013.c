@@ -16,6 +16,7 @@
  *
  */
 
+#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/types.h>
 #include <linux/i2c.h>
@@ -1479,6 +1480,7 @@ static int mt9t013_sensor_probe(
 	s->s_init = mt9t013_sensor_open_init;
 	s->s_release = mt9t013_sensor_release;
 	s->s_config  = mt9t013_sensor_config;
+	s->s_mount_angle = 0;
 	mt9t013_sensor_init_done(info);
 
 probe_done:

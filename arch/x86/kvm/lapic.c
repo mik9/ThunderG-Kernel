@@ -26,13 +26,13 @@
 #include <linux/io.h>
 #include <linux/module.h>
 #include <linux/math64.h>
+#include <linux/slab.h>
 #include <asm/processor.h>
 #include <asm/msr.h>
 #include <asm/page.h>
 #include <asm/current.h>
 #include <asm/apicdef.h>
 #include <asm/atomic.h>
-#include <asm/apicdef.h>
 #include "kvm_cache_regs.h"
 #include "irq.h"
 #include "trace.h"
@@ -472,11 +472,8 @@ static void apic_set_eoi(struct kvm_lapic *apic)
 		trigger_mode = IOAPIC_LEVEL_TRIG;
 	else
 		trigger_mode = IOAPIC_EDGE_TRIG;
-	if (!(apic_get_reg(apic, APIC_SPIV) & APIC_SPIV_DIRECTED_EOI)) {
-		mutex_lock(&apic->vcpu->kvm->irq_lock);
+	if (!(apic_get_reg(apic, APIC_SPIV) & APIC_SPIV_DIRECTED_EOI))
 		kvm_ioapic_update_eoi(apic->vcpu->kvm, vector, trigger_mode);
-		mutex_unlock(&apic->vcpu->kvm->irq_lock);
-	}
 }
 
 static void apic_send_ipi(struct kvm_lapic *apic)
@@ -505,9 +502,7 @@ static void apic_send_ipi(struct kvm_lapic *apic)
 		   irq.trig_mode, irq.level, irq.dest_mode, irq.delivery_mode,
 		   irq.vector);
 
-	mutex_lock(&apic->vcpu->kvm->irq_lock);
 	kvm_irq_delivery_to_apic(apic->vcpu->kvm, apic, &irq);
-	mutex_unlock(&apic->vcpu->kvm->irq_lock);
 }
 
 static u32 apic_get_tmcct(struct kvm_lapic *apic)
@@ -1246,6 +1241,37 @@ int kvm_x2apic_msr_read(struct kvm_vcpu *vcpu, u32 msr, u64 *data)
 	if (apic_reg_read(apic, reg, 4, &low))
 		return 1;
 	if (msr == 0x830)
+		apic_reg_read(apic, APIC_ICR2, 4, &high);
+
+	*data = (((u64)high) << 32) | low;
+
+	return 0;
+}
+
+int kvm_hv_vapic_msr_write(struct kvm_vcpu *vcpu, u32 reg, u64 data)
+{
+	struct kvm_lapic *apic = vcpu->arch.apic;
+
+	if (!irqchip_in_kernel(vcpu->kvm))
+		return 1;
+
+	/* if this is ICR write vector before command */
+	if (reg == APIC_ICR)
+		apic_reg_write(apic, APIC_ICR2, (u32)(data >> 32));
+	return apic_reg_write(apic, reg, (u32)data);
+}
+
+int kvm_hv_vapic_msr_read(struct kvm_vcpu *vcpu, u32 reg, u64 *data)
+{
+	struct kvm_lapic *apic = vcpu->arch.apic;
+	u32 low, high = 0;
+
+	if (!irqchip_in_kernel(vcpu->kvm))
+		return 1;
+
+	if (apic_reg_read(apic, reg, 4, &low))
+		return 1;
+	if (reg == APIC_ICR)
 		apic_reg_read(apic, APIC_ICR2, 4, &high);
 
 	*data = (((u64)high) << 32) | low;

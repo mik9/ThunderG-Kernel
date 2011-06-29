@@ -67,6 +67,7 @@
 #include <linux/timer.h>
 #include <linux/interrupt.h>
 #include <linux/dma-mapping.h>
+#include <linux/slab.h>
 #include <asm/io.h>
 #include <asm/byteorder.h>
 #include <asm/uaccess.h>
@@ -2505,7 +2506,7 @@ he_close(struct atm_vcc *vcc)
 		 * TBRQ, the host issues the close command to the adapter.
 		 */
 
-		while (((tx_inuse = atomic_read(&sk_atm(vcc)->sk_wmem_alloc)) > 0) &&
+		while (((tx_inuse = atomic_read(&sk_atm(vcc)->sk_wmem_alloc)) > 1) &&
 		       (retry < MAX_RETRY)) {
 			msleep(sleep);
 			if (sleep < 250)
@@ -2514,7 +2515,7 @@ he_close(struct atm_vcc *vcc)
 			++retry;
 		}
 
-		if (tx_inuse)
+		if (tx_inuse > 1)
 			hprintk("close tx cid 0x%x tx_inuse = %d\n", cid, tx_inuse);
 
 		/* 2.3.1.1 generic close operations with flush */
@@ -2663,8 +2664,8 @@ he_send(struct atm_vcc *vcc, struct sk_buff *skb)
 
 #ifdef USE_SCATTERGATHER
 	tpd->iovec[slot].addr = pci_map_single(he_dev->pci_dev, skb->data,
-				skb->len - skb->data_len, PCI_DMA_TODEVICE);
-	tpd->iovec[slot].len = skb->len - skb->data_len;
+				skb_headlen(skb), PCI_DMA_TODEVICE);
+	tpd->iovec[slot].len = skb_headlen(skb);
 	++slot;
 
 	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
@@ -2739,7 +2740,7 @@ he_ioctl(struct atm_dev *atm_dev, unsigned int cmd, void __user *arg)
 			spin_lock_irqsave(&he_dev->global_lock, flags);
 			switch (reg.type) {
 				case HE_REGTYPE_PCI:
-					if (reg.addr < 0 || reg.addr >= HE_REGMAP_SIZE) {
+					if (reg.addr >= HE_REGMAP_SIZE) {
 						err = -EINVAL;
 						break;
 					}

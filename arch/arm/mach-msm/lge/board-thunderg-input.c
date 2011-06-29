@@ -23,6 +23,8 @@
 #include <mach/board.h>
 #include <mach/board_lge.h>
 #include <mach/rpc_server_handset.h>
+#include <mach/pmic.h>
+#include "proc_comm.h"
 
 #include "board-thunderg.h"
 static int prox_power_set(unsigned char onoff);
@@ -136,17 +138,17 @@ static const unsigned short keypad_keymap_thunder[][8] = {
 	},
 };
 
-int thunderg_matrix_info_wrapper(struct input_dev *input_dev,struct gpio_event_info *info, void **data, int func)
+int thunderg_matrix_info_wrapper(struct gpio_event_input_devs *input_dev, struct gpio_event_info *info, void **data, int func)
 {
         int ret ;
 		if (func == GPIO_EVENT_FUNC_RESUME) {
 			gpio_tlmm_config(GPIO_CFG(keypad_col_gpios[0], 0,
-						GPIO_INPUT, GPIO_PULL_UP,GPIO_2MA), GPIO_ENABLE);
+						GPIO_CFG_INPUT, GPIO_CFG_PULL_UP,GPIO_CFG_2MA), GPIO_CFG_ENABLE);
 			gpio_tlmm_config(GPIO_CFG(keypad_col_gpios[1], 0,
-						GPIO_INPUT, GPIO_PULL_UP,GPIO_2MA), GPIO_ENABLE);
+						GPIO_CFG_INPUT, GPIO_CFG_PULL_UP,GPIO_CFG_2MA), GPIO_CFG_ENABLE);
 		}
 
-		ret = gpio_event_matrix_func(input_dev,info, data,func);
+		ret = gpio_event_matrix_func(input_dev, info, data, func);
         return ret ;
 }
 
@@ -250,6 +252,32 @@ static struct platform_device ts_i2c_device = {
 	.dev.platform_data = &ts_i2c_pdata,
 };
 
+static int ts_set_vreg_pulldown(int onoff)
+{
+	struct vreg *vreg_touch;
+	int rc;
+	unsigned id;
+
+	printk("[Touch] %s() pulldown:%d\n",__FUNCTION__, onoff);
+
+	vreg_touch = vreg_get(0, "synt");
+
+	if(IS_ERR(vreg_touch)) {
+		printk("[Touch] vreg_get fail : touch\n");
+		return -1;
+	}
+
+	id = PM_VREG_PDOWN_SYNT_ID;
+	rc = msm_proc_comm(PCOM_VREG_PULLDOWN, &onoff, &id);
+	if (rc != 0) {
+		printk("[Touch] vreg_set_pulldown failed\n");
+		return -1;
+	}
+	vreg_disable(vreg_touch);
+
+	return 0;
+}
+
 static int ts_set_vreg(unsigned char onoff)
 {
 	struct vreg *vreg_touch;
@@ -271,9 +299,9 @@ static int ts_set_vreg(unsigned char onoff)
 			return -1;
 		}
 		vreg_enable(vreg_touch);
-	} else
+	} else {
 		vreg_disable(vreg_touch);
-
+	}
 	return 0;
 }
 
@@ -283,6 +311,7 @@ static struct touch_platform_data ts_pdata = {
 	.ts_y_min = TS_Y_MIN,
 	.ts_y_max = TS_Y_MAX,
 	.power 	  = ts_set_vreg,
+	.pulldown = ts_set_vreg_pulldown,
 	.irq 	  = TS_GPIO_IRQ,
 	.scl      = TS_GPIO_I2C_SCL,
 	.sda      = TS_GPIO_I2C_SDA,
@@ -309,11 +338,11 @@ static void __init thunderg_init_i2c_touch(int bus_num)
 static int kr3dh_config_gpio(int config)
 {
 	if (config) {	/* for wake state */
-		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SCL, 0, GPIO_OUTPUT, GPIO_NO_PULL, GPIO_2MA), GPIO_ENABLE);
-		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SDA, 0, GPIO_OUTPUT, GPIO_NO_PULL, GPIO_2MA), GPIO_ENABLE);
+		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SCL, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SDA, 0, GPIO_CFG_OUTPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
 	} else {		/* for sleep state */
-		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SCL, 0, GPIO_INPUT, GPIO_NO_PULL, GPIO_2MA), GPIO_ENABLE);
-		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SDA, 0, GPIO_INPUT, GPIO_NO_PULL, GPIO_2MA), GPIO_ENABLE);
+		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SCL, 0, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
+		gpio_tlmm_config(GPIO_CFG(ACCEL_GPIO_I2C_SDA, 0, GPIO_CFG_INPUT, GPIO_CFG_NO_PULL, GPIO_CFG_2MA), GPIO_CFG_ENABLE);
 	}
 
 	return 0;
@@ -472,7 +501,7 @@ static struct proximity_platform_data proxi_pdata = {
 	.irq_num	= PROXI_GPIO_DOUT,
 	.power		= prox_power_set,
 	.methods		= 0,
-	.operation_mode		= 0,
+	.operation_mode		= 2,
 	.debounce	 = 0,
 	.cycle = 2,
 };

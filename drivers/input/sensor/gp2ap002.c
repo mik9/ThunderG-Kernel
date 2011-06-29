@@ -35,6 +35,7 @@
 #include <linux/wakelock.h>
 #include <mach/msm_i2ckbd.h>
 #include <linux/spinlock.h>
+#include <linux/slab.h>
 
 #include <mach/board_lge.h>
 
@@ -795,7 +796,6 @@ gp2ap_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
 
 	if (GP2AP_DEBUG_FUNC_TRACE & gp2ap_debug_mask)
 		PROXD("exit\n");
-
 	return 0;
 
 err_device_create_file:
@@ -936,7 +936,8 @@ gp2ap_resume(struct i2c_client *i2c_dev)
 	}
 
 	/* garbage data for first call */
-        gp2ap_report_event(PROX_SENSOR_DETECT_N);
+        msleep(200);
+	gp2ap_report_event(PROX_SENSOR_DETECT_N);
 	pdev->last_vout = -1;
 
 	enable_irq(pdev->irq);

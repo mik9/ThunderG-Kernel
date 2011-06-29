@@ -1,5 +1,5 @@
 /*
-	Copyright (C) 2004 - 2009 rt2x00 SourceForge Project
+	Copyright (C) 2004 - 2009 Ivo van Doorn <IvDoorn@gmail.com>
 	<http://rt2x00.serialmonkey.com>
 
 	This program is free software; you can redistribute it and/or modify
@@ -98,6 +98,16 @@ enum ifs {
 	IFS_SIFS = 1,
 	IFS_NEW_BACKOFF = 2,
 	IFS_NONE = 3,
+};
+
+/*
+ * IFS backoff values for HT devices
+ */
+enum txop {
+	TXOP_HTTXOP = 0,
+	TXOP_PIFS = 1,
+	TXOP_SIFS = 2,
+	TXOP_BACKOFF = 3,
 };
 
 /*

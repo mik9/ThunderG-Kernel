@@ -11,6 +11,7 @@
  */
 
 #include <linux/err.h>
+#include <linux/slab.h>
 
 #include <linux/mmc/host.h>
 #include <linux/mmc/card.h>
@@ -639,12 +640,8 @@ static int mmc_sd_resume(struct mmc_host *host)
 		err = mmc_sd_init_card(host, host->ocr, host->card);
 
 		if (err) {
-			mmc_power_off(host);
 			printk(KERN_ERR "%s: Re-init card rc = %d (retries = %d)\n",
 			       mmc_hostname(host), err, retries);
-			mmc_power_up(host);
-			mmc_select_voltage(host, host->ocr);
-			BUG_ON(!host->bus_ops->resume);
 			mdelay(5);
 			retries--;
 			continue;
@@ -667,23 +664,6 @@ static void mmc_sd_power_restore(struct mmc_host *host)
 	mmc_release_host(host);
 }
 
-#ifdef CONFIG_MMC_UNSAFE_RESUME
-
-static const struct mmc_bus_ops mmc_sd_ops = {
-	.remove = mmc_sd_remove,
-	.detect = mmc_sd_detect,
-	.suspend = mmc_sd_suspend,
-	.resume = mmc_sd_resume,
-	.power_restore = mmc_sd_power_restore,
-};
-
-static void mmc_sd_attach_bus_ops(struct mmc_host *host)
-{
-	mmc_attach_bus(host, &mmc_sd_ops);
-}
-
-#else
-
 static const struct mmc_bus_ops mmc_sd_ops = {
 	.remove = mmc_sd_remove,
 	.detect = mmc_sd_detect,
@@ -704,14 +684,12 @@ static void mmc_sd_attach_bus_ops(struct mmc_host *host)
 {
 	const struct mmc_bus_ops *bus_ops;
 
-	if (host->caps & MMC_CAP_NONREMOVABLE)
+	if (host->caps & MMC_CAP_NONREMOVABLE || !mmc_assume_removable)
 		bus_ops = &mmc_sd_ops_unsafe;
 	else
 		bus_ops = &mmc_sd_ops;
 	mmc_attach_bus(host, bus_ops);
 }
-
-#endif
 
 /*
  * Starting point for SD card init.

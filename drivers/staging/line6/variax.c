@@ -11,6 +11,8 @@
 
 #include "driver.h"
 
+#include <linux/slab.h>
+
 #include "audio.h"
 #include "control.h"
 #include "variax.h"
@@ -184,7 +186,12 @@ static ssize_t variax_set_volume(struct device *dev,
 				 const char *buf, size_t count)
 {
 	struct usb_line6_variax *variax = usb_get_intfdata(to_usb_interface(dev));
-	int value = simple_strtoul(buf, NULL, 10);
+	unsigned long value;
+	int ret;
+
+	ret = strict_strtoul(buf, 10, &value);
+	if (ret)
+		return ret;
 
 	if (line6_transmit_parameter(&variax->line6, VARIAXMIDI_volume,
 				     value) == 0)
@@ -211,7 +218,12 @@ static ssize_t variax_set_model(struct device *dev,
 				const char *buf, size_t count)
 {
 	struct usb_line6_variax *variax = usb_get_intfdata(to_usb_interface(dev));
-	int value = simple_strtoul(buf, NULL, 10);
+	unsigned long value;
+	int ret;
+
+	ret = strict_strtoul(buf, 10, &value);
+	if (ret)
+		return ret;
 
 	if (line6_send_program(&variax->line6, value) == 0)
 		variax->model = value;
@@ -237,8 +249,14 @@ static ssize_t variax_set_active(struct device *dev,
 				 const char *buf, size_t count)
 {
 	struct usb_line6_variax *variax = usb_get_intfdata(to_usb_interface(dev));
-	int value = simple_strtoul(buf, NULL, 10) ? 1 : 0;
-	variax->buffer_activate[VARIAX_OFFSET_ACTIVATE] = value;
+	unsigned long value;
+	int ret;
+
+	ret = strict_strtoul(buf, 10, &value);
+	if (ret)
+		return ret;
+
+	variax->buffer_activate[VARIAX_OFFSET_ACTIVATE] = value ? 1 : 0;
 	line6_send_raw_message_async(&variax->line6, variax->buffer_activate,
 				     sizeof(variax_activate));
 	return count;
@@ -262,7 +280,12 @@ static ssize_t variax_set_tone(struct device *dev,
 			       const char *buf, size_t count)
 {
 	struct usb_line6_variax *variax = usb_get_intfdata(to_usb_interface(dev));
-	int value = simple_strtoul(buf, NULL, 10);
+	unsigned long value;
+	int ret;
+
+	ret = strict_strtoul(buf, 10, &value);
+	if (ret)
+		return ret;
 
 	if (line6_transmit_parameter(&variax->line6, VARIAXMIDI_tone,
 				     value) == 0)
@@ -463,7 +486,8 @@ int variax_init(struct usb_interface *interface,
 		return err;
 	}
 
-	variax->buffer_activate = kmalloc(sizeof(variax_activate), GFP_KERNEL);
+	variax->buffer_activate = kmemdup(variax_activate,
+					  sizeof(variax_activate), GFP_KERNEL);
 
 	if (variax->buffer_activate == NULL) {
 		dev_err(&interface->dev, "Out of memory\n");
@@ -471,8 +495,6 @@ int variax_init(struct usb_interface *interface,
 		return -ENOMEM;
 	}
 
-	memcpy(variax->buffer_activate, variax_activate,
-	       sizeof(variax_activate));
 	init_timer(&variax->activate_timer);
 
 	/* create sysfs entries: */

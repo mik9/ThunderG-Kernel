@@ -38,7 +38,7 @@ static void p54_dump_tx_queue(struct p54_common *priv)
 	u32 largest_hole = 0, free;
 
 	spin_lock_irqsave(&priv->tx_queue.lock, flags);
-	printk(KERN_DEBUG "%s: / --- tx queue dump (%d entries) --- \n",
+	printk(KERN_DEBUG "%s: / --- tx queue dump (%d entries) ---\n",
 	       wiphy_name(priv->hw->wiphy), skb_queue_len(&priv->tx_queue));
 
 	prev_addr = priv->rx_start;
@@ -183,7 +183,7 @@ static int p54_tx_qos_accounting_alloc(struct p54_common *priv,
 				       struct sk_buff *skb,
 				       const u16 p54_queue)
 {
-	struct ieee80211_tx_queue_stats *queue;
+	struct p54_tx_queue_stats *queue;
 	unsigned long flags;
 
 	if (WARN_ON(p54_queue >= P54_QUEUE_NUM))
@@ -350,7 +350,6 @@ static int p54_rx_data(struct p54_common *priv, struct sk_buff *skb)
 		rx_status->flag |= RX_FLAG_MMIC_ERROR;
 
 	rx_status->signal = p54_rssi_to_dbm(priv, hdr->rssi);
-	rx_status->noise = priv->noise;
 	if (hdr->rate & 0x10)
 		rx_status->flag |= RX_FLAG_SHORTPRE;
 	if (priv->hw->conf.channel->band == IEEE80211_BAND_5GHZ)
@@ -617,7 +616,7 @@ static void p54_tx_80211_header(struct p54_common *priv, struct sk_buff *skb,
 	else
 		*burst_possible = false;
 
-	if (!(info->flags & IEEE80211_TX_CTL_ASSIGN_SEQ))
+	if (info->flags & IEEE80211_TX_CTL_ASSIGN_SEQ)
 		*flags |= P54_HDR_FLAG_DATA_OUT_SEQNR;
 
 	if (info->flags & IEEE80211_TX_CTL_PSPOLL_RESPONSE)
@@ -703,7 +702,7 @@ int p54_tx_80211(struct ieee80211_hw *dev, struct sk_buff *skb)
 	struct p54_tx_info *p54info;
 	struct p54_hdr *hdr;
 	struct p54_tx_data *txhdr;
-	unsigned int padding, len, extra_len = 0;
+	unsigned int padding, len, extra_len;
 	int i, j, ridx;
 	u16 hdr_flags = 0, aid = 0;
 	u8 rate, queue = 0, crypt_offset = 0;

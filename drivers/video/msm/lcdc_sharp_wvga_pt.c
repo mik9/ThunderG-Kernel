@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,15 +34,13 @@ static struct spi_device *lcdc_spi_client;
 #endif
 static int lcdc_sharp_panel_off(struct platform_device *pdev);
 
+#define BL_MAX		16
+
 #ifdef CONFIG_PMIC8058_PWM
 static struct pwm_device *bl_pwm;
 
-/* 50 Khz == 20000 ns period
- * divide 20000 ns to 15 levels
- * each level has 1333 ns
- */
-
-#define PWM_PERIOD 20000	/* ns, period of 50Khz */
+#define PWM_PERIOD	1000	/* us, period of 1Khz */
+#define DUTY_LEVEL	(PWM_PERIOD / BL_MAX)
 #endif
 
 #ifndef CONFIG_SPI_QSD
@@ -277,15 +275,13 @@ static void lcdc_sharp_panel_set_backlight(struct msm_fb_data_type *mfd)
 
 #ifdef CONFIG_PMIC8058_PWM
 	if (bl_pwm) {
-		int duty_level;
-		duty_level = (PWM_PERIOD / mfd->panel_info.bl_max);
-		pwm_config(bl_pwm, duty_level * bl_level, PWM_PERIOD);
+		pwm_config(bl_pwm, DUTY_LEVEL * bl_level, PWM_PERIOD);
 		pwm_enable(bl_pwm);
 	}
 #endif
 }
 
-static int __init sharp_probe(struct platform_device *pdev)
+static int __devinit sharp_probe(struct platform_device *pdev)
 {
 	if (pdev->id == 0) {
 		lcdc_sharp_pdata = pdev->dev.platform_data;
@@ -367,13 +363,14 @@ static int __init lcdc_sharp_panel_init(void)
 	pinfo = &sharp_panel_data.panel_info;
 	pinfo->xres = 480;
 	pinfo->yres = 800;
+	MSM_FB_SINGLE_MODE_PANEL(pinfo);
 	pinfo->type = LCDC_PANEL;
 	pinfo->pdest = DISPLAY_1;
 	pinfo->wait_cycle = 0;
 	pinfo->bpp = 18;
 	pinfo->fb_num = 2;
 	pinfo->clk_rate = 24500000;
-	pinfo->bl_max = 15;
+	pinfo->bl_max = BL_MAX;
 	pinfo->bl_min = 1;
 
 	pinfo->lcdc.h_back_porch = 20;

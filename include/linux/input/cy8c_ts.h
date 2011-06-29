@@ -38,6 +38,7 @@
  */
 struct cy8c_ts_platform_data {
 	int (*power_on)(int on);
+	int (*dev_setup)(bool on);
 	const char *ts_name;
 	u32 dis_min_x; /* display resoltion */
 	u32 dis_max_x;
@@ -56,7 +57,9 @@ struct cy8c_ts_platform_data {
 	u16 invert_x;
 	u16 invert_y;
 	u8 nfingers;
-	u8 use_polling;
+	u32 irq_gpio;
+	int resout_gpio;
+	bool wakeup;
 };
 
 #endif

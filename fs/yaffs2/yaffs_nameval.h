@@ -12,7 +12,6 @@
  *
  * Note: Only YAFFS headers are LGPL, YAFFS C code is covered by GPL.
  */
-
 #ifndef __NAMEVAL_H__
 #define __NAMEVAL_H__
 

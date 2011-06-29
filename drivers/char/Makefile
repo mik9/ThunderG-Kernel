@@ -7,11 +7,6 @@
 #
 FONTMAPFILE = cp437.uni
 
-ifeq ($(CONFIG_ARM),y)
-# This warning will never go away until a keyboard is defined for this target.
-CFLAGS_REMOVE_keyboard.o = -Werror
-endif
-
 obj-y	 += mem.o random.o tty_io.o n_tty.o tty_ioctl.o tty_ldisc.o tty_buffer.o tty_port.o
 
 obj-$(CONFIG_LEGACY_PTYS)	+= pty.o
@@ -23,7 +18,6 @@ obj-$(CONFIG_CONSOLE_TRANSLATIONS) += consolemap.o consolemap_deftbl.o
 obj-$(CONFIG_HW_CONSOLE)	+= vt.o defkeymap.o
 obj-$(CONFIG_AUDIT)		+= tty_audit.o
 obj-$(CONFIG_MAGIC_SYSRQ)	+= sysrq.o
-obj-$(CONFIG_ESPSERIAL)		+= esp.o
 obj-$(CONFIG_MVME147_SCC)	+= generic_serial.o vme_scc.o
 obj-$(CONFIG_MVME162_SCC)	+= generic_serial.o vme_scc.o
 obj-$(CONFIG_BVME6000_SCC)	+= generic_serial.o vme_scc.o
@@ -46,6 +40,7 @@ obj-$(CONFIG_SYNCLINK)		+= synclink.o
 obj-$(CONFIG_SYNCLINKMP)	+= synclinkmp.o
 obj-$(CONFIG_SYNCLINK_GT)	+= synclink_gt.o
 obj-$(CONFIG_N_HDLC)		+= n_hdlc.o
+obj-$(CONFIG_N_GSM)		+= n_gsm.o
 obj-$(CONFIG_AMIGA_BUILTIN_SERIAL) += amiserial.o
 obj-$(CONFIG_SX)		+= sx.o generic_serial.o
 obj-$(CONFIG_RIO)		+= rio/ generic_serial.o
@@ -75,7 +70,6 @@ obj-$(CONFIG_PRINTER)		+= lp.o
 
 obj-$(CONFIG_APM_EMULATION)	+= apm-emulation.o
 
-obj-$(CONFIG_DIAG_CHAR)         += diag/
 
 obj-$(CONFIG_DTLK)		+= dtlk.o
 obj-$(CONFIG_R3964)		+= n_r3964.o
@@ -116,11 +110,13 @@ obj-$(CONFIG_TCG_TPM)		+= tpm/
 
 obj-$(CONFIG_DCC_TTY)		+= dcc_tty.o
 obj-$(CONFIG_PS3_FLASH)		+= ps3flash.o
+obj-$(CONFIG_RAMOOPS)		+= ramoops.o
 
 obj-$(CONFIG_JS_RTC)		+= js-rtc.o
 js-rtc-y = rtc.o
 
 obj-$(CONFIG_MSM_ROTATOR)	+= msm_rotator.o
+obj-$(CONFIG_MMC_GENERIC_CSDIO)	+= csdio.o
 
 # Files generated that shall be removed upon make clean
 clean-files := consolemap_deftbl.c defkeymap.c

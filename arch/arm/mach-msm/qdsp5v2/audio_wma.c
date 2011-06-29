@@ -36,7 +36,7 @@
 #include <asm/atomic.h>
 #include <asm/ioctls.h>
 #include <mach/msm_adsp.h>
-
+#include <linux/slab.h>
 #include <linux/msm_audio.h>
 #include <mach/qdsp5v2/audio_dev_ctl.h>
 
@@ -202,6 +202,7 @@ static int audio_enable(struct audio *audio)
 	if (audio->enabled)
 		return 0;
 
+	audio->dec_state = MSM_AUD_DECODER_STATE_NONE;
 	audio->out_tail = 0;
 	audio->out_needed = 0;
 
@@ -904,7 +905,6 @@ static long audio_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case AUDIO_START:
 		MM_DBG("AUDIO_START\n");
-		audio->dec_state = MSM_AUD_DECODER_STATE_NONE;
 		rc = audio_enable(audio);
 		if (!rc) {
 			rc = wait_event_interruptible_timeout(audio->wait,
@@ -1109,7 +1109,7 @@ static long audio_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 }
 
 /* Only useful in tunnel-mode */
-static int audio_fsync(struct file *file, struct dentry *dentry, int datasync)
+static int audio_fsync(struct file *file, int datasync)
 {
 	struct audio *audio = file->private_data;
 	struct buffer *frame;

@@ -16,6 +16,7 @@
  *
  */
 
+#include <linux/slab.h>
 #include <linux/dma-mapping.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -345,7 +346,7 @@ static int dma_test_init(void)
 	for (i = 0; i < MAX_TEST_BUFFERS; i++)
 		init_MUTEX(&buffer_sems[i]);
 
-	printk(KERN_ALERT "%s\n", __func__);
+	printk(KERN_ALERT "%s, minor number %d\n", __func__, dma_test_dev.minor);
 	return 0;
 }
 

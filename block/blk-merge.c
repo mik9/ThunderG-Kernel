@@ -22,7 +22,7 @@ static unsigned int __blk_recalc_rq_segments(struct request_queue *q,
 		return 0;
 
 	fbio = bio;
-	cluster = blk_queue_cluster(q);
+	cluster = test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
 	seg_size = 0;
 	phys_size = nr_phys_segs = 0;
 	for_each_bio(bio) {
@@ -88,7 +88,7 @@ EXPORT_SYMBOL(blk_recount_segments);
 static int blk_phys_contig_segment(struct request_queue *q, struct bio *bio,
 				   struct bio *nxt)
 {
-	if (!blk_queue_cluster(q))
+	if (!test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags))
 		return 0;
 
 	if (bio->bi_seg_back_size + nxt->bi_seg_front_size >
@@ -124,7 +124,7 @@ int blk_rq_map_sg(struct request_queue *q, struct request *rq,
 	int nsegs, cluster;
 
 	nsegs = 0;
-	cluster = blk_queue_cluster(q);
+	cluster = test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags);
 
 	/*
 	 * for each bio in rq
@@ -206,8 +206,7 @@ static inline int ll_new_hw_segment(struct request_queue *q,
 {
 	int nr_phys_segs = bio_phys_segments(q, bio);
 
-	if (req->nr_phys_segments + nr_phys_segs > queue_max_hw_segments(q) ||
-	    req->nr_phys_segments + nr_phys_segs > queue_max_phys_segments(q)) {
+	if (req->nr_phys_segments + nr_phys_segs > queue_max_segments(q)) {
 		req->cmd_flags |= REQ_NOMERGE;
 		if (req == q->last_merge)
 			q->last_merge = NULL;
@@ -300,10 +299,7 @@ static int ll_merge_requests_fn(struct request_queue *q, struct request *req,
 		total_phys_segments--;
 	}
 
-	if (total_phys_segments > queue_max_phys_segments(q))
-		return 0;
-
-	if (total_phys_segments > queue_max_hw_segments(q))
+	if (total_phys_segments > queue_max_segments(q))
 		return 0;
 
 	/* Merge is OK... */

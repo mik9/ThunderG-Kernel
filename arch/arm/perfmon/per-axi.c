@@ -1,20 +1,19 @@
 /* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
- */
+*
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License version 2 and
+* only version 2 as published by the Free Software Foundation.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+* 02110-1301, USA.
+*/
 
 /*
 per-axi
@@ -91,65 +90,65 @@ Definitions for AXI register addresses, macros to set and get register values
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG0_RMSK			0xffff
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG0_SHFT			0
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG0_IN                                \
-	in_dword_masked(HWIO_AXI_MONITOR_EVENT_LOWER_REG0_ADDR, 	    \
+	in_dword_masked(HWIO_AXI_MONITOR_EVENT_LOWER_REG0_ADDR,		\
 	HWIO_AXI_MONITOR_EVENT_LOWER_REG0_RMSK)
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG0_ADDR	(AXI_REG_BASE + 0x00003454)
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG0_RMSK			0xffff
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG0_SHFT			0
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG0_IN                                \
-	in_dword_masked(HWIO_AXI_MONITOR_EVENT_UPPER_REG0_ADDR, 	    \
+	in_dword_masked(HWIO_AXI_MONITOR_EVENT_UPPER_REG0_ADDR,		\
 	HWIO_AXI_MONITOR_EVENT_UPPER_REG0_RMSK)
 
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG1_ADDR	(AXI_REG_BASE + 0x00003458)
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG1_RMSK			0xffff
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG1_SHFT			0
 #define HWIO_AXI_MONITOR_EVENT_LOWER_REG1_IN                                \
-	in_dword_masked(HWIO_AXI_MONITOR_EVENT_LOWER_REG1_ADDR, 	    \
+	in_dword_masked(HWIO_AXI_MONITOR_EVENT_LOWER_REG1_ADDR,		\
 	HWIO_AXI_MONITOR_EVENT_LOWER_REG1_RMSK)
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG1_ADDR	(AXI_REG_BASE + 0x0000345c)
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG1_RMSK			0xffff
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG1_SHFT			0
 #define HWIO_AXI_MONITOR_EVENT_UPPER_REG1_IN                                \
-	in_dword_masked(HWIO_AXI_MONITOR_EVENT_UPPER_REG1_ADDR, 	    \
+	in_dword_masked(HWIO_AXI_MONITOR_EVENT_UPPER_REG1_ADDR,		\
 	HWIO_AXI_MONITOR_EVENT_UPPER_REG1_RMSK)
 
 #define HWIO_AXI_MONITOR_TENURE_LOWER_REG_ADDR	(AXI_REG_BASE + 0x00003448)
 #define HWIO_AXI_MONITOR_TENURE_LOWER_REG_RMSK			0xffff
 #define HWIO_AXI_MONITOR_TENURE_LOWER_REG_SHFT			0
 #define HWIO_AXI_MONITOR_TENURE_LOWER_REG_IN                                \
-	in_dword_masked(HWIO_AXI_MONITOR_TENURE_LOWER_REG_ADDR, 	    \
+	in_dword_masked(HWIO_AXI_MONITOR_TENURE_LOWER_REG_ADDR,		\
 	HWIO_AXI_MONITOR_TENURE_LOWER_REG_RMSK)
 #define HWIO_AXI_MONITOR_TENURE_UPPER_REG_ADDR	(AXI_REG_BASE + 0x00003444)
 #define HWIO_AXI_MONITOR_TENURE_UPPER_REG_RMSK			0xffff
 #define HWIO_AXI_MONITOR_TENURE_UPPER_REG_SHFT			0
 #define HWIO_AXI_MONITOR_TENURE_UPPER_REG_IN                                \
-	in_dword_masked(HWIO_AXI_MONITOR_TENURE_UPPER_REG_ADDR, 	    \
+	in_dword_masked(HWIO_AXI_MONITOR_TENURE_UPPER_REG_ADDR,		\
 	HWIO_AXI_MONITOR_TENURE_UPPER_REG_RMSK)
 
 #define HWIO_AXI_MONITOR_MIN_REG_ADDR		(AXI_REG_BASE + 0x0000343c)
 #define HWIO_AXI_MONITOR_MIN_REG_RMSK				0xffff
 #define HWIO_AXI_MONITOR_MIN_REG_SHFT				0
 #define HWIO_AXI_MONITOR_MIN_REG_IN                                         \
-	in_dword_masked(HWIO_AXI_MONITOR_MIN_REG_ADDR, 			    \
+	in_dword_masked(HWIO_AXI_MONITOR_MIN_REG_ADDR,			\
 	HWIO_AXI_MONITOR_MIN_REG_RMSK)
 #define HWIO_AXI_MONITOR_MAX_REG_ADDR		(AXI_REG_BASE + 0x00003440)
 #define HWIO_AXI_MONITOR_MAX_REG_RMSK				0xffff
 #define HWIO_AXI_MONITOR_MAX_REG_SHFT				0
 #define HWIO_AXI_MONITOR_MAX_REG_IN                                         \
-	in_dword_masked(HWIO_AXI_MONITOR_MAX_REG_ADDR, 			    \
+	in_dword_masked(HWIO_AXI_MONITOR_MAX_REG_ADDR,			\
 	HWIO_AXI_MONITOR_MAX_REG_RMSK)
 #define HWIO_AXI_MONITOR_LAST_TENURE_REG_ADDR	(AXI_REG_BASE + 0x0000344c)
 #define HWIO_AXI_MONITOR_LAST_TENURE_REG_RMSK			0xffff
 #define HWIO_AXI_MONITOR_LAST_TENURE_REG_SHFT			0
 #define HWIO_AXI_MONITOR_LAST_TENURE_REG_IN                                 \
-	in_dword_masked(HWIO_AXI_MONITOR_LAST_TENURE_REG_ADDR, 		    \
+	in_dword_masked(HWIO_AXI_MONITOR_LAST_TENURE_REG_ADDR,		\
 	HWIO_AXI_MONITOR_LAST_TENURE_REG_RMSK)
 #define HWIO_AXI_MONITOR_TENURE_UPPER_REG_OUT(v)                            \
 	out_dword(HWIO_AXI_MONITOR_TENURE_UPPER_REG_ADDR, v)
 #define HWIO_AXI_MONITOR_TENURE_LOWER_REG_OUT(v)                            \
 	out_dword(HWIO_AXI_MONITOR_TENURE_LOWER_REG_ADDR, v)
 
-#define HWIO_AXI_RESET_ALL 		0x9400
+#define HWIO_AXI_RESET_ALL		0x9400
 #define HWIO_AXI_ENABLE_ALL_NOCYCLES	0x4a00
 #define HWIO_AXI_DISABLE_ALL		0xb500
 uint32_t AXI_BASE;
@@ -509,9 +508,19 @@ SIDE EFFECTS
 void pm_axi_init()
 {
 	/*Map the AXI regs*/
-	AXI_BASE = (uint32_t)ioremap(AXI_REG_BASE_PHYS, AXI_BASE_SIZE);
-	if (!AXI_BASE)
-		printk(KERN_ERR "Mem map failed\n");
+	#ifdef CONFIG_ARCH_QSD8X50
+	{
+		/*Map the AXI regs*/
+		AXI_BASE = (uint32_t)ioremap(AXI_REG_BASE_PHYS, AXI_BASE_SIZE);
+		if (!AXI_BASE)
+			printk(KERN_ERR "Mem map failed\n");
+	}
+	#else
+	{
+		AXI_BASE = (uint32_t)kmalloc(AXI_BASE_SIZE, GFP_KERNEL);
+	}
+	#endif
+
 }
 
 /*

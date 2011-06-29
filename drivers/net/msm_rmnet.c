@@ -28,6 +28,7 @@
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
 #include <linux/wakelock.h>
+#include <linux/platform_device.h>
 #include <linux/if_arp.h>
 #include <linux/msm_rmnet.h>
 
@@ -36,6 +37,7 @@
 #endif
 
 #include <mach/msm_smd.h>
+#include <mach/peripheral-loader.h>
 
 /* XXX should come from smd headers */
 #define SMD_PORT_ETHER0 11
@@ -43,11 +45,20 @@
 /* allow larger frames */
 #define RMNET_DATA_LEN 2000
 
-static const char *ch_name[3] = {
+#define HEADROOM_FOR_QOS    8
+
+static const char *ch_name[8] = {
 	"DATA5",
 	"DATA6",
 	"DATA7",
+	"DATA8",
+	"DATA9",
+	"DATA12",
+	"DATA13",
+	"DATA14",
 };
+
+static struct completion *port_complete[8];
 
 struct rmnet_private
 {
@@ -65,7 +76,15 @@ struct rmnet_private
 	spinlock_t lock;
 	struct tasklet_struct tsklt;
 	u32 operation_mode;    /* IOCTL specified mode (protocol, QoS header) */
+	struct platform_driver pdrv;
+	struct completion complete;
+	void *pil;
+	struct mutex pil_lock;
 };
+
+static uint msm_rmnet_modem_wait;
+module_param_named(modem_wait, msm_rmnet_modem_wait,
+		   uint, S_IRUGO | S_IWUSR | S_IWGRP);
 
 /* Forward declaration */
 static int rmnet_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd);
@@ -353,6 +372,38 @@ static void _rmnet_resume_flow(unsigned long param)
 		spin_unlock_irqrestore(&p->lock, flags);
 }
 
+static void msm_rmnet_unload_modem(void *pil)
+{
+	if (pil)
+		pil_put(pil);
+}
+
+static void *msm_rmnet_load_modem(struct net_device *dev)
+{
+	void *pil;
+	int rc;
+	struct rmnet_private *p = netdev_priv(dev);
+
+	pil = pil_get("modem");
+	if (IS_ERR(pil))
+		pr_err("%s: modem load failed\n", __func__);
+	else if (msm_rmnet_modem_wait) {
+		rc = wait_for_completion_interruptible_timeout(
+			&p->complete,
+			msecs_to_jiffies(msm_rmnet_modem_wait * 1000));
+		if (!rc)
+			rc = -ETIMEDOUT;
+		if (rc < 0) {
+			pr_err("%s: wait for rmnet port failed %d\n",
+			       __func__, rc);
+			msm_rmnet_unload_modem(pil);
+			pil = ERR_PTR(rc);
+		}
+	}
+
+	return pil;
+}
+
 static void smd_net_notify(void *_dev, unsigned event)
 {
 	struct rmnet_private *p = netdev_priv((struct net_device *)_dev);
@@ -361,8 +412,10 @@ static void smd_net_notify(void *_dev, unsigned event)
 		return;
 
 	spin_lock(&p->lock);
-	if (p->skb && (smd_write_avail(p->ch) >= p->skb->len))
+	if (p->skb && (smd_write_avail(p->ch) >= p->skb->len)) {
+		smd_disable_read_intr(p->ch);
 		tasklet_hi_schedule(&p->tsklt);
+	}
 
 	spin_unlock(&p->lock);
 
@@ -376,7 +429,19 @@ static void smd_net_notify(void *_dev, unsigned event)
 static int __rmnet_open(struct net_device *dev)
 {
 	int r;
+	void *pil;
 	struct rmnet_private *p = netdev_priv(dev);
+
+	mutex_lock(&p->pil_lock);
+	if (!p->pil) {
+		pil = msm_rmnet_load_modem(dev);
+		if (IS_ERR(pil)) {
+			mutex_unlock(&p->pil_lock);
+			return PTR_ERR(pil);
+		}
+		p->pil = pil;
+	}
+	mutex_unlock(&p->pil_lock);
 
 	if (!p->ch) {
 		r = smd_open(p->chname, &p->ch, dev, smd_net_notify);
@@ -385,6 +450,7 @@ static int __rmnet_open(struct net_device *dev)
 			return -ENODEV;
 	}
 
+	smd_disable_read_intr(p->ch);
 	return 0;
 }
 
@@ -392,10 +458,13 @@ static int __rmnet_close(struct net_device *dev)
 {
 	struct rmnet_private *p = netdev_priv(dev);
 	int rc;
+	unsigned long flags;
 
 	if (p->ch) {
 		rc = smd_close(p->ch);
+		spin_lock_irqsave(&p->lock, flags);
 		p->ch = 0;
+		spin_unlock_irqrestore(&p->lock, flags);
 		return rc;
 	} else
 		return -EBADF;
@@ -408,8 +477,8 @@ static int rmnet_open(struct net_device *dev)
 	pr_info("rmnet_open()\n");
 
 	rc = __rmnet_open(dev);
-
-	netif_start_queue(dev);
+	if (rc == 0)
+		netif_start_queue(dev);
 
 	return rc;
 }
@@ -422,6 +491,15 @@ static int rmnet_stop(struct net_device *dev)
 
 	netif_stop_queue(dev);
 	tasklet_kill(&p->tsklt);
+
+	/* TODO: unload modem safely,
+	   currently, this causes unnecessary unloads */
+	/*
+	mutex_lock(&p->pil_lock);
+	msm_rmnet_unload_modem(p->pil);
+	p->pil = NULL;
+	mutex_unlock(&p->pil_lock);
+	*/
 
 	return 0;
 }
@@ -448,12 +526,14 @@ static int rmnet_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	spin_lock_irqsave(&p->lock, flags);
+	smd_enable_read_intr(ch);
 	if (smd_write_avail(ch) < skb->len) {
 		netif_stop_queue(dev);
 		p->skb = skb;
 		spin_unlock_irqrestore(&p->lock, flags);
 		return 0;
 	}
+	smd_disable_read_intr(ch);
 	spin_unlock_irqrestore(&p->lock, flags);
 
 	_rmnet_xmit(skb, dev);
@@ -596,8 +676,8 @@ static int rmnet_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		return -EINVAL;
 	}
 
-	pr_info("rmnet_ioctl(): dev=%s cmd=0x%x opmode old=0x%08x new=0x%08x\n",
-		p->chname, cmd, old_opmode, p->operation_mode);
+	pr_debug("%s: dev=%s cmd=0x%x opmode old=0x%08x new=0x%08x\n",
+		__func__, p->chname, cmd, old_opmode, p->operation_mode);
 	return rc;
 }
 
@@ -610,12 +690,25 @@ static void __init rmnet_setup(struct net_device *dev)
 
 	/* set this after calling ether_setup */
 	dev->mtu = RMNET_DATA_LEN;
+	dev->needed_headroom = HEADROOM_FOR_QOS;
 
 	random_ether_addr(dev->dev_addr);
 
 	dev->watchdog_timeo = 1000; /* 10 seconds? */
 }
 
+static int msm_rmnet_smd_probe(struct platform_device *pdev)
+{
+	int i;
+
+	for (i = 0; i < 8; i++)
+		if (!strcmp(pdev->name, ch_name[i])) {
+			complete_all(port_complete[i]);
+			break;
+		}
+
+	return 0;
+}
 
 static int __init rmnet_init(void)
 {
@@ -634,7 +727,7 @@ static int __init rmnet_init(void)
 #endif
 #endif
 
-	for (n = 0; n < 3; n++) {
+	for (n = 0; n < 8; n++) {
 		dev = alloc_netdev(sizeof(struct rmnet_private),
 				   "rmnet%d", rmnet_setup);
 
@@ -656,11 +749,25 @@ static int __init rmnet_init(void)
 		p->wakeups_xmit = p->wakeups_rcv = 0;
 #endif
 
-		ret = register_netdev(dev);
+		init_completion(&p->complete);
+		port_complete[n] = &p->complete;
+		mutex_init(&p->pil_lock);
+		p->pdrv.probe = msm_rmnet_smd_probe;
+		p->pdrv.driver.name = ch_name[n];
+		p->pdrv.driver.owner = THIS_MODULE;
+		ret = platform_driver_register(&p->pdrv);
 		if (ret) {
 			free_netdev(dev);
 			return ret;
 		}
+
+		ret = register_netdev(dev);
+		if (ret) {
+			platform_driver_unregister(&p->pdrv);
+			free_netdev(dev);
+			return ret;
+		}
+
 
 #ifdef CONFIG_MSM_RMNET_DEBUG
 		if (device_create_file(d, &dev_attr_timeout))

@@ -31,6 +31,8 @@ struct mmc_platform_data {
 	unsigned int msmsdcc_fmid;
 	unsigned int msmsdcc_fmax;
 	bool nonremovable;
+	bool pclk_src_dfab;
+	int (*cfg_mpm_sdiowakeup)(struct device *, bool);
 };
 
 #endif

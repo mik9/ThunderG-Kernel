@@ -15,6 +15,8 @@
  * 02110-1301, USA.
  *
  */
+
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/debugfs.h>

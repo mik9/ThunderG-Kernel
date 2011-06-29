@@ -29,6 +29,7 @@
 #include <linux/uaccess.h>
 #include <linux/bitops.h>
 #include <linux/devpts_fs.h>
+#include <linux/slab.h>
 
 #include <asm/system.h>
 
@@ -220,7 +221,7 @@ static void pty_set_termios(struct tty_struct *tty,
  *	@tty: tty being resized
  *	@ws: window size being set.
  *
- *	Update the termios variables and send the neccessary signals to
+ *	Update the termios variables and send the necessary signals to
  *	peform a terminal resize correctly
  */
 
@@ -431,30 +432,25 @@ static struct cdev ptmx_cdev;
 
 static struct ctl_table pty_table[] = {
 	{
-		.ctl_name	= PTY_MAX,
 		.procname	= "max",
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.data		= &pty_limit,
-		.proc_handler	= &proc_dointvec_minmax,
-		.strategy	= &sysctl_intvec,
+		.proc_handler	= proc_dointvec_minmax,
 		.extra1		= &pty_limit_min,
 		.extra2		= &pty_limit_max,
 	}, {
-		.ctl_name	= PTY_NR,
 		.procname	= "nr",
 		.maxlen		= sizeof(int),
 		.mode		= 0444,
 		.data		= &pty_count,
-		.proc_handler	= &proc_dointvec,
-	}, {
-		.ctl_name	= 0
-	}
+		.proc_handler	= proc_dointvec,
+	}, 
+	{}
 };
 
 static struct ctl_table pty_kern_table[] = {
 	{
-		.ctl_name	= KERN_PTY,
 		.procname	= "pty",
 		.mode		= 0555,
 		.child		= pty_table,
@@ -464,7 +460,6 @@ static struct ctl_table pty_kern_table[] = {
 
 static struct ctl_table pty_root_table[] = {
 	{
-		.ctl_name	= CTL_KERN,
 		.procname	= "kernel",
 		.mode		= 0555,
 		.child		= pty_kern_table,
@@ -665,7 +660,7 @@ static int __ptmx_open(struct inode *inode, struct file *filp)
 	if (!retval)
 		return 0;
 out1:
-	tty_release_dev(filp);
+	tty_release(inode, filp);
 	return retval;
 out:
 	devpts_kill_index(inode, index);

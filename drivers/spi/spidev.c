@@ -30,7 +30,6 @@
 #include <linux/errno.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
-#include <linux/smp_lock.h>
 
 #include <linux/spi/spi.h>
 #include <linux/spi/spidev.h>
@@ -39,10 +38,10 @@
 
 
 /*
- * This supports access to SPI devices using normal userspace I/O calls.
+ * This supports acccess to SPI devices using normal userspace I/O calls.
  * Note that while traditional UNIX/POSIX I/O semantics are half duplex,
  * and often mask message boundaries, full SPI support requires full duplex
- * transfers.  There are several kinds of of internal message boundaries to
+ * transfers.  There are several kinds of internal message boundaries to
  * handle chipselect management and other protocol options.
  *
  * SPI has a character major number assigned.  We allocate minor numbers
@@ -54,7 +53,7 @@
 #define SPIDEV_MAJOR			153	/* assigned */
 #define N_SPI_MINORS			32	/* ... up to 256 */
 
-static unsigned long	minors[N_SPI_MINORS / BITS_PER_LONG];
+static DECLARE_BITMAP(minors, N_SPI_MINORS);
 
 
 /* Bit masks for spi_device.mode management.  Note that incorrect
@@ -93,10 +92,12 @@ static unsigned bufsiz = 4096;
 module_param(bufsiz, uint, S_IRUGO);
 MODULE_PARM_DESC(bufsiz, "data bytes in biggest supported SPI message");
 
-/* This can be used for testing the controller, given the busnum and the cs
-   required to sit on. If those parameters are used, spidev is dynamically added
-   as device on the busnum, and messages can be sent via this interface.
-   */
+/*
+ * This can be used for testing the controller, given the busnum and the
+ * cs required to use. If those parameters are used, spidev is
+ * dynamically added as device on the busnum, and messages can be sent
+ * via this interface.
+ */
 static int busnum = -1;
 module_param(busnum, int, S_IRUGO);
 MODULE_PARM_DESC(busnum, "bus num of the controller");
@@ -108,6 +109,10 @@ MODULE_PARM_DESC(chipselect, "chip select of the desired device");
 static int maxspeed = 10000000;
 module_param(maxspeed, int, S_IRUGO);
 MODULE_PARM_DESC(maxspeed, "max_speed of the desired device");
+
+static int spimode = SPI_MODE_3;
+module_param(spimode, int, S_IRUGO);
+MODULE_PARM_DESC(spimode, "mode of the desired device");
 
 static struct spi_device *spi;
 
@@ -498,7 +503,6 @@ static int spidev_open(struct inode *inode, struct file *filp)
 	struct spidev_data	*spidev;
 	int			status = -ENXIO;
 
-	lock_kernel();
 	mutex_lock(&device_list_lock);
 
 	list_for_each_entry(spidev, &device_list, device_entry) {
@@ -533,7 +537,6 @@ static int spidev_open(struct inode *inode, struct file *filp)
 		pr_debug("spidev: nothing for minor %d\n", iminor(inode));
 
 	mutex_unlock(&device_list_lock);
-	unlock_kernel();
 	return status;
 }
 
@@ -593,7 +596,7 @@ static struct class *spidev_class;
 
 /*-------------------------------------------------------------------------*/
 
-static int spidev_probe(struct spi_device *spi)
+static int __devinit spidev_probe(struct spi_device *spi)
 {
 	struct spidev_data	*spidev;
 	int			status;
@@ -642,7 +645,7 @@ static int spidev_probe(struct spi_device *spi)
 	return status;
 }
 
-static int spidev_remove(struct spi_device *spi)
+static int __devexit spidev_remove(struct spi_device *spi)
 {
 	struct spidev_data	*spidev = spi_get_drvdata(spi);
 
@@ -664,7 +667,7 @@ static int spidev_remove(struct spi_device *spi)
 	return 0;
 }
 
-static struct spi_driver spidev_spi = {
+static struct spi_driver spidev_spi_driver = {
 	.driver = {
 		.name =		"spidev",
 		.owner =	THIS_MODULE,
@@ -700,18 +703,19 @@ static int __init spidev_init(void)
 		goto error_class;
 	}
 
-	status = spi_register_driver(&spidev_spi);
+	status = spi_register_driver(&spidev_spi_driver);
 	if (status < 0)
 		goto error_register;
 
 	if (busnum != -1 && chipselect != -1) {
-		struct spi_board_info chip  = {
+		struct spi_board_info chip = {
 					.modalias	= "spidev",
-					.mode		= SPI_MODE_3,
+					.mode		= spimode,
 					.bus_num	= busnum,
 					.chip_select	= chipselect,
 					.max_speed_hz	= maxspeed,
 		};
+
 		struct spi_master *master;
 
 		master = spi_busnum_to_master(busnum);
@@ -726,20 +730,17 @@ static int __init spidev_init(void)
 			status = -ENOMEM;
 			goto error_mem;
 		}
-
 		dev_dbg(&spi->dev, "busnum=%d cs=%d bufsiz=%d maxspeed=%d",
-			 busnum, chipselect, bufsiz, maxspeed);
+			busnum, chipselect, bufsiz, maxspeed);
 	}
-
 	return 0;
-
 error_mem:
 error_busnum:
-	spi_unregister_driver(&spidev_spi);
+	spi_unregister_driver(&spidev_spi_driver);
 error_register:
 	class_destroy(spidev_class);
 error_class:
-	unregister_chrdev(SPIDEV_MAJOR, spidev_spi.driver.name);
+	unregister_chrdev(SPIDEV_MAJOR, spidev_spi_driver.driver.name);
 	return status;
 }
 module_init(spidev_init);
@@ -750,9 +751,9 @@ static void __exit spidev_exit(void)
 		spi_dev_put(spi);
 		spi = NULL;
 	}
-	spi_unregister_driver(&spidev_spi);
+	spi_unregister_driver(&spidev_spi_driver);
 	class_destroy(spidev_class);
-	unregister_chrdev(SPIDEV_MAJOR, spidev_spi.driver.name);
+	unregister_chrdev(SPIDEV_MAJOR, spidev_spi_driver.driver.name);
 }
 module_exit(spidev_exit);
 

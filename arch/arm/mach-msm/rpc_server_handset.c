@@ -15,6 +15,7 @@
  * along with this program; if not, you can find it at http://www.fsf.org.
  */
 
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -56,6 +57,10 @@
 #define HS_HEADSET_SWITCH_K	0x84
 #define HS_HEADSET_SWITCH_2_K	0xF0
 #define HS_HEADSET_SWITCH_3_K	0xF1
+#ifdef CONFIG_MACH_MSM7X27_ALOHAV
+#define HS_HEADSET_HEADPHONE_K	0xF6
+#define HS_HEADSET_MICROPHONE_K 0xF7
+#endif
 #define HS_REL_K		0xFF	/* key release */
 
 #ifndef CONFIG_MACH_MSM7X27_ALOHAV
@@ -68,6 +73,8 @@
 #define HS_ON_HOOK_K		0x01	/* headphone hook key */
 #define GPIO_EAR_SENSE_BIAS		0x1D
 #define HS_DESKDOCK_DETECT	0x02	/* deskdock detect */
+#else
+#define SW_HEADPHONE_INSERT_W_MIC 1 /* HS with mic */
 #endif
 
 #define KEY(hs_key, input_key) ((hs_key << 24) | input_key)
@@ -199,11 +206,14 @@ struct hs_cmd_data_type {
 static const uint32_t hs_key_map[] = {
 	KEY(HS_PWR_K, KEY_POWER),
 	KEY(HS_END_K, KEY_END),
-	KEY(HS_STEREO_HEADSET_K, SW_HEADPHONE_INSERT),
 #ifndef CONFIG_MACH_MSM7X27_ALOHAV
+	KEY(HS_STEREO_HEADSET_K, SW_HEADPHONE_INSERT),
 	KEY(HS_ON_HOOK_K, KEY_MEDIA),
 	KEY(HS_DESKDOCK_DETECT, KEY_CONNECT),
 #else
+	KEY(HS_STEREO_HEADSET_K, SW_HEADPHONE_INSERT_W_MIC),
+	KEY(HS_HEADSET_HEADPHONE_K, SW_HEADPHONE_INSERT),
+	KEY(HS_HEADSET_MICROPHONE_K, SW_MICROPHONE_INSERT),
 	KEY(HS_HEADSET_SWITCH_K, KEY_MEDIA),
 	KEY(HS_HEADSET_SWITCH_2_K, KEY_VOLUMEUP),
 	KEY(HS_HEADSET_SWITCH_3_K, KEY_VOLUMEDOWN),
@@ -238,6 +248,9 @@ struct msm_handset {
 	struct switch_dev sdev;
 #endif
 	struct msm_handset_platform_data *hs_pdata;
+#ifdef CONFIG_MACH_MSM7X27_ALOHAV
+	bool mic_on, hs_on;
+#endif
 };
 
 static struct msm_rpc_client *rpc_client;
@@ -263,6 +276,7 @@ static int hs_find_key(uint32_t hscode)
 	return -1;
 }
 
+#ifndef CONFIG_MACH_MSM7X27_ALOHAV
 #ifndef CONFIG_LGE_HEADSET
 static void
 report_headset_switch(struct input_dev *dev, int key, int value)
@@ -271,6 +285,23 @@ report_headset_switch(struct input_dev *dev, int key, int value)
 
 	input_report_switch(dev, key, value);
 	switch_set_state(&hs->sdev, value);
+}
+#endif
+#else
+static void update_state(void)
+{
+	int state;
+
+	if (hs->mic_on && hs->hs_on)
+		state = 1 << 0;
+	else if (hs->hs_on)
+		state = 1 << 1;
+	else if (hs->mic_on)
+		state = 1 << 2;
+	else
+		state = 0;
+
+	switch_set_state(&hs->sdev, state);
 }
 #endif
 
@@ -317,6 +348,18 @@ static void report_hs_key(uint32_t key_code, uint32_t key_parm)
 		if (deskdock_detect_callback)
 			deskdock_detect_callback((key_code != HS_REL_K));
 		break;
+	case SW_HEADPHONE_INSERT:
+#ifndef CONFIG_LGE_HEADSET
+		report_headset_switch(hs->ipdev, key, (key_code != HS_REL_K));
+#endif
+#if defined(CONFIG_LGE_DIAGTEST)
+		/* LGE_CHANGES
+		 * [woonghee@lge.com] 2010-01-23
+		 * [VS740] for key test */
+		if(if_condition_is_on_key_buffering == HS_TRUE && key_code == 0/*press*/)
+			lgf_factor_key_test_rsp((uint8_t)key);
+#endif
+		break;
 #else /*CONFIG_MACH_MSM7X27_ALOHAG*/
 	case KEY_POWER:
 	case KEY_END:
@@ -333,20 +376,26 @@ static void report_hs_key(uint32_t key_code, uint32_t key_parm)
 			lgf_factor_key_test_rsp((uint8_t)key);
 #endif
 		break;
-#endif /*CONFIG_MACH_MSM7X27_ALOHAG */
+	case SW_HEADPHONE_INSERT_W_MIC:
+		hs->mic_on = hs->hs_on = (key_code != HS_REL_K) ? 1 : 0;
+		input_report_switch(hs->ipdev, SW_HEADPHONE_INSERT,
+							hs->hs_on);
+		input_report_switch(hs->ipdev, SW_MICROPHONE_INSERT,
+							hs->mic_on);
+		update_state();
+		break;
 
 	case SW_HEADPHONE_INSERT:
-#ifndef CONFIG_LGE_HEADSET
-		report_headset_switch(hs->ipdev, key, (key_code != HS_REL_K));
-#endif
-#if defined(CONFIG_LGE_DIAGTEST)
-		/* LGE_CHANGES
-		 * [woonghee@lge.com] 2010-01-23
-		 * [VS740] for key test */
-		if(if_condition_is_on_key_buffering == HS_TRUE && key_code == 0/*press*/)
-			lgf_factor_key_test_rsp((uint8_t)key);
-#endif
+		hs->hs_on = (key_code != HS_REL_K) ? 1 : 0;
+		input_report_switch(hs->ipdev, key, hs->hs_on);
+		update_state();
 		break;
+	case SW_MICROPHONE_INSERT:
+		hs->mic_on = (key_code != HS_REL_K) ? 1 : 0;
+		input_report_switch(hs->ipdev, key, hs->mic_on);
+		update_state();
+		break;
+#endif /*CONFIG_MACH_MSM7X27_ALOHAG */
 	case -1:
 		printk(KERN_ERR "%s: No mapping for remote handset event %d\n",
 				 __func__, temp_key_code);
@@ -480,7 +529,7 @@ EXPORT_SYMBOL(rpc_server_hs_register_callback);
 #endif
 
 static int hs_rpc_pwr_cmd_arg(struct msm_rpc_client *client,
-				    void *buffer, void *data)
+                    void *buffer, void *data)
 {
 	struct hs_cmd_data_type *hs_pwr_cmd = buffer;
 
@@ -619,6 +668,18 @@ static int __devinit hs_rpc_init(void)
 	int rc;
 
 	rc = hs_rpc_cb_init();
+
+#ifdef CONFIG_MACH_LGE
+	/* FIXME: following code is from qualcomm's 2.6.32 kernel
+	 * in qualcomm's original code in 7020 version,
+	 * rpc server of handset can't be created in any case.
+	 * so, power key event is never passed from arm9.
+	 * this comes from fact that hs_rpc_cb_init() always returns '0'
+	 * and subsequently msm_rpc_create_server() is never called.
+	 * this is obvious qualcomm's bug.
+	 * I expect that qualcomm fix this bug later.
+	 * 2010-11-18, cleaneye.kim@lge.com
+	 */
 	if (rc) {
 		pr_err("%s: failed to initialize rpc client\n", __func__);
 		return rc;
@@ -627,6 +688,18 @@ static int __devinit hs_rpc_init(void)
 	rc = msm_rpc_create_server(&hs_rpc_server);
 	if (rc)
 		pr_err("%s: failed to create rpc server\n", __func__);
+#else
+	if (rc) {
+		pr_err("%s: failed to initialize rpc client, try server...\n",
+						__func__);
+
+		rc = msm_rpc_create_server(&hs_rpc_server);
+		if (rc) {
+			pr_err("%s: failed to create rpc server\n", __func__);
+			return rc;
+		}
+	}
+#endif
 
 	return rc;
 }
@@ -693,6 +766,9 @@ static int __devinit hs_probe(struct platform_device *pdev)
 	input_set_capability(ipdev, EV_KEY, KEY_VOLUMEUP);
 	input_set_capability(ipdev, EV_KEY, KEY_VOLUMEDOWN);
 	input_set_capability(ipdev, EV_SW, SW_HEADPHONE_INSERT);
+#ifdef CONFIG_MACH_MSM7X27_ALOHAV
+	input_set_capability(ipdev, EV_SW, SW_MICROPHONE_INSERT);
+#endif
 	input_set_capability(ipdev, EV_KEY, KEY_POWER);
 	input_set_capability(ipdev, EV_KEY, KEY_END);
 

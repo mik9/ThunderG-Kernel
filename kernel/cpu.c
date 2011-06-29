@@ -14,17 +14,34 @@
 #include <linux/kthread.h>
 #include <linux/stop_machine.h>
 #include <linux/mutex.h>
+#include <linux/gfp.h>
 
 #ifdef CONFIG_SMP
 /* Serializes the updates to cpu_online_mask, cpu_present_mask */
 static DEFINE_MUTEX(cpu_add_remove_lock);
 
-static __cpuinitdata RAW_NOTIFIER_HEAD(cpu_chain);
+/*
+ * The following two API's must be used when attempting
+ * to serialize the updates to cpu_online_mask, cpu_present_mask.
+ */
+void cpu_maps_update_begin(void)
+{
+	mutex_lock(&cpu_add_remove_lock);
+}
+
+void cpu_maps_update_done(void)
+{
+	mutex_unlock(&cpu_add_remove_lock);
+}
+
+static RAW_NOTIFIER_HEAD(cpu_chain);
 
 /* If set, cpu_up and cpu_down will return -EBUSY and do nothing.
  * Should always be manipulated under cpu_add_remove_lock
  */
 static int cpu_hotplug_disabled;
+
+#ifdef CONFIG_HOTPLUG_CPU
 
 static struct {
 	struct task_struct *active_writer;
@@ -39,8 +56,6 @@ static struct {
 	.lock = __MUTEX_INITIALIZER(cpu_hotplug.lock),
 	.refcount = 0,
 };
-
-#ifdef CONFIG_HOTPLUG_CPU
 
 void get_online_cpus(void)
 {
@@ -65,22 +80,6 @@ void put_online_cpus(void)
 
 }
 EXPORT_SYMBOL_GPL(put_online_cpus);
-
-#endif	/* CONFIG_HOTPLUG_CPU */
-
-/*
- * The following two API's must be used when attempting
- * to serialize the updates to cpu_online_mask, cpu_present_mask.
- */
-void cpu_maps_update_begin(void)
-{
-	mutex_lock(&cpu_add_remove_lock);
-}
-
-void cpu_maps_update_done(void)
-{
-	mutex_unlock(&cpu_add_remove_lock);
-}
 
 /*
  * This ensures that the hotplug operation can begin only when the
@@ -123,6 +122,12 @@ static void cpu_hotplug_done(void)
 	cpu_hotplug.active_writer = NULL;
 	mutex_unlock(&cpu_hotplug.lock);
 }
+
+#else /* #if CONFIG_HOTPLUG_CPU */
+static void cpu_hotplug_begin(void) {}
+static void cpu_hotplug_done(void) {}
+#endif	/* #esle #if CONFIG_HOTPLUG_CPU */
+
 /* Need to know about CPUs going up/down? */
 int __ref register_cpu_notifier(struct notifier_block *nb)
 {
@@ -133,7 +138,28 @@ int __ref register_cpu_notifier(struct notifier_block *nb)
 	return ret;
 }
 
+static int __cpu_notify(unsigned long val, void *v, int nr_to_call,
+			int *nr_calls)
+{
+	int ret;
+
+	ret = __raw_notifier_call_chain(&cpu_chain, val, v, nr_to_call,
+					nr_calls);
+
+	return notifier_to_errno(ret);
+}
+
+static int cpu_notify(unsigned long val, void *v)
+{
+	return __cpu_notify(val, v, -1, NULL);
+}
+
 #ifdef CONFIG_HOTPLUG_CPU
+
+static void cpu_notify_nofail(unsigned long val, void *v)
+{
+	BUG_ON(cpu_notify(val, v));
+}
 
 EXPORT_SYMBOL(register_cpu_notifier);
 
@@ -154,10 +180,10 @@ static inline void check_for_tasks(int cpu)
 		if (task_cpu(p) == cpu && p->state == TASK_RUNNING &&
 		    (!cputime_eq(p->utime, cputime_zero) ||
 		     !cputime_eq(p->stime, cputime_zero)))
-			printk(KERN_WARNING "Task %s (pid = %d) is on cpu %d\
-				(state = %ld, flags = %x) \n",
-				 p->comm, task_pid_nr(p), cpu,
-				 p->state, p->flags);
+			printk(KERN_WARNING "Task %s (pid = %d) is on cpu %d "
+				"(state = %ld, flags = %x)\n",
+				p->comm, task_pid_nr(p), cpu,
+				p->state, p->flags);
 	}
 	write_unlock_irq(&tasklist_lock);
 }
@@ -180,8 +206,7 @@ static int __ref take_cpu_down(void *_param)
 	if (err < 0)
 		return err;
 
-	raw_notifier_call_chain(&cpu_chain, CPU_DYING | param->mod,
-				param->hcpu);
+	cpu_notify(CPU_DYING | param->mod, param->hcpu);
 
 	if (task_cpu(param->caller) == cpu)
 		move_task_off_dead_cpu(cpu, param->caller);
@@ -211,17 +236,14 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen)
 
 	cpu_hotplug_begin();
 	set_cpu_active(cpu, false);
-	err = __raw_notifier_call_chain(&cpu_chain, CPU_DOWN_PREPARE | mod,
-					hcpu, -1, &nr_calls);
-	if (err == NOTIFY_BAD) {
+	err = __cpu_notify(CPU_DOWN_PREPARE | mod, hcpu, -1, &nr_calls);
+	if (err) {
 		set_cpu_active(cpu, true);
 
 		nr_calls--;
-		__raw_notifier_call_chain(&cpu_chain, CPU_DOWN_FAILED | mod,
-					  hcpu, nr_calls, NULL);
+		__cpu_notify(CPU_DOWN_FAILED | mod, hcpu, nr_calls, NULL);
 		printk("%s: attempt to take down CPU %u failed\n",
 				__func__, cpu);
-		err = -EINVAL;
 		goto out_release;
 	}
 
@@ -229,9 +251,7 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen)
 	if (err) {
 		set_cpu_active(cpu, true);
 		/* CPU didn't die: tell everyone.  Can't complain. */
-		if (raw_notifier_call_chain(&cpu_chain, CPU_DOWN_FAILED | mod,
-					    hcpu) == NOTIFY_BAD)
-			BUG();
+		cpu_notify_nofail(CPU_DOWN_FAILED | mod, hcpu);
 
 		goto out_release;
 	}
@@ -245,19 +265,14 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen)
 	__cpu_die(cpu);
 
 	/* CPU is completely dead: tell everyone.  Too late to complain. */
-	if (raw_notifier_call_chain(&cpu_chain, CPU_DEAD | mod,
-				    hcpu) == NOTIFY_BAD)
-		BUG();
+	cpu_notify_nofail(CPU_DEAD | mod, hcpu);
 
 	check_for_tasks(cpu);
 
 out_release:
 	cpu_hotplug_done();
-	if (!err) {
-		if (raw_notifier_call_chain(&cpu_chain, CPU_POST_DEAD | mod,
-					    hcpu) == NOTIFY_BAD)
-			BUG();
-	}
+	if (!err)
+		cpu_notify_nofail(CPU_POST_DEAD | mod, hcpu);
 	return err;
 }
 
@@ -265,9 +280,6 @@ int __ref cpu_down(unsigned int cpu)
 {
 	int err;
 
-	err = stop_machine_create();
-	if (err)
-		return err;
 	cpu_maps_update_begin();
 
 	if (cpu_hotplug_disabled) {
@@ -279,7 +291,6 @@ int __ref cpu_down(unsigned int cpu)
 
 out:
 	cpu_maps_update_done();
-	stop_machine_destroy();
 	return err;
 }
 EXPORT_SYMBOL(cpu_down);
@@ -296,13 +307,11 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 		return -EINVAL;
 
 	cpu_hotplug_begin();
-	ret = __raw_notifier_call_chain(&cpu_chain, CPU_UP_PREPARE | mod, hcpu,
-							-1, &nr_calls);
-	if (ret == NOTIFY_BAD) {
+	ret = __cpu_notify(CPU_UP_PREPARE | mod, hcpu, -1, &nr_calls);
+	if (ret) {
 		nr_calls--;
 		printk("%s: attempt to bring up CPU %u failed\n",
 				__func__, cpu);
-		ret = -EINVAL;
 		goto out_notify;
 	}
 
@@ -315,12 +324,11 @@ static int __cpuinit _cpu_up(unsigned int cpu, int tasks_frozen)
 	set_cpu_active(cpu, true);
 
 	/* Now call notifier in preparation. */
-	raw_notifier_call_chain(&cpu_chain, CPU_ONLINE | mod, hcpu);
+	cpu_notify(CPU_ONLINE | mod, hcpu);
 
 out_notify:
 	if (ret != 0)
-		__raw_notifier_call_chain(&cpu_chain,
-				CPU_UP_CANCELED | mod, hcpu, nr_calls, NULL);
+		__cpu_notify(CPU_UP_CANCELED | mod, hcpu, nr_calls, NULL);
 	cpu_hotplug_done();
 
 	return ret;
@@ -329,15 +337,43 @@ out_notify:
 int __cpuinit cpu_up(unsigned int cpu)
 {
 	int err = 0;
+
+#ifdef	CONFIG_MEMORY_HOTPLUG
+	int nid;
+	pg_data_t	*pgdat;
+#endif
+
 	if (!cpu_possible(cpu)) {
 		printk(KERN_ERR "can't online cpu %d because it is not "
 			"configured as may-hotadd at boot time\n", cpu);
-#if defined(CONFIG_IA64) || defined(CONFIG_X86_64)
+#if defined(CONFIG_IA64)
 		printk(KERN_ERR "please check additional_cpus= boot "
 				"parameter\n");
 #endif
 		return -EINVAL;
 	}
+
+#ifdef	CONFIG_MEMORY_HOTPLUG
+	nid = cpu_to_node(cpu);
+	if (!node_online(nid)) {
+		err = mem_online_node(nid);
+		if (err)
+			return err;
+	}
+
+	pgdat = NODE_DATA(nid);
+	if (!pgdat) {
+		printk(KERN_ERR
+			"Can't online cpu %d due to NULL pgdat\n", cpu);
+		return -ENOMEM;
+	}
+
+	if (pgdat->node_zonelists->_zonerefs->zone == NULL) {
+		mutex_lock(&zonelists_mutex);
+		build_all_zonelists(NULL);
+		mutex_unlock(&zonelists_mutex);
+	}
+#endif
 
 	cpu_maps_update_begin();
 
@@ -358,11 +394,8 @@ static cpumask_var_t frozen_cpus;
 
 int disable_nonboot_cpus(void)
 {
-	int cpu, first_cpu, error;
+	int cpu, first_cpu, error = 0;
 
-	error = stop_machine_create();
-	if (error)
-		return error;
 	cpu_maps_update_begin();
 	first_cpu = cpumask_first(cpu_online_mask);
 	/*
@@ -393,7 +426,6 @@ int disable_nonboot_cpus(void)
 		printk(KERN_ERR "Non-boot CPUs are not disabled\n");
 	}
 	cpu_maps_update_done();
-	stop_machine_destroy();
 	return error;
 }
 
@@ -460,7 +492,7 @@ void __cpuinit notify_cpu_starting(unsigned int cpu)
 	if (frozen_cpus != NULL && cpumask_test_cpu(cpu, frozen_cpus))
 		val = CPU_STARTING_FROZEN;
 #endif /* CONFIG_PM_SLEEP_SMP */
-	raw_notifier_call_chain(&cpu_chain, val, (void *)(long)cpu);
+	cpu_notify(val, (void *)(long)cpu);
 }
 
 #endif /* CONFIG_SMP */

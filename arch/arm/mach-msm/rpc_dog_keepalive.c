@@ -20,6 +20,7 @@
  * DOG KEEPALIVE RPC CLIENT MODULE
  */
 
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/err.h>

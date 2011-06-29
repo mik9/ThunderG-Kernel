@@ -32,6 +32,9 @@
 #include <linux/netdevice.h>
 #include <linux/jhash.h>
 #include <linux/random.h>
+#include <linux/slab.h>
+#include <net/route.h>
+#include <net/dst.h>
 #include <net/sock.h>
 #include <net/ip.h>
 #include <net/icmp.h>
@@ -205,11 +208,35 @@ static void ip_expire(unsigned long arg)
 	if ((qp->q.last_in & INET_FRAG_FIRST_IN) && qp->q.fragments != NULL) {
 		struct sk_buff *head = qp->q.fragments;
 
-		/* Send an ICMP "Fragment Reassembly Timeout" message. */
-		if ((head->dev = dev_get_by_index(net, qp->iif)) != NULL) {
-			icmp_send(head, ICMP_TIME_EXCEEDED, ICMP_EXC_FRAGTIME, 0);
-			dev_put(head->dev);
+		rcu_read_lock();
+		head->dev = dev_get_by_index_rcu(net, qp->iif);
+		if (!head->dev)
+			goto out_rcu_unlock;
+
+		/*
+		 * Only search router table for the head fragment,
+		 * when defraging timeout at PRE_ROUTING HOOK.
+		 */
+		if (qp->user == IP_DEFRAG_CONNTRACK_IN && !skb_dst(head)) {
+			const struct iphdr *iph = ip_hdr(head);
+			int err = ip_route_input(head, iph->daddr, iph->saddr,
+						 iph->tos, head->dev);
+			if (unlikely(err))
+				goto out_rcu_unlock;
+
+			/*
+			 * Only an end host needs to send an ICMP
+			 * "Fragment Reassembly Timeout" message, per RFC792.
+			 */
+			if (skb_rtable(head)->rt_type != RTN_LOCAL)
+				goto out_rcu_unlock;
+
 		}
+
+		/* Send an ICMP "Fragment Reassembly Timeout" message. */
+		icmp_send(head, ICMP_TIME_EXCEEDED, ICMP_EXC_FRAGTIME, 0);
+out_rcu_unlock:
+		rcu_read_unlock();
 	}
 out:
 	spin_unlock(&qp->q.lock);
@@ -603,7 +630,6 @@ static int zero;
 
 static struct ctl_table ip4_frags_ns_ctl_table[] = {
 	{
-		.ctl_name	= NET_IPV4_IPFRAG_HIGH_THRESH,
 		.procname	= "ipfrag_high_thresh",
 		.data		= &init_net.ipv4.frags.high_thresh,
 		.maxlen		= sizeof(int),
@@ -611,7 +637,6 @@ static struct ctl_table ip4_frags_ns_ctl_table[] = {
 		.proc_handler	= proc_dointvec
 	},
 	{
-		.ctl_name	= NET_IPV4_IPFRAG_LOW_THRESH,
 		.procname	= "ipfrag_low_thresh",
 		.data		= &init_net.ipv4.frags.low_thresh,
 		.maxlen		= sizeof(int),
@@ -619,26 +644,22 @@ static struct ctl_table ip4_frags_ns_ctl_table[] = {
 		.proc_handler	= proc_dointvec
 	},
 	{
-		.ctl_name	= NET_IPV4_IPFRAG_TIME,
 		.procname	= "ipfrag_time",
 		.data		= &init_net.ipv4.frags.timeout,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_jiffies,
-		.strategy	= sysctl_jiffies
 	},
 	{ }
 };
 
 static struct ctl_table ip4_frags_ctl_table[] = {
 	{
-		.ctl_name	= NET_IPV4_IPFRAG_SECRET_INTERVAL,
 		.procname	= "ipfrag_secret_interval",
 		.data		= &ip4_frags.secret_interval,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_jiffies,
-		.strategy	= sysctl_jiffies
 	},
 	{
 		.procname	= "ipfrag_max_dist",
@@ -651,13 +672,13 @@ static struct ctl_table ip4_frags_ctl_table[] = {
 	{ }
 };
 
-static int ip4_frags_ns_ctl_register(struct net *net)
+static int __net_init ip4_frags_ns_ctl_register(struct net *net)
 {
 	struct ctl_table *table;
 	struct ctl_table_header *hdr;
 
 	table = ip4_frags_ns_ctl_table;
-	if (net != &init_net) {
+	if (!net_eq(net, &init_net)) {
 		table = kmemdup(table, sizeof(ip4_frags_ns_ctl_table), GFP_KERNEL);
 		if (table == NULL)
 			goto err_alloc;
@@ -675,13 +696,13 @@ static int ip4_frags_ns_ctl_register(struct net *net)
 	return 0;
 
 err_reg:
-	if (net != &init_net)
+	if (!net_eq(net, &init_net))
 		kfree(table);
 err_alloc:
 	return -ENOMEM;
 }
 
-static void ip4_frags_ns_ctl_unregister(struct net *net)
+static void __net_exit ip4_frags_ns_ctl_unregister(struct net *net)
 {
 	struct ctl_table *table;
 
@@ -709,7 +730,7 @@ static inline void ip4_frags_ctl_register(void)
 }
 #endif
 
-static int ipv4_frags_init_net(struct net *net)
+static int __net_init ipv4_frags_init_net(struct net *net)
 {
 	/*
 	 * Fragment cache limits. We will commit 256K at one time. Should we
@@ -731,7 +752,7 @@ static int ipv4_frags_init_net(struct net *net)
 	return ip4_frags_ns_ctl_register(net);
 }
 
-static void ipv4_frags_exit_net(struct net *net)
+static void __net_exit ipv4_frags_exit_net(struct net *net)
 {
 	ip4_frags_ns_ctl_unregister(net);
 	inet_frags_exit_net(&net->ipv4.frags, &ip4_frags);

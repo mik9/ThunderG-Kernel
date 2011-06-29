@@ -22,6 +22,7 @@
 #include <linux/err.h>
 #include <mach/msm_reqs.h>
 #include "npa_remote.h"
+#include <linux/slab.h>
 
 struct request {
 	atomic_t creation_pending;

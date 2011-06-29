@@ -31,7 +31,15 @@ struct pvclock_shadow_time {
 	u32 tsc_to_nsec_mul;
 	int tsc_shift;
 	u32 version;
+	u8  flags;
 };
+
+static u8 valid_flags __read_mostly = 0;
+
+void pvclock_set_flags(u8 flags)
+{
+	valid_flags = flags;
+}
 
 /*
  * Scale a 64-bit delta by scaling and multiplying by a 32-bit fraction,
@@ -74,8 +82,7 @@ static inline u64 scale_delta(u64 delta, u32 mul_frac, int shift)
 static u64 pvclock_get_nsec_offset(struct pvclock_shadow_time *shadow)
 {
 	u64 delta = native_read_tsc() - shadow->tsc_timestamp;
-	return pvclock_scale_delta(delta, shadow->tsc_to_nsec_mul,
-				   shadow->tsc_shift);
+	return scale_delta(delta, shadow->tsc_to_nsec_mul, shadow->tsc_shift);
 }
 
 /*
@@ -92,6 +99,7 @@ static unsigned pvclock_get_time_values(struct pvclock_shadow_time *dst,
 		dst->system_timestamp  = src->system_time;
 		dst->tsc_to_nsec_mul   = src->tsc_to_system_mul;
 		dst->tsc_shift         = src->tsc_shift;
+		dst->flags             = src->flags;
 		rmb();		/* test version after fetching data */
 	} while ((src->version & 1) || (dst->version != src->version));
 
@@ -112,11 +120,6 @@ unsigned long pvclock_tsc_khz(struct pvclock_vcpu_time_info *src)
 
 static atomic64_t last_value = ATOMIC64_INIT(0);
 
-void pvclock_resume(void)
-{
-	atomic64_set(&last_value, 0);
-}
-
 cycle_t pvclock_clocksource_read(struct pvclock_vcpu_time_info *src)
 {
 	struct pvclock_shadow_time shadow;
@@ -131,6 +134,10 @@ cycle_t pvclock_clocksource_read(struct pvclock_vcpu_time_info *src)
 		ret = shadow.system_timestamp + offset;
 		barrier();
 	} while (version != src->version);
+
+	if ((valid_flags & PVCLOCK_TSC_STABLE_BIT) &&
+		(shadow.flags & PVCLOCK_TSC_STABLE_BIT))
+		return ret;
 
 	/*
 	 * Assumption here is that last_value, a global accumulator, always goes

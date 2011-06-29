@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2005 - 2009 ServerEngines
+ * Copyright (C) 2005 - 2010 ServerEngines
  * All rights reserved.
  *
  * This program is free software; you can redistribute it and/or
@@ -29,31 +29,30 @@
 #include <linux/workqueue.h>
 #include <linux/interrupt.h>
 #include <linux/firmware.h>
+#include <linux/slab.h>
 
 #include "be_hw.h"
 
-#define DRV_VER			"2.101.205"
+#define DRV_VER			"2.102.147u"
 #define DRV_NAME		"be2net"
 #define BE_NAME			"ServerEngines BladeEngine2 10Gbps NIC"
 #define BE3_NAME		"ServerEngines BladeEngine3 10Gbps NIC"
 #define OC_NAME			"Emulex OneConnect 10Gbps NIC"
 #define OC_NAME1		"Emulex OneConnect 10Gbps NIC (be3)"
-#define DRV_DESC		BE_NAME "Driver"
+#define DRV_DESC		"ServerEngines BladeEngine 10Gbps NIC Driver"
 
 #define BE_VENDOR_ID 		0x19a2
 #define BE_DEVICE_ID1		0x211
 #define BE_DEVICE_ID2		0x221
 #define OC_DEVICE_ID1		0x700
-#define OC_DEVICE_ID2		0x701
-#define OC_DEVICE_ID3		0x710
+#define OC_DEVICE_ID2		0x710
 
 static inline char *nic_name(struct pci_dev *pdev)
 {
 	switch (pdev->device) {
 	case OC_DEVICE_ID1:
-	case OC_DEVICE_ID2:
 		return OC_NAME;
-	case OC_DEVICE_ID3:
+	case OC_DEVICE_ID2:
 		return OC_NAME1;
 	case BE_DEVICE_ID2:
 		return BE3_NAME;
@@ -84,6 +83,8 @@ static inline char *nic_name(struct pci_dev *pdev)
 #define RX_FRAGS_REFILL_WM	(RX_Q_LEN - MAX_RX_POST)
 
 #define FW_VER_LEN		32
+
+#define BE_MAX_VF		32
 
 struct be_dma_mem {
 	void *va;
@@ -153,6 +154,7 @@ struct be_eq_obj {
 struct be_mcc_obj {
 	struct be_queue_info q;
 	struct be_queue_info cq;
+	bool rearm_cq;
 };
 
 struct be_drvr_stats {
@@ -171,7 +173,7 @@ struct be_drvr_stats {
 	u32 cache_barrier[16];
 
 	u32 be_ethrx_post_fail;/* number of ethrx buffer alloc failures */
-	u32 be_polls;		/* number of times NAPI called poll function */
+	u32 be_rx_polls;	/* number of times NAPI called poll function */
 	u32 be_rx_events;	/* number of ucast rx completion events  */
 	u32 be_rx_compl;	/* number of rx completion entries processed */
 	ulong be_rx_jiffies;
@@ -194,7 +196,6 @@ struct be_drvr_stats {
 
 struct be_stats_obj {
 	struct be_drvr_stats drvr_stats;
-	struct net_device_stats net_stats;
 	struct be_dma_mem cmd;
 };
 
@@ -208,7 +209,7 @@ struct be_tx_obj {
 /* Struct to remember the pages posted for rx frags */
 struct be_rx_page_info {
 	struct page *page;
-	dma_addr_t bus;
+	DEFINE_DMA_UNMAP_ADDR(bus);
 	u16 page_offset;
 	bool last_page_user;
 };
@@ -255,8 +256,10 @@ struct be_adapter {
 	bool rx_post_starved;	/* Zero rx frags have been posted to BE */
 
 	struct vlan_group *vlan_grp;
-	u16 num_vlans;
+	u16 vlans_added;
+	u16 max_vlans;	/* Number of vlans supported */
 	u8 vlan_tag[VLAN_GROUP_ARRAY_LEN];
+	struct be_dma_mem mc_cmd_mem;
 
 	struct be_stats_obj stats;
 	/* Work queue used to perform periodic tasks like getting statistics */
@@ -268,14 +271,28 @@ struct be_adapter {
 	u32 if_handle;		/* Used to configure filtering */
 	u32 pmac_id;		/* MAC addr handle used by BE card */
 
+	bool eeh_err;
 	bool link_up;
 	u32 port_num;
 	bool promiscuous;
+	bool wol;
 	u32 cap;
 	u32 rx_fc;		/* Rx flow control */
 	u32 tx_fc;		/* Tx flow control */
+	int link_speed;
+	u8 port_type;
+	u8 transceiver;
 	u8 generation;		/* BladeEngine ASIC generation */
+	u32 flash_status;
+	struct completion flash_compl;
+
+	bool sriov_enabled;
+	u32 vf_if_handle[BE_MAX_VF];
+	u32 vf_pmac_id[BE_MAX_VF];
+	u8 base_eq_id;
 };
+
+#define be_physfn(adapter) (!adapter->pdev->is_virtfn)
 
 /* BladeEngine Generation numbers */
 #define BE_GEN2 2
@@ -284,11 +301,6 @@ struct be_adapter {
 extern const struct ethtool_ops be_ethtool_ops;
 
 #define drvr_stats(adapter)		(&adapter->stats.drvr_stats)
-
-static inline unsigned int be_pci_func(struct be_adapter *adapter)
-{
-	return PCI_FUNC(adapter->pdev->devfn);
-}
 
 #define BE_SET_NETDEV_OPS(netdev, ops)	(netdev->netdev_ops = ops)
 

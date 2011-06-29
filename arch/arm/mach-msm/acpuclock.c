@@ -17,8 +17,6 @@
  *
  */
 
-//#define OVERCLOCK_AHB
-
 #include <linux/version.h>
 #include <linux/kernel.h>
 #include <linux/init.h>
@@ -34,12 +32,12 @@
 #include <mach/board.h>
 #include <mach/msm_iomap.h>
 #include <asm/mach-types.h>
+#include <mach/socinfo.h>
 
 #include "proc_comm.h"
 #include "smd_private.h"
 #include "clock.h"
 #include "acpuclock.h"
-#include "socinfo.h"
 
 #define A11S_CLK_CNTL_ADDR (MSM_CSR_BASE + 0x100)
 #define A11S_CLK_SEL_ADDR (MSM_CSR_BASE + 0x104)
@@ -59,8 +57,7 @@ enum {
 	ACPU_PLL_END,
 };
 
-struct clock_state
-{
+struct clock_state {
 	struct clkctl_acpu_speed	*current_speed;
 	struct mutex			lock;
 	uint32_t			acpu_switch_time_us;
@@ -212,42 +209,7 @@ static struct clkctl_acpu_speed pll0_960_pll1_245_pll2_1200[] = {
 	{ 1, 320000, ACPU_PLL_0, 4, 2, 160000, 1, 5, 122880 },
 	{ 0, 400000, ACPU_PLL_2, 2, 2, 133333, 2, 5, 122880 },
 	{ 1, 480000, ACPU_PLL_0, 4, 1, 160000, 2, 6, 122880 },
-	{ 1, 600000, ACPU_PLL_2, 2, 1, 200000, 2, 7, 200000 },
-#ifndef OVERCLOCK_AHB
-/* Conservative AHB overclocking */
-	{ 1, 652800, ACPU_PLL_0, 4, 0, 217600, 2, 7, 200000 },
-	{ 1, 672000, ACPU_PLL_0, 4, 0, 224000, 2, 7, 200000 },
-	{ 1, 691200, ACPU_PLL_0, 4, 0, 230400, 2, 7, 200000 },
-	{ 1, 710400, ACPU_PLL_0, 4, 0, 236800, 2, 7, 200000 },
-	{ 1, 729600, ACPU_PLL_0, 4, 0, 243200, 2, 7, 200000 },
-	{ 1, 748800, ACPU_PLL_0, 4, 0, 249600, 2, 7, 200000 },
-	{ 1, 768000, ACPU_PLL_0, 4, 0, 256000, 2, 7, 200000 },
-	{ 1, 787200, ACPU_PLL_0, 4, 0, 262400, 2, 7, 200000 },
-	{ 1, 806400, ACPU_PLL_0, 4, 0, 268800, 2, 7, 200000 },
-#ifdef CONFIG_JESUS_PHONE
-	{ 1, 825600, ACPU_PLL_0, 4, 1, 206400, 3, 7, 206400 },
-	{ 1, 844800, ACPU_PLL_0, 4, 1, 211200, 3, 7, 211200 },
-	{ 1, 864000, ACPU_PLL_0, 4, 1, 216000, 3, 7, 216000 },
-#endif
-#else
-/* Agressive AHB overclocking */
-//	{ 1, 480000, ACPU_PLL_0, 4, 1, 240000, 1, 6, 200000 },
-//	{ 1, 600000, ACPU_PLL_2, 2, 1, 300000, 1, 7, 200000 },
-	{ 1, 652800, ACPU_PLL_0, 4, 0, 326400, 1, 7, 200000 },
-	{ 1, 672000, ACPU_PLL_0, 4, 0, 336000, 1, 7, 200000 },
-	{ 1, 691200, ACPU_PLL_0, 4, 0, 345600, 1, 7, 200000 },
-	{ 1, 710400, ACPU_PLL_0, 4, 0, 355200, 1, 7, 200000 },
-	{ 1, 729600, ACPU_PLL_0, 4, 0, 364800, 1, 7, 200000 },
-	{ 1, 748800, ACPU_PLL_0, 4, 0, 374400, 1, 7, 200000 },
-	{ 1, 768000, ACPU_PLL_0, 4, 0, 384000, 1, 7, 200000 },
-	{ 1, 787200, ACPU_PLL_0, 4, 0, 393600, 1, 7, 200000 },
-	{ 1, 806400, ACPU_PLL_0, 4, 0, 403200, 1, 7, 200000 },
-#ifdef CONFIG_JESUS_PHONE
-	{ 1, 825600, ACPU_PLL_0, 4, 1, 206400, 2, 7, 206400 },
-	{ 1, 844800, ACPU_PLL_0, 4, 1, 211200, 2, 7, 211200 },
-	{ 1, 864000, ACPU_PLL_0, 4, 1, 216000, 2, 7, 216000 },
-#endif
-#endif
+	{ 1, 600000, ACPU_PLL_2, 2, 1, 200000, 2, 7, 122880 },
 	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0} }
 };
 
@@ -265,10 +227,39 @@ static struct clkctl_acpu_speed pll0_960_pll1_196_pll2_1200[] = {
 	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0} }
 };
 
+/* 7x27 normal with GSM capable modem - PLL0 and PLL1 swapped and pll2 @ 800 */
+static struct clkctl_acpu_speed pll0_960_pll1_245_pll2_800[] = {
+	{ 0, 19200, ACPU_PLL_TCXO, 0, 0, 19200, 0, 0, 30720 },
+	{ 0, 120000, ACPU_PLL_0, 4, 7,  60000, 1, 3,  61440 },
+	{ 1, 122880, ACPU_PLL_1, 1, 1,  61440, 1, 3,  61440 },
+	{ 0, 200000, ACPU_PLL_2, 2, 3,  66667, 2, 4,  61440 },
+	{ 1, 245760, ACPU_PLL_1, 1, 0, 122880, 1, 4,  61440 },
+	{ 1, 320000, ACPU_PLL_0, 4, 2, 160000, 1, 5, 122880 },
+	{ 0, 400000, ACPU_PLL_2, 2, 1, 133333, 2, 5, 122880 },
+	{ 1, 480000, ACPU_PLL_0, 4, 1, 160000, 2, 6, 122880 },
+	{ 1, 800000, ACPU_PLL_2, 2, 0, 200000, 3, 7, 122880 },
+	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0} }
+};
+
+/* 7x27 normal with CDMA-only modem - PLL0 and PLL1 swapped and pll2 @ 800 */
+static struct clkctl_acpu_speed pll0_960_pll1_196_pll2_800[] = {
+	{ 0, 19200, ACPU_PLL_TCXO, 0, 0, 19200, 0, 0, 24576 },
+	{ 1,  98304, ACPU_PLL_1, 1, 1,  98304, 0, 3,  49152 },
+	{ 0, 120000, ACPU_PLL_0, 4, 7,  60000, 1, 3,  49152 },
+	{ 1, 196608, ACPU_PLL_1, 1, 0,  65536, 2, 4,  98304 },
+	{ 0, 200000, ACPU_PLL_2, 2, 3,  66667, 2, 4,  98304 },
+	{ 1, 320000, ACPU_PLL_0, 4, 2, 160000, 1, 5, 120000 },
+	{ 0, 400000, ACPU_PLL_2, 2, 1, 133333, 2, 5, 120000 },
+	{ 1, 480000, ACPU_PLL_0, 4, 1, 160000, 2, 6, 120000 },
+	{ 1, 800000, ACPU_PLL_2, 2, 0, 200000, 3, 7, 120000 },
+	{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0, 0, 0}, {0, 0, 0} }
+};
+
 #define PLL_196_MHZ	10
 #define PLL_245_MHZ	12
 #define PLL_491_MHZ	25
 #define PLL_768_MHZ	40
+#define PLL_800_MHZ	41
 #define PLL_960_MHZ	50
 #define PLL_1056_MHZ	55
 #define PLL_1200_MHZ	62
@@ -294,6 +285,8 @@ static struct pll_freq_tbl_map acpu_freq_tbl_list[] = {
 	PLL_CONFIG(245, 960, 1200),
 	PLL_CONFIG(960, 196, 1200),
 	PLL_CONFIG(960, 245, 1200),
+	PLL_CONFIG(960, 196, 800),
+	PLL_CONFIG(960, 245, 800),
 	{ 0, 0, 0, 0 }
 };
 
@@ -426,8 +419,9 @@ static int acpuclk_set_vdd_level(int vdd)
 }
 
 /* Set proper dividers for the given clock speed. */
-static void acpuclk_set_div(const struct clkctl_acpu_speed *hunt_s) {
-	uint32_t reg_clkctl, reg_clksel, clk_div, src_sel, a11_div;
+static void acpuclk_set_div(const struct clkctl_acpu_speed *hunt_s)
+{
+	uint32_t reg_clkctl, reg_clksel, clk_div, src_sel;
 
 	reg_clksel = readl(A11S_CLK_SEL_ADDR);
 
@@ -435,25 +429,7 @@ static void acpuclk_set_div(const struct clkctl_acpu_speed *hunt_s) {
 	clk_div = (reg_clksel >> 1) & 0x03;
 	/* CLK_SEL_SRC1NO */
 	src_sel = reg_clksel & 1;
-a11_div = hunt_s->a11clk_src_div;
 
-
-#ifdef CONFIG_JESUS_PHONE
-   if (hunt_s->a11clk_khz > 600000) {
-    a11_div=0;
-    writel(hunt_s->a11clk_khz/19200, PLLn_L_VAL(0));
-    cpu_relax();
-    udelay(50);
-  } else if (hunt_s->pll == ACPU_PLL_0) {
-    if ((readl(PLLn_L_VAL(0)) & 0x3f) != PLL_960_MHZ) {
-      /* Restore PLL0 to standard config */
-      writel(PLL_960_MHZ, PLLn_L_VAL(0));
-    }
-    cpu_relax();
-    udelay(50);
-  }
-#endif
- 
 	/*
 	 * If the new clock divider is higher than the previous, then
 	 * program the divider before switching the clock
@@ -464,38 +440,16 @@ a11_div = hunt_s->a11clk_src_div;
 		writel(reg_clksel, A11S_CLK_SEL_ADDR);
 	}
 
-	// Perform overclocking if requested
-	if(hunt_s->pll==0 && hunt_s->a11clk_khz>600000) {
-		// Change the speed of PLL0
-		writel(hunt_s->a11clk_khz/19200, PLLn_L_VAL(0));
-		udelay(50);
-	}
-
-#ifdef OVERCLOCK_AHB
-	// Pump the PLL2 up another 19200kHz (overclock stock 600MHz from 595.2MHz to 604.8MHz)
-	if(hunt_s->pll==2 && hunt_s->a11clk_khz==600000) {
-		writel(63, PLLn_L_VAL(2));
-		udelay(50);
-	}
-#endif
-
 	/* Program clock source and divider */
 	reg_clkctl = readl(A11S_CLK_CNTL_ADDR);
 	reg_clkctl &= ~(0xFF << (8 * src_sel));
 	reg_clkctl |= hunt_s->a11clk_src_sel << (4 + 8 * src_sel);
-	reg_clkctl |= a11_div << (0 + 8 * src_sel);
+	reg_clkctl |= hunt_s->a11clk_src_div << (0 + 8 * src_sel);
 	writel(reg_clkctl, A11S_CLK_CNTL_ADDR);
 
 	/* Program clock source selection */
 	reg_clksel ^= 1;
 	writel(reg_clksel, A11S_CLK_SEL_ADDR);
-
-	// Recover from overclocking
-	if(hunt_s->pll==0 && hunt_s->a11clk_khz<=600000) {
-		// Restore the speed of PLL0
-		writel(50, PLLn_L_VAL(0));
-		udelay(50);
-	}
 
 	/*
 	 * If the new clock divider is lower than the previous, then
@@ -815,7 +769,7 @@ static void __init acpu_freq_tbl_fixup(void)
 	 * the max that's supported by the board (RAM used in board).
 	 */
 	axi_160mhz = (pll0_l == PLL_960_MHZ || pll1_l == PLL_960_MHZ);
-	axi_200mhz = (pll2_l == PLL_1200_MHZ);
+	axi_200mhz = (pll2_l == PLL_1200_MHZ || pll2_l == PLL_800_MHZ);
 	for (t = &acpu_freq_tbl[0]; t->a11clk_khz != 0; t++) {
 
 		if (pll0_needs_fixup && t->pll == ACPU_PLL_0)

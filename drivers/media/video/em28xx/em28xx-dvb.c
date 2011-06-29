@@ -20,6 +20,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/slab.h>
 #include <linux/usb.h>
 
 #include "em28xx.h"
@@ -313,22 +314,20 @@ static int attach_xc3028(u8 addr, struct em28xx *dev)
 	cfg.i2c_addr  = addr;
 
 	if (!dev->dvb->frontend) {
-		printk(KERN_ERR "%s/2: dvb frontend not attached. "
-				"Can't attach xc3028\n",
-		       dev->name);
+		em28xx_errdev("/2: dvb frontend not attached. "
+				"Can't attach xc3028\n");
 		return -EINVAL;
 	}
 
 	fe = dvb_attach(xc2028_attach, dev->dvb->frontend, &cfg);
 	if (!fe) {
-		printk(KERN_ERR "%s/2: xc3028 attach failed\n",
-		       dev->name);
+		em28xx_errdev("/2: xc3028 attach failed\n");
 		dvb_frontend_detach(dev->dvb->frontend);
 		dev->dvb->frontend = NULL;
 		return -EINVAL;
 	}
 
-	printk(KERN_INFO "%s/2: xc3028 attached\n", dev->name);
+	em28xx_info("%s/2: xc3028 attached\n", dev->name);
 
 	return 0;
 }
@@ -463,11 +462,12 @@ static int dvb_init(struct em28xx *dev)
 	dvb = kzalloc(sizeof(struct em28xx_dvb), GFP_KERNEL);
 
 	if (dvb == NULL) {
-		printk(KERN_INFO "em28xx_dvb: memory allocation failed\n");
+		em28xx_info("em28xx_dvb: memory allocation failed\n");
 		return -ENOMEM;
 	}
 	dev->dvb = dvb;
 
+	mutex_lock(&dev->lock);
 	em28xx_set_mode(dev, EM28XX_DIGITAL_MODE);
 	/* init frontend */
 	switch (dev->model) {
@@ -493,6 +493,7 @@ static int dvb_init(struct em28xx *dev)
 		}
 		break;
 	case EM2880_BOARD_HAUPPAUGE_WINTV_HVR_900:
+	case EM2882_BOARD_TERRATEC_HYBRID_XS:
 	case EM2880_BOARD_EMPIRE_DUAL_TV:
 		dvb->frontend = dvb_attach(zl10353_attach,
 					   &em28xx_zl10353_xc3028_no_i2c_gate,
@@ -503,7 +504,10 @@ static int dvb_init(struct em28xx *dev)
 		}
 		break;
 	case EM2880_BOARD_TERRATEC_HYBRID_XS:
+	case EM2880_BOARD_TERRATEC_HYBRID_XS_FR:
 	case EM2881_BOARD_PINNACLE_HYBRID_PRO:
+	case EM2882_BOARD_DIKOM_DK300:
+	case EM2882_BOARD_KWORLD_VS_DVBT:
 		dvb->frontend = dvb_attach(zl10353_attach,
 					   &em28xx_zl10353_xc3028_no_i2c_gate,
 					   &dev->i2c_adap);
@@ -569,15 +573,12 @@ static int dvb_init(struct em28xx *dev)
 		}
 		break;
 	default:
-		printk(KERN_ERR "%s/2: The frontend of your DVB/ATSC card"
-				" isn't supported yet\n",
-		       dev->name);
+		em28xx_errdev("/2: The frontend of your DVB/ATSC card"
+				" isn't supported yet\n");
 		break;
 	}
 	if (NULL == dvb->frontend) {
-		printk(KERN_ERR
-		       "%s/2: frontend initialization failed\n",
-		       dev->name);
+		em28xx_errdev("/2: frontend initialization failed\n");
 		result = -EINVAL;
 		goto out_free;
 	}
@@ -590,15 +591,16 @@ static int dvb_init(struct em28xx *dev)
 	if (result < 0)
 		goto out_free;
 
+	em28xx_info("Successfully loaded em28xx-dvb\n");
+ret:
 	em28xx_set_mode(dev, EM28XX_SUSPEND);
-	printk(KERN_INFO "Successfully loaded em28xx-dvb\n");
-	return 0;
+	mutex_unlock(&dev->lock);
+	return result;
 
 out_free:
-	em28xx_set_mode(dev, EM28XX_SUSPEND);
 	kfree(dvb);
 	dev->dvb = NULL;
-	return result;
+	goto ret;
 }
 
 static int dvb_fini(struct em28xx *dev)

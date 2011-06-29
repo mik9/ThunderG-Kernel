@@ -73,14 +73,15 @@ enum clock_event_nofitiers {
  * @list:		list head for the management code
  * @mode:		operating mode assigned by the management code
  * @next_event:		local storage for the next event in oneshot mode
+ * @retries:		number of forced programming retries
  */
 struct clock_event_device {
 	const char		*name;
 	unsigned int		features;
-	unsigned long		max_delta_ns;
-	unsigned long		min_delta_ns;
-	unsigned long		mult;
-	int			shift;
+	u64			max_delta_ns;
+	u64			min_delta_ns;
+	u32			mult;
+	u32			shift;
 	int			rating;
 	int			irq;
 	const struct cpumask	*cpumask;
@@ -93,6 +94,7 @@ struct clock_event_device {
 	struct list_head	list;
 	enum clock_event_mode	mode;
 	ktime_t			next_event;
+	unsigned long		retries;
 };
 
 /*
@@ -116,8 +118,8 @@ static inline unsigned long div_sc(unsigned long ticks, unsigned long nsec,
 }
 
 /* Clock event layer functions */
-extern unsigned long clockevent_delta2ns(unsigned long latch,
-					 struct clock_event_device *evt);
+extern u64 clockevent_delta2ns(unsigned long latch,
+			       struct clock_event_device *evt);
 extern void clockevents_register_device(struct clock_event_device *dev);
 
 extern void clockevents_exchange_device(struct clock_event_device *old,

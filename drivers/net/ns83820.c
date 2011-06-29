@@ -116,6 +116,7 @@
 #include <linux/if_vlan.h>
 #include <linux/rtnetlink.h>
 #include <linux/jiffies.h>
+#include <linux/slab.h>
 
 #include <asm/io.h>
 #include <asm/uaccess.h>
@@ -648,8 +649,8 @@ static void phy_intr(struct net_device *ndev)
 		dprintk("phy_intr: tbisr=%08x, tanar=%08x, tanlpar=%08x\n",
 			tbisr, tanar, tanlpar);
 
-		if ( (fullduplex = (tanlpar & TANAR_FULL_DUP)
-		      && (tanar & TANAR_FULL_DUP)) ) {
+		if ( (fullduplex = (tanlpar & TANAR_FULL_DUP) &&
+		      (tanar & TANAR_FULL_DUP)) ) {
 
 			/* both of us are full duplex */
 			writel(readl(dev->base + TXCFG)
@@ -661,12 +662,12 @@ static void phy_intr(struct net_device *ndev)
 			writel(readl(dev->base + GPIOR) | GPIOR_GP1_OUT,
 			       dev->base + GPIOR);
 
-		} else if(((tanlpar & TANAR_HALF_DUP)
-			   && (tanar & TANAR_HALF_DUP))
-			|| ((tanlpar & TANAR_FULL_DUP)
-			    && (tanar & TANAR_HALF_DUP))
-			|| ((tanlpar & TANAR_HALF_DUP)
-			    && (tanar & TANAR_FULL_DUP))) {
+		} else if (((tanlpar & TANAR_HALF_DUP) &&
+			    (tanar & TANAR_HALF_DUP)) ||
+			   ((tanlpar & TANAR_FULL_DUP) &&
+			    (tanar & TANAR_HALF_DUP)) ||
+			   ((tanlpar & TANAR_HALF_DUP) &&
+			    (tanar & TANAR_FULL_DUP))) {
 
 			/* one or both of us are half duplex */
 			writel((readl(dev->base + TXCFG)
@@ -720,16 +721,16 @@ static void phy_intr(struct net_device *ndev)
 
 	newlinkstate = (cfg & CFG_LNKSTS) ? LINK_UP : LINK_DOWN;
 
-	if (newlinkstate & LINK_UP
-	    && dev->linkstate != newlinkstate) {
+	if (newlinkstate & LINK_UP &&
+	    dev->linkstate != newlinkstate) {
 		netif_start_queue(ndev);
 		netif_wake_queue(ndev);
 		printk(KERN_INFO "%s: link now %s mbps, %s duplex and up.\n",
 			ndev->name,
 			speeds[speed],
 			fullduplex ? "full" : "half");
-	} else if (newlinkstate & LINK_DOWN
-		   && dev->linkstate != newlinkstate) {
+	} else if (newlinkstate & LINK_DOWN &&
+		   dev->linkstate != newlinkstate) {
 		netif_stop_queue(ndev);
 		printk(KERN_INFO "%s: link now down.\n", ndev->name);
 	}
@@ -1719,7 +1720,7 @@ static void ns83820_set_multicast(struct net_device *ndev)
 	else
 		and_mask &= ~(RFCR_AAU | RFCR_AAM);
 
-	if (ndev->flags & IFF_ALLMULTI || ndev->mc_count)
+	if (ndev->flags & IFF_ALLMULTI || netdev_mc_count(ndev))
 		or_mask |= RFCR_AAM;
 	else
 		and_mask &= ~RFCR_AAM;
@@ -2292,7 +2293,7 @@ static void __devexit ns83820_remove_one(struct pci_dev *pci_dev)
 	pci_set_drvdata(pci_dev, NULL);
 }
 
-static struct pci_device_id ns83820_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(ns83820_pci_tbl) = {
 	{ 0x100b, 0x0022, PCI_ANY_ID, PCI_ANY_ID, 0, .driver_data = 0, },
 	{ 0, },
 };

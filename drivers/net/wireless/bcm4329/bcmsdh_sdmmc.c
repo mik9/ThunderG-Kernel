@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: bcmsdh_sdmmc.c,v 1.1.2.5.6.29 2010/03/19 17:16:08 Exp $
+ * $Id: bcmsdh_sdmmc.c,v 1.1.2.5.6.30.4.1 2010/09/02 23:12:21 Exp $
  */
 #include <typedefs.h>
 
@@ -55,7 +55,7 @@ extern void sdio_function_cleanup(void);
 #if !defined(OOB_INTR_ONLY)
 static void IRQHandler(struct sdio_func *func);
 static void IRQHandlerF2(struct sdio_func *func);
-#endif
+#endif /* !defined(OOB_INTR_ONLY) */
 static int sdioh_sdmmc_get_cisaddr(sdioh_info_t *sd, uint32 regaddr);
 extern int sdio_reset_comm(struct mmc_card *card);
 
@@ -228,8 +228,9 @@ sdioh_enable_func_intr(void)
 			return SDIOH_API_RC_FAIL;
 		}
 
-		/* Enable F1 and F2 interrupts, set master enable */
-		reg |= (INTR_CTL_FUNC1_EN | INTR_CTL_FUNC2_EN | INTR_CTL_MASTER_EN);
+		reg |= 1 << 1;	/* enable function-1 interrupt */
+		reg |= 2 << 1;	/* enable function-2 interrupt */
+		reg |= 1;		/* Master interrupt enable */
 
 		sdio_writeb(gInstance->func[0], reg, SDIOD_CCCR_INTEN, &err);
 		sdio_release_host(gInstance->func[0]);
@@ -258,7 +259,8 @@ sdioh_disable_func_intr(void)
 			return SDIOH_API_RC_FAIL;
 		}
 
-		reg &= ~(INTR_CTL_FUNC1_EN | INTR_CTL_FUNC2_EN);
+		reg &= ~(1 << 1);
+		reg &= ~(1 << 2);
 		/* Disable master interrupt with the last function interrupt */
 		if (!(reg & 0xFE))
 			reg = 0;
@@ -676,6 +678,8 @@ sdioh_enable_hw_oob_intr(sdioh_info_t *sd, bool enable)
 	else
 		data = 4;	/* disable hw oob interrupt */
 
+	data |= 4;		/* Active HIGH */
+
 	status = sdioh_request_byte(sd, SDIOH_WRITE, 0, 0xf2, &data);
 	return status;
 }
@@ -1064,11 +1068,13 @@ sdioh_request_buffer(sdioh_info_t *sd, uint pio_dma, uint fix_inc, uint write, u
 	return (Status);
 }
 
+/* this function performs "abort" for both of host & device */
 extern int
 sdioh_abort(sdioh_info_t *sd, uint func)
 {
+#if defined(MMC_SDIO_ABORT)
 	char t_func = (char) func;
-
+#endif /* defined(MMC_SDIO_ABORT) */
 	sd_trace(("%s: Enter\n", __FUNCTION__));
 
 #if defined(MMC_SDIO_ABORT)

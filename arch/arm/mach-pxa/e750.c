@@ -132,6 +132,12 @@ static unsigned long e750_pin_config[] __initdata = {
 	/* IrDA */
 	GPIO38_GPIO | MFP_LPM_DRIVE_HIGH,
 
+	/* AC97 */
+	GPIO28_AC97_BITCLK,
+	GPIO29_AC97_SDATA_IN_0,
+	GPIO30_AC97_SDATA_OUT,
+	GPIO31_AC97_SYNC,
+
 	/* Audio power control */
 	GPIO4_GPIO,  /* Headphone amp power */
 	GPIO7_GPIO,  /* Speaker amp power */
@@ -194,6 +200,9 @@ static struct platform_device *devices[] __initdata = {
 static void __init e750_init(void)
 {
 	pxa2xx_mfp_config(ARRAY_AND_SIZE(e750_pin_config));
+	pxa_set_ffuart_info(NULL);
+	pxa_set_btuart_info(NULL);
+	pxa_set_stuart_info(NULL);
 	clk_add_alias("CLK_CK3P6MI", e750_tc6393xb_device.name,
 			"GPIO11_CLK", NULL),
 	eseries_get_tmio_gpios();

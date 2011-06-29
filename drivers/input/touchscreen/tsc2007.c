@@ -28,6 +28,11 @@
 #include <linux/i2c/tsc2007.h>
 #include <linux/pm.h>
 
+#if defined(CONFIG_HAS_EARLYSUSPEND)
+#include <linux/earlysuspend.h>
+#define TSC2007_SUSPEND_LEVEL 1
+#endif
+
 #define TS_POLL_DELAY			1 /* ms delay between samples */
 #define TS_POLL_PERIOD			1 /* ms delay between samples */
 
@@ -87,6 +92,10 @@ struct tsc2007 {
 
 	int			(*get_pendown_state)(void);
 	void			(*clear_penirq)(void);
+	int			(*power_shutdown)(bool);
+#if defined(CONFIG_HAS_EARLYSUSPEND)
+	struct early_suspend	early_suspend;
+#endif
 };
 
 static inline int tsc2007_xfer(struct tsc2007 *tsc, u8 cmd)
@@ -279,6 +288,72 @@ static void tsc2007_free_irq(struct tsc2007 *ts)
 	}
 }
 
+#ifdef CONFIG_PM
+static int tsc2007_suspend(struct device *dev)
+{
+	int rc;
+	struct tsc2007	*ts = dev_get_drvdata(dev);
+
+	disable_irq(ts->irq);
+
+	if (cancel_delayed_work_sync(&ts->work))
+		enable_irq(ts->irq);
+
+	if (ts->power_shutdown) {
+		rc = ts->power_shutdown(true);
+		if (rc) {
+			pr_err("%s: Power off failed, suspend failed (%d)\n",
+							__func__, rc);
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
+static int tsc2007_resume(struct device *dev)
+{
+	int rc;
+	struct tsc2007	*ts = dev_get_drvdata(dev);
+
+	if (ts->power_shutdown) {
+		rc = ts->power_shutdown(false);
+		if (rc) {
+			pr_err("%s: Power on failed, resume failed (%d)\n",
+							 __func__, rc);
+			return rc;
+		}
+	}
+
+	enable_irq(ts->irq);
+
+	return 0;
+}
+
+#ifdef CONFIG_HAS_EARLYSUSPEND
+static void tsc2007_early_suspend(struct early_suspend *h)
+{
+	struct tsc2007 *ts = container_of(h, struct tsc2007, early_suspend);
+
+	tsc2007_suspend(&ts->client->dev);
+}
+
+static void tsc2007_late_resume(struct early_suspend *h)
+{
+	struct tsc2007 *ts = container_of(h, struct tsc2007, early_suspend);
+
+	tsc2007_resume(&ts->client->dev);
+}
+#endif
+
+static const struct dev_pm_ops tsc2007_pm_ops = {
+#ifndef CONFIG_HAS_EARLYSUSPEND
+	.suspend	= tsc2007_suspend,
+	.resume		= tsc2007_resume,
+#endif
+};
+#endif
+
 static int __devinit tsc2007_probe(struct i2c_client *client,
 				   const struct i2c_device_id *id)
 {
@@ -316,6 +391,7 @@ static int __devinit tsc2007_probe(struct i2c_client *client,
 	ts->invert_y	      = pdata->invert_y;
 	ts->invert_z1	      = pdata->invert_z1;
 	ts->invert_z2	      = pdata->invert_z2;
+	ts->power_shutdown    = pdata->power_shutdown;
 
 	snprintf(ts->phys, sizeof(ts->phys),
 		 "%s/input0", dev_name(&client->dev));
@@ -350,6 +426,14 @@ static int __devinit tsc2007_probe(struct i2c_client *client,
 	if (err)
 		goto err_free_irq;
 
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	ts->early_suspend.level = EARLY_SUSPEND_LEVEL_BLANK_SCREEN +
+						TSC2007_SUSPEND_LEVEL;
+	ts->early_suspend.suspend = tsc2007_early_suspend;
+	ts->early_suspend.resume = tsc2007_late_resume;
+	register_early_suspend(&ts->early_suspend);
+#endif
+
 	i2c_set_clientdata(client, ts);
 
 	return 0;
@@ -364,35 +448,6 @@ static int __devinit tsc2007_probe(struct i2c_client *client,
 	return err;
 }
 
-#ifdef CONFIG_PM
-/* REVISIT: Changes for Power optimization */
-static int tsc2007_suspend(struct device *dev)
-{
-	struct tsc2007	*ts = dev_get_drvdata(dev);
-
-	disable_irq(ts->irq);
-
-	if (cancel_delayed_work_sync(&ts->work))
-		enable_irq(ts->irq);
-
-	return 0;
-}
-
-static int tsc2007_resume(struct device *dev)
-{
-	struct tsc2007	*ts = dev_get_drvdata(dev);
-
-	enable_irq(ts->irq);
-
-	return 0;
-}
-
-static struct dev_pm_ops tsc2007_pm_ops = {
-	.suspend	= tsc2007_suspend,
-	.resume		= tsc2007_resume,
-};
-#endif
-
 static int __devexit tsc2007_remove(struct i2c_client *client)
 {
 	struct tsc2007	*ts = i2c_get_clientdata(client);
@@ -403,13 +458,16 @@ static int __devexit tsc2007_remove(struct i2c_client *client)
 	if (pdata->exit_platform_hw)
 		pdata->exit_platform_hw();
 
+#ifdef CONFIG_HAS_EARLYSUSPEND
+	unregister_early_suspend(&ts->early_suspend);
+#endif
 	input_unregister_device(ts->input);
 	kfree(ts);
 
 	return 0;
 }
 
-static struct i2c_device_id tsc2007_idtable[] = {
+static const struct i2c_device_id tsc2007_idtable[] = {
 	{ "tsc2007", 0 },
 	{ }
 };

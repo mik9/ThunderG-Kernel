@@ -269,7 +269,6 @@ static int gfs2_write_jdata_pagevec(struct address_space *mapping,
 	pgoff_t end_index = i_size >> PAGE_CACHE_SHIFT;
 	unsigned offset = i_size & (PAGE_CACHE_SIZE-1);
 	unsigned nrblocks = nr_pages * (PAGE_CACHE_SIZE/inode->i_sb->s_blocksize);
-	struct backing_dev_info *bdi = mapping->backing_dev_info;
 	int i;
 	int ret;
 
@@ -313,11 +312,6 @@ static int gfs2_write_jdata_pagevec(struct address_space *mapping,
 
 		if (ret || (--(wbc->nr_to_write) <= 0))
 			ret = 1;
-		if (wbc->nonblocking && bdi_write_congested(bdi)) {
-			wbc->encountered_congestion = 1;
-			ret = 1;
-		}
-
 	}
 	gfs2_trans_end(sdp);
 	return ret;
@@ -338,7 +332,6 @@ static int gfs2_write_jdata_pagevec(struct address_space *mapping,
 static int gfs2_write_cache_jdata(struct address_space *mapping,
 				  struct writeback_control *wbc)
 {
-	struct backing_dev_info *bdi = mapping->backing_dev_info;
 	int ret = 0;
 	int done = 0;
 	struct pagevec pvec;
@@ -347,11 +340,6 @@ static int gfs2_write_cache_jdata(struct address_space *mapping,
 	pgoff_t end;
 	int scanned = 0;
 	int range_whole = 0;
-
-	if (wbc->nonblocking && bdi_write_congested(bdi)) {
-		wbc->encountered_congestion = 1;
-		return 0;
-	}
 
 	pagevec_init(&pvec, 0);
 	if (wbc->range_cyclic) {
@@ -430,6 +418,7 @@ static int gfs2_jdata_writepages(struct address_space *mapping,
 static int stuffed_readpage(struct gfs2_inode *ip, struct page *page)
 {
 	struct buffer_head *dibh;
+	u64 dsize = i_size_read(&ip->i_inode);
 	void *kaddr;
 	int error;
 
@@ -449,9 +438,10 @@ static int stuffed_readpage(struct gfs2_inode *ip, struct page *page)
 		return error;
 
 	kaddr = kmap_atomic(page, KM_USER0);
-	memcpy(kaddr, dibh->b_data + sizeof(struct gfs2_dinode),
-	       ip->i_disksize);
-	memset(kaddr + ip->i_disksize, 0, PAGE_CACHE_SIZE - ip->i_disksize);
+	if (dsize > (dibh->b_size - sizeof(struct gfs2_dinode)))
+		dsize = (dibh->b_size - sizeof(struct gfs2_dinode));
+	memcpy(kaddr, dibh->b_data + sizeof(struct gfs2_dinode), dsize);
+	memset(kaddr + dsize, 0, PAGE_CACHE_SIZE - dsize);
 	kunmap_atomic(kaddr, KM_USER0);
 	flush_dcache_page(page);
 	brelse(dibh);
@@ -710,8 +700,14 @@ out:
 		return 0;
 
 	page_cache_release(page);
+
+	/*
+	 * XXX(hch): the call below should probably be replaced with
+	 * a call to the gfs2-specific truncate blocks helper to actually
+	 * release disk blocks..
+	 */
 	if (pos + len > ip->i_inode.i_size)
-		vmtruncate(&ip->i_inode, ip->i_inode.i_size);
+		simple_setsize(&ip->i_inode, ip->i_inode.i_size);
 out_endtrans:
 	gfs2_trans_end(sdp);
 out_trans_fail:
@@ -819,8 +815,10 @@ static int gfs2_stuffed_write_end(struct inode *inode, struct buffer_head *dibh,
 		mark_inode_dirty(inode);
 	}
 
-	if (inode == sdp->sd_rindex)
+	if (inode == sdp->sd_rindex) {
 		adjust_fs_space(inode);
+		ip->i_gh.gh_flags |= GL_NOCACHE;
+	}
 
 	brelse(dibh);
 	gfs2_trans_end(sdp);
@@ -889,8 +887,10 @@ static int gfs2_write_end(struct file *file, struct address_space *mapping,
 		mark_inode_dirty(inode);
 	}
 
-	if (inode == sdp->sd_rindex)
+	if (inode == sdp->sd_rindex) {
 		adjust_fs_space(inode);
+		ip->i_gh.gh_flags |= GL_NOCACHE;
+	}
 
 	brelse(dibh);
 	gfs2_trans_end(sdp);
@@ -1069,8 +1069,8 @@ out:
 
 int gfs2_releasepage(struct page *page, gfp_t gfp_mask)
 {
-	struct inode *aspace = page->mapping->host;
-	struct gfs2_sbd *sdp = aspace->i_sb->s_fs_info;
+	struct address_space *mapping = page->mapping;
+	struct gfs2_sbd *sdp = gfs2_mapping2sbd(mapping);
 	struct buffer_head *bh, *head;
 	struct gfs2_bufdata *bd;
 

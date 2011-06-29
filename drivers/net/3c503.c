@@ -214,8 +214,8 @@ el2_probe1(struct net_device *dev, int ioaddr)
     iobase_reg = inb(ioaddr+0x403);
     membase_reg = inb(ioaddr+0x404);
     /* ASIC location registers should be 0 or have only a single bit set. */
-    if (   (iobase_reg  & (iobase_reg - 1))
-	|| (membase_reg & (membase_reg - 1))) {
+    if ((iobase_reg  & (iobase_reg - 1)) ||
+	(membase_reg & (membase_reg - 1))) {
 	retval = -ENODEV;
 	goto out1;
     }
@@ -291,8 +291,8 @@ el2_probe1(struct net_device *dev, int ioaddr)
 	    writel(0xba5eba5e, mem_base);
 	    for (i = sizeof(test_val); i < EL2_MEMSIZE; i+=sizeof(test_val)) {
 		writel(test_val, mem_base + i);
-		if (readl(mem_base) != 0xba5eba5e
-		    || readl(mem_base + i) != test_val) {
+		if (readl(mem_base) != 0xba5eba5e ||
+		    readl(mem_base + i) != test_val) {
 		    pr_warning("3c503: memory failure or memory address conflict.\n");
 		    dev->mem_start = 0;
 		    ei_status.name = "3c503-PIO";
@@ -573,7 +573,6 @@ el2_block_output(struct net_device *dev, int count,
     }
     blocked:;
     outb_p(ei_status.interface_num==0 ? ECNTRL_THIN : ECNTRL_AUI, E33G_CNTRL);
-    return;
 }
 
 /* Read the 4 byte, page aligned 8390 specific header. */
@@ -689,7 +688,6 @@ el2_block_input(struct net_device *dev, int count, struct sk_buff *skb, int ring
     }
     blocked:;
     outb_p(ei_status.interface_num == 0 ? ECNTRL_THIN : ECNTRL_AUI, E33G_CNTRL);
-    return;
 }
 
 

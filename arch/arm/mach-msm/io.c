@@ -110,6 +110,7 @@ static struct map_desc qsd8x50_io_desc[] __initdata = {
 	MSM_DEVICE(SCPLL),
 	MSM_DEVICE(AD5),
 	MSM_DEVICE(MDC),
+	MSM_DEVICE(TCSR),
 #ifdef CONFIG_MSM_DEBUG_UART
 	MSM_DEVICE(DEBUG_UART),
 #endif
@@ -131,6 +132,7 @@ static struct map_desc msm8x60_io_desc[] __initdata = {
 	MSM_DEVICE(QGIC_DIST),
 	MSM_DEVICE(QGIC_CPU),
 	MSM_DEVICE(TMR),
+	MSM_DEVICE(TMR0),
 	MSM_DEVICE(RPM_MPM),
 	MSM_DEVICE(ACC),
 	MSM_DEVICE(ACC0),
@@ -142,15 +144,21 @@ static struct map_desc msm8x60_io_desc[] __initdata = {
 	MSM_DEVICE(DMOV_ADM0),
 	MSM_DEVICE(DMOV_ADM1),
 	MSM_DEVICE(SCPLL),
+	MSM_DEVICE(RPM),
 	MSM_DEVICE(CLK_CTL),
 	MSM_DEVICE(MMSS_CLK_CTL),
 	MSM_DEVICE(LPASS_CLK_CTL),
+	MSM_DEVICE(TCSR),
+#ifdef CONFIG_MSM_DEBUG_UART
+	MSM_DEVICE(DEBUG_UART),
+#endif
 	MSM_DEVICE(SIC_NON_SECURE),
 	{
 		.virtual =  (unsigned long) MSM_SHARED_RAM_BASE,
 		.length =   MSM_SHARED_RAM_SIZE,
 		.type =     MT_DEVICE,
 	},
+	MSM_DEVICE(QFPROM),
 };
 
 void __init msm_map_msm8x60_io(void)

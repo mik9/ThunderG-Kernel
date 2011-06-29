@@ -26,6 +26,7 @@
  *	Eric Anholt <eric@anholt.net>
  */
 #include <linux/i2c.h>
+#include <linux/slab.h>
 #include <linux/i2c-id.h>
 #include <linux/i2c-algo-bit.h>
 #include "drmP.h"
@@ -39,7 +40,7 @@ void intel_i2c_quirk_set(struct drm_device *dev, bool enable)
 	struct drm_i915_private *dev_priv = dev->dev_private;
 
 	/* When using bit bashing for I2C, this bit needs to be set to 1 */
-	if (!IS_IGD(dev))
+	if (!IS_PINEVIEW(dev))
 		return;
 	if (enable)
 		I915_WRITE(DSPCLK_GATE_D,
@@ -128,7 +129,7 @@ intel_i2c_reset_gmbus(struct drm_device *dev)
 {
 	struct drm_i915_private *dev_priv = dev->dev_private;
 
-	if (IS_IGDNG(dev)) {
+	if (HAS_PCH_SPLIT(dev)) {
 		I915_WRITE(PCH_GMBUS0, 0);
 	} else {
 		I915_WRITE(GMBUS0, 0);

@@ -43,7 +43,6 @@
 #define RX_MAX_PACKET_ID 3
 
 #define NUM_RX_PKT_DESC_MOD_MASK   7
-#define WL1271_RX_RATE_UNSUPPORTED 0xFF
 
 #define RX_DESC_VALID_FCS         0x0001
 #define RX_DESC_MATCH_RXADDR1     0x0002
@@ -102,14 +101,14 @@
 #define RX_BUF_SIZE_SHIFT_DIV 6
 
 struct wl1271_rx_descriptor {
-	u16 length;
+	__le16 length;
 	u8  status;
 	u8  flags;
 	u8  rate;
 	u8  channel;
 	s8  rssi;
 	u8  snr;
-	u32 timestamp;
+	__le32 timestamp;
 	u8  packet_class;
 	u8  process_id;
 	u8  pad_len;
@@ -117,5 +116,6 @@ struct wl1271_rx_descriptor {
 } __attribute__ ((packed));
 
 void wl1271_rx(struct wl1271 *wl, struct wl1271_fw_status *status);
+u8 wl1271_rate_to_idx(struct wl1271 *wl, int rate);
 
 #endif

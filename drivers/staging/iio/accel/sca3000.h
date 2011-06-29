@@ -74,7 +74,7 @@
 #define SCA3000_MEAS_MODE_OP_2			0x02
 
 /* In motion detection mode the accelerations are band pass filtered
- * (aprox 1 - 25Hz) and then a programmable theshold used to trigger
+ * (aprox 1 - 25Hz) and then a programmable threshold used to trigger
  * and interrupt.
  */
 #define SCA3000_MEAS_MODE_MOT_DET		0x03
@@ -139,7 +139,7 @@
 /* Values of mulipexed registers (write to ctrl_data after select) */
 #define SCA3000_REG_ADDR_CTRL_DATA		0x22
 
-/* Measurment modes available on some sca3000 series chips. Code assumes others
+/* Measurement modes available on some sca3000 series chips. Code assumes others
  * may become available in the future.
  *
  * Bypass - Bypass the low-pass filter in the signal channel so as to increase
@@ -187,6 +187,7 @@ struct sca3000_state {
 /**
  * struct sca3000_chip_info - model dependant parameters
  * @name: 			model identification
+ * @scale:			string containing floating point scale factor
  * @temp_output:		some devices have temperature sensors.
  * @measurement_mode_freq:	normal mode sampling frequency
  * @option_mode_1:		first optional mode. Not all models have one
@@ -199,6 +200,7 @@ struct sca3000_state {
  **/
 struct sca3000_chip_info {
 	const char		*name;
+	const char		*scale;
 	bool			temp_output;
 	int			measurement_mode_freq;
 	int			option_mode_1;

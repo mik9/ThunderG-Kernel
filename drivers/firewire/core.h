@@ -27,7 +27,12 @@ struct fw_packet;
 #define PHY_LINK_ACTIVE		0x80
 #define PHY_CONTENDER		0x40
 #define PHY_BUS_RESET		0x40
+#define PHY_EXTENDED_REGISTERS	0xe0
 #define PHY_BUS_SHORT_RESET	0x40
+#define PHY_INT_STATUS_BITS	0x3c
+#define PHY_ENABLE_ACCEL	0x02
+#define PHY_ENABLE_MULTI	0x01
+#define PHY_PAGE_SELECT		0xe0
 
 #define BANDWIDTH_AVAILABLE_INITIAL	4915
 #define BROADCAST_CHANNEL_INITIAL	(1 << 31 | 31)
@@ -40,7 +45,8 @@ struct fw_card_driver {
 	 * enable the PHY or set the link_on bit and initiate a bus
 	 * reset.
 	 */
-	int (*enable)(struct fw_card *card, u32 *config_rom, size_t length);
+	int (*enable)(struct fw_card *card,
+		      const __be32 *config_rom, size_t length);
 
 	int (*update_phy_reg)(struct fw_card *card, int address,
 			      int clear_bits, int set_bits);
@@ -48,10 +54,10 @@ struct fw_card_driver {
 	/*
 	 * Update the config rom for an enabled card.  This function
 	 * should change the config rom that is presented on the bus
-	 * an initiate a bus reset.
+	 * and initiate a bus reset.
 	 */
 	int (*set_config_rom)(struct fw_card *card,
-			      u32 *config_rom, size_t length);
+			      const __be32 *config_rom, size_t length);
 
 	void (*send_request)(struct fw_card *card, struct fw_packet *packet);
 	void (*send_response)(struct fw_card *card, struct fw_packet *packet);
@@ -69,7 +75,7 @@ struct fw_card_driver {
 	int (*enable_phys_dma)(struct fw_card *card,
 			       int node_id, int generation);
 
-	u64 (*get_bus_time)(struct fw_card *card);
+	u32 (*get_cycle_time)(struct fw_card *card);
 
 	struct fw_iso_context *
 	(*allocate_iso_context)(struct fw_card *card,
@@ -93,7 +99,7 @@ int fw_card_add(struct fw_card *card,
 		u32 max_receive, u32 link_speed, u64 guid);
 void fw_core_remove_card(struct fw_card *card);
 int fw_core_initiate_bus_reset(struct fw_card *card, int short_reset);
-int fw_compute_block_crc(u32 *block);
+int fw_compute_block_crc(__be32 *block);
 void fw_schedule_bm_work(struct fw_card *card, unsigned long delay);
 
 static inline struct fw_card *fw_card_get(struct fw_card *card)
@@ -214,7 +220,6 @@ void fw_core_handle_request(struct fw_card *card, struct fw_packet *request);
 void fw_core_handle_response(struct fw_card *card, struct fw_packet *packet);
 void fw_fill_response(struct fw_packet *response, u32 *request_header,
 		      int rcode, void *payload, size_t length);
-void fw_flush_transactions(struct fw_card *card);
 void fw_send_phy_config(struct fw_card *card,
 			int node_id, int generation, int gap_count);
 

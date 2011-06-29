@@ -22,11 +22,11 @@
 #include <linux/module.h>
 #include <linux/types.h>
 #include <linux/fcntl.h>
+#include <linux/gfp.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/ioport.h>
 #include <linux/in.h>
-#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -35,6 +35,7 @@
 #include <linux/skbuff.h>
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
+#include <linux/slab.h>
 
 #include <asm/bootinfo.h>
 #include <asm/system.h>
@@ -81,7 +82,7 @@ static unsigned short known_revisions[] =
 
 static int jazzsonic_open(struct net_device* dev)
 {
-	if (request_irq(dev->irq, &sonic_interrupt, IRQF_DISABLED, "sonic", dev)) {
+	if (request_irq(dev->irq, sonic_interrupt, IRQF_DISABLED, "sonic", dev)) {
 		printk(KERN_ERR "%s: unable to get IRQ %d.\n", dev->name, dev->irq);
 		return -EAGAIN;
 	}
@@ -130,8 +131,8 @@ static int __devinit sonic_probe1(struct net_device *dev)
 		printk("SONIC Silicon Revision = 0x%04x\n",silicon_revision);
 
 	i = 0;
-	while (known_revisions[i] != 0xffff
-	       && known_revisions[i] != silicon_revision)
+	while (known_revisions[i] != 0xffff &&
+	       known_revisions[i] != silicon_revision)
 		i++;
 
 	if (known_revisions[i] == 0xffff) {

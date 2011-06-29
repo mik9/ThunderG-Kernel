@@ -820,12 +820,17 @@ static void sbp2_release_target(struct kref *kref)
 	fw_device_put(device);
 }
 
-static struct workqueue_struct *sbp2_wq;
+static void sbp2_target_get(struct sbp2_target *tgt)
+{
+	kref_get(&tgt->kref);
+}
 
 static void sbp2_target_put(struct sbp2_target *tgt)
 {
 	kref_put(&tgt->kref, sbp2_release_target);
 }
+
+static struct workqueue_struct *sbp2_wq;
 
 /*
  * Always get the target's kref when scheduling work on one its units.
@@ -833,7 +838,7 @@ static void sbp2_target_put(struct sbp2_target *tgt)
  */
 static void sbp2_queue_work(struct sbp2_logical_unit *lu, unsigned long delay)
 {
-	kref_get(&lu->tgt->kref);
+	sbp2_target_get(lu->tgt);
 	if (!queue_delayed_work(sbp2_wq, &lu->work, delay))
 		sbp2_target_put(lu->tgt);
 }
@@ -1009,7 +1014,8 @@ static int sbp2_add_logical_unit(struct sbp2_target *tgt, int lun_entry)
 	return 0;
 }
 
-static int sbp2_scan_logical_unit_dir(struct sbp2_target *tgt, u32 *directory)
+static int sbp2_scan_logical_unit_dir(struct sbp2_target *tgt,
+				      const u32 *directory)
 {
 	struct fw_csr_iterator ci;
 	int key, value;
@@ -1022,7 +1028,7 @@ static int sbp2_scan_logical_unit_dir(struct sbp2_target *tgt, u32 *directory)
 	return 0;
 }
 
-static int sbp2_scan_unit_dir(struct sbp2_target *tgt, u32 *directory,
+static int sbp2_scan_unit_dir(struct sbp2_target *tgt, const u32 *directory,
 			      u32 *model, u32 *firmware_revision)
 {
 	struct fw_csr_iterator ci;
@@ -1566,7 +1572,7 @@ static int sbp2_scsi_slave_configure(struct scsi_device *sdev)
 		sdev->start_stop_pwr_cond = 1;
 
 	if (lu->tgt->workarounds & SBP2_WORKAROUND_128K_MAX_TRANS)
-		blk_queue_max_sectors(sdev->request_queue, 128 * 1024 / 512);
+		blk_queue_max_hw_sectors(sdev->request_queue, 128 * 1024 / 512);
 
 	blk_queue_max_segment_size(sdev->request_queue, SBP2_MAX_SEG_SIZE);
 

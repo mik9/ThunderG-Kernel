@@ -33,12 +33,12 @@
  */
 
 /**
- * usbip_udbg - print debug messages if CONFIG_USB_DEBUG is defined
+ * usbip_udbg - print debug messages if CONFIG_USB_IP_DEBUG_ENABLE is defined
  * @fmt:
  * @args:
  */
 
-#ifdef CONFIG_USB_DEBUG
+#ifdef CONFIG_USB_IP_DEBUG_ENABLE
 
 #define usbip_udbg(fmt, args...)					\
 	do {								\
@@ -47,11 +47,11 @@
 			__FILE__, __LINE__, __func__, ##args);		\
 	} while (0)
 
-#else  /* CONFIG_USB_DEBUG */
+#else  /* CONFIG_USB_IP_DEBUG_ENABLE */
 
 #define usbip_udbg(fmt, args...)		do { } while (0)
 
-#endif /* CONFIG_USB_DEBUG */
+#endif /* CONFIG_USB_IP_DEBUG_ENABLE */
 
 
 enum {
@@ -182,7 +182,7 @@ struct usbip_header_basic {
 	__u32 devid;
 
 #define USBIP_DIR_OUT	0
-#define USBIP_DIR_IN 	1
+#define USBIP_DIR_IN	1
 	__u32 direction;
 	__u32 ep;     /* endpoint number */
 } __attribute__ ((packed));
@@ -393,8 +393,6 @@ void usbip_header_correct_endian(struct usbip_header *pdu, int send);
 int usbip_recv_xbuff(struct usbip_device *ud, struct urb *urb);
 /* some members of urb must be substituted before. */
 int usbip_recv_iso(struct usbip_device *ud, struct urb *urb);
-/* some members of urb must be substituted before. */
-int usbip_pad_iso(struct usbip_device *ud, struct urb *urb);
 void *usbip_alloc_iso_desc_pdu(struct urb *urb, ssize_t *bufflen);
 
 

@@ -71,7 +71,7 @@ static int v1_read_dqblk(struct dquot *dquot)
 	    dquot->dq_dqb.dqb_ihardlimit == 0 &&
 	    dquot->dq_dqb.dqb_isoftlimit == 0)
 		set_bit(DQ_FAKE_B, &dquot->dq_flags);
-	dqstats.reads++;
+	dqstats_inc(DQST_READS);
 
 	return 0;
 }
@@ -104,7 +104,7 @@ static int v1_commit_dqblk(struct dquot *dquot)
 	ret = 0;
 
 out:
-	dqstats.writes++;
+	dqstats_inc(DQST_WRITES);
 
 	return ret;
 }
@@ -204,7 +204,7 @@ out:
 	return ret;
 }
 
-static struct quota_format_ops v1_format_ops = {
+static const struct quota_format_ops v1_format_ops = {
 	.check_quota_file	= v1_check_quota_file,
 	.read_file_info		= v1_read_file_info,
 	.write_file_info	= v1_write_file_info,

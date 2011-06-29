@@ -38,6 +38,22 @@
 
 #define DTV_BASE	0xD0000
 
+/*#define DEBUG*/
+#ifdef DEBUG
+static void __mdp_outp(uint32 port, uint32 value)
+{
+	uint32 in_val;
+
+	outpdw(port, value);
+	in_val = inpdw(port);
+	printk(KERN_INFO "MDP-DTV[%04x] => %08x [%08x]\n",
+		port-(uint32)(MDP_BASE + DTV_BASE), value, in_val);
+}
+
+#undef MDP_OUTP
+#define MDP_OUTP(port, value)	__mdp_outp((uint32)(port), (value))
+#endif
+
 static int first_pixel_start_x;
 static int first_pixel_start_y;
 
@@ -111,7 +127,7 @@ int mdp4_dtv_on(struct platform_device *pdev)
 		ptype = mdp4_overlay_format2type(format);
 		if (ptype < 0)
 			printk(KERN_INFO "%s: format2type failed\n", __func__);
-		pipe = mdp4_overlay_pipe_alloc(ptype);
+		pipe = mdp4_overlay_pipe_alloc(ptype, MDP4_MIXER1, 0);
 		if (pipe == NULL) {
 			printk(KERN_INFO "%s: pipe_alloc failed\n", __func__);
 			return -EBUSY;
@@ -120,6 +136,7 @@ int mdp4_dtv_on(struct platform_device *pdev)
 		pipe->mixer_stage  = MDP4_MIXER_STAGE_BASE;
 		pipe->mixer_num  = MDP4_MIXER1;
 		pipe->src_format = format;
+		mdp4_overlay_panel_mode(pipe->mixer_num, MDP4_PANEL_DTV);
 		ret = mdp4_overlay_format2pipe(pipe);
 		if (ret < 0)
 			printk(KERN_INFO "%s: format2type failed\n", __func__);
@@ -142,7 +159,7 @@ int mdp4_dtv_on(struct platform_device *pdev)
 	pipe->srcp0_ystride = fbi->fix.line_length;
 
 	mdp4_overlay_dmae_xy(pipe);	/* dma_e */
-	mdp4_overlay_dmae_cfg(mfd, 1);
+	mdp4_overlay_dmae_cfg(mfd, 0);
 
 	mdp4_overlay_rgb_setup(pipe);
 
@@ -163,8 +180,14 @@ int mdp4_dtv_on(struct platform_device *pdev)
 	dtv_underflow_clr = mfd->panel_info.lcdc.underflow_clr;
 	dtv_hsync_skew = mfd->panel_info.lcdc.hsync_skew;
 
-	dtv_width = mfd->panel_info.xres;
-	dtv_height = mfd->panel_info.yres;
+	pr_info("%s: <ID=%d %dx%d (%d,%d,%d), (%d,%d,%d) %dMHz>\n", __func__,
+		var->reserved[3], var->xres, var->yres,
+		var->right_margin, var->hsync_len, var->left_margin,
+		var->lower_margin, var->vsync_len, var->upper_margin,
+		var->pixclock/1000/1000);
+
+	dtv_width = var->xres;
+	dtv_height = var->yres;
 	dtv_bpp = mfd->panel_info.bpp;
 
 	hsync_period =
@@ -258,6 +281,8 @@ int mdp4_dtv_off(struct platform_device *pdev)
 	/* delay to make sure the last frame finishes */
 	msleep(100);
 
+	pr_info("%s\n", __func__);
+
 	/* dis-engage rgb2 from mixer1 */
 	if (dtv_pipe)
 		mdp4_mixer_stage_down(dtv_pipe);
@@ -310,6 +335,6 @@ void mdp4_dtv_overlay(struct msm_fb_data_type *mfd)
 	mdp_disable_irq(MDP_OVERLAY1_TERM);
 
 	mdp4_stat.kickoff_dtv++;
-
+	mdp4_overlay_resource_release();
 	mutex_unlock(&mfd->dma->ov_mutex);
 }

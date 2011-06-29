@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2008-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -33,7 +33,7 @@
 #include <linux/uaccess.h>
 #include <linux/clk.h>
 #include <linux/platform_device.h>
-#include <linux/pm_qos_params.h>
+#include <linux/regulator/consumer.h>
 #include <mach/msm_reqs.h>
 
 #include "msm_fb.h"
@@ -66,7 +66,9 @@ static struct lcdc_platform_data *lcdc_pdata;
 static int lcdc_off(struct platform_device *pdev)
 {
 	int ret = 0;
+	struct msm_fb_data_type *mfd;
 
+	mfd = platform_get_drvdata(pdev);
 	ret = panel_next_off(pdev);
 
 	clk_disable(pixel_mdp_clk);
@@ -78,8 +80,12 @@ static int lcdc_off(struct platform_device *pdev)
 	if (lcdc_pdata && lcdc_pdata->lcdc_gpio_config)
 		ret = lcdc_pdata->lcdc_gpio_config(0);
 
-	pm_qos_update_requirement(PM_QOS_SYSTEM_BUS_FREQ , "lcdc",
-				  PM_QOS_DEFAULT_VALUE);
+#ifndef CONFIG_MSM_BUS_SCALING
+	if (mfd->ebi1_clk)
+		clk_disable(mfd->ebi1_clk);
+#else
+	mdp_bus_scale_update_request(0);
+#endif
 
 	return ret;
 }
@@ -88,11 +94,20 @@ static int lcdc_on(struct platform_device *pdev)
 {
 	int ret = 0;
 	struct msm_fb_data_type *mfd;
-	unsigned long panel_pixclock_freq, pm_qos_rate;
-
+	unsigned long panel_pixclock_freq = 0;
+#ifndef CONFIG_MSM_BUS_SCALING
+	unsigned long pm_qos_rate;
+#endif
 	mfd = platform_get_drvdata(pdev);
-	panel_pixclock_freq = mfd->fbi->var.pixclock;
 
+	if (lcdc_pdata && lcdc_pdata->lcdc_get_clk)
+		panel_pixclock_freq = lcdc_pdata->lcdc_get_clk();
+
+	if (!panel_pixclock_freq)
+		panel_pixclock_freq = mfd->fbi->var.pixclock;
+#ifdef CONFIG_MSM_BUS_SCALING
+	mdp_bus_scale_update_request(2);
+#else
 #ifdef CONFIG_MSM_NPA_SYSTEM_BUS
 	pm_qos_rate = MSM_AXI_FLOW_MDP_LCDC_WVGA_2BPP;
 #else
@@ -103,10 +118,15 @@ static int lcdc_on(struct platform_device *pdev)
 		pm_qos_rate = 65000;
 #endif
 
-	pm_qos_update_requirement(PM_QOS_SYSTEM_BUS_FREQ , "lcdc",
-				  pm_qos_rate);
+	if (mfd->ebi1_clk) {
+		clk_set_rate(mfd->ebi1_clk, pm_qos_rate * 1000);
+		clk_enable(mfd->ebi1_clk);
+	}
+#endif
 	mfd = platform_get_drvdata(pdev);
 
+	mfd->fbi->var.pixclock = clk_round_rate(pixel_mdp_clk,
+					mfd->fbi->var.pixclock);
 	ret = clk_set_rate(pixel_mdp_clk, mfd->fbi->var.pixclock);
 	if (ret) {
 		pr_err("%s: Can't set MDP LCDC pixel clock to rate %u\n",
@@ -200,11 +220,15 @@ static int lcdc_probe(struct platform_device *pdev)
 	fbi->var.hsync_len = mfd->panel_info.lcdc.h_pulse_width;
 	fbi->var.vsync_len = mfd->panel_info.lcdc.v_pulse_width;
 
+#ifndef CONFIG_MSM_BUS_SCALING
+	mfd->ebi1_clk = clk_get(NULL, "ebi1_lcdc_clk");
+	if (IS_ERR(mfd->ebi1_clk))
+		return PTR_ERR(mfd->ebi1_clk);
+#endif
 	/*
 	 * set driver data
 	 */
 	platform_set_drvdata(mdp_dev, mfd);
-
 	/*
 	 * register in mdp driver
 	 */
@@ -213,7 +237,8 @@ static int lcdc_probe(struct platform_device *pdev)
 		goto lcdc_probe_err;
 
 	pdev_list[pdev_list_cnt++] = pdev;
-		return 0;
+
+	return 0;
 
 lcdc_probe_err:
 	platform_device_put(mdp_dev);
@@ -222,7 +247,13 @@ lcdc_probe_err:
 
 static int lcdc_remove(struct platform_device *pdev)
 {
-	pm_qos_remove_requirement(PM_QOS_SYSTEM_BUS_FREQ , "lcdc");
+#ifndef CONFIG_MSM_BUS_SCALING
+	struct msm_fb_data_type *mfd;
+
+	mfd = platform_get_drvdata(pdev);
+
+	clk_put(mfd->ebi1_clk);
+#endif
 	return 0;
 }
 
@@ -258,8 +289,6 @@ static int __init lcdc_driver_init(void)
 		}
 	}
 
-	pm_qos_add_requirement(PM_QOS_SYSTEM_BUS_FREQ , "lcdc",
-			       PM_QOS_DEFAULT_VALUE);
 	return lcdc_register_driver();
 }
 

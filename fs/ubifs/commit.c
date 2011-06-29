@@ -45,6 +45,7 @@
 
 #include <linux/freezer.h>
 #include <linux/kthread.h>
+#include <linux/slab.h>
 #include "ubifs.h"
 
 /**
@@ -518,7 +519,7 @@ int dbg_check_old_index(struct ubifs_info *c, struct ubifs_zbranch *zroot)
 	size_t sz;
 
 	if (!(ubifs_chk_flags & UBIFS_CHK_OLD_IDX))
-		return 0;
+		goto out;
 
 	INIT_LIST_HEAD(&list);
 

@@ -46,7 +46,14 @@
 #define SOR_CFG                        (REGISTERS_BASE + 0x0800)
 #define ECPU_CTRL                      (REGISTERS_BASE + 0x0804)
 #define HI_CFG                         (REGISTERS_BASE + 0x0808)
+
+/* EEPROM registers */
 #define EE_START                       (REGISTERS_BASE + 0x080C)
+#define EE_CTL                         (REGISTERS_BASE + 0x2000)
+#define EE_DATA                        (REGISTERS_BASE + 0x2004)
+#define EE_ADDR                        (REGISTERS_BASE + 0x2008)
+
+#define EE_CTL_READ                   2
 
 #define CHIP_ID_B                      (REGISTERS_BASE + 0x5674)
 
@@ -370,6 +377,7 @@ enum wl12xx_acx_int_reg {
  EEPROM location specified in the EE_ADDR register.
  The Wlan hardware hardware clears this bit automatically.
 *===============================================*/
+#define EE_CTL                              (REGISTERS_BASE + 0x2000)
 #define ACX_EE_CTL_REG                      EE_CTL
 #define EE_WRITE                            0x00000001ul
 #define EE_READ                             0x00000002ul
@@ -380,6 +388,7 @@ enum wl12xx_acx_int_reg {
   This register specifies the address
   within the EEPROM from/to which to read/write data.
   ===============================================*/
+#define EE_ADDR                             (REGISTERS_BASE + 0x2008)
 #define ACX_EE_ADDR_REG                     EE_ADDR
 
 /*===============================================
@@ -389,7 +398,11 @@ enum wl12xx_acx_int_reg {
   data from the EEPROM or the write data
   to be written to the EEPROM.
   ===============================================*/
+#define EE_DATA                             (REGISTERS_BASE + 0x2004)
 #define ACX_EE_DATA_REG                     EE_DATA
+
+#define EEPROM_ACCESS_TO                    10000   /* timeout counter */
+#define START_EEPROM_MGR                    0x00000001
 
 /*===============================================
   EEPROM Base Address  - 32bit RW

@@ -39,7 +39,7 @@ module_param(init_pcitm, int, 0);
  * driver_data
  * If you have an update for this please contact prism54-devel@prism54.org
  * The latest list can be found at http://prism54.org/supported_cards.php */
-static const struct pci_device_id prism54_id_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(prism54_id_tbl) = {
 	/* Intersil PRISM Duette/Prism GT Wireless LAN adapter */
 	{
 	 0x1260, 0x3890,
@@ -181,7 +181,7 @@ prism54_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	isl38xx_disable_interrupts(priv->device_base);
 
 	/* request for the interrupt before uploading the firmware */
-	rvalue = request_irq(pdev->irq, &islpci_interrupt,
+	rvalue = request_irq(pdev->irq, islpci_interrupt,
 			     IRQF_SHARED, ndev->name, priv);
 
 	if (rvalue) {

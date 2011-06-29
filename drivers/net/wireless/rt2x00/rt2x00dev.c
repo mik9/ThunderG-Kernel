@@ -1,5 +1,5 @@
 /*
-	Copyright (C) 2004 - 2009 rt2x00 SourceForge Project
+	Copyright (C) 2004 - 2009 Ivo van Doorn <IvDoorn@gmail.com>
 	<http://rt2x00.serialmonkey.com>
 
 	This program is free software; you can redistribute it and/or modify
@@ -25,6 +25,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 
 #include "rt2x00.h"
 #include "rt2x00lib.h"
@@ -205,6 +206,7 @@ void rt2x00lib_txdone(struct queue_entry *entry,
 	enum data_queue_qid qid = skb_get_queue_mapping(entry->skb);
 	unsigned int header_length = ieee80211_get_hdrlen_from_skb(entry->skb);
 	u8 rate_idx, rate_flags, retry_rates;
+	u8 skbdesc_flags = skbdesc->flags;
 	unsigned int i;
 	bool success;
 
@@ -287,12 +289,12 @@ void rt2x00lib_txdone(struct queue_entry *entry,
 	}
 
 	/*
-	 * Only send the status report to mac80211 when TX status was
-	 * requested by it. If this was a extra frame coming through
-	 * a mac80211 library call (RTS/CTS) then we should not send the
-	 * status report back.
+	 * Only send the status report to mac80211 when it's a frame
+	 * that originated in mac80211. If this was a extra frame coming
+	 * through a mac80211 library call (RTS/CTS) then we should not
+	 * send the status report back.
 	 */
-	if (tx_info->flags & IEEE80211_TX_CTL_REQ_TX_STATUS)
+	if (!(skbdesc_flags & SKBDESC_NOT_MAC80211))
 		ieee80211_tx_status_irqsafe(rt2x00dev->hw, entry->skb);
 	else
 		dev_kfree_skb_irq(entry->skb);
@@ -384,9 +386,6 @@ void rt2x00lib_rxdone(struct rt2x00_dev *rt2x00dev,
 	memset(&rxdesc, 0, sizeof(rxdesc));
 	rt2x00dev->ops->lib->fill_rxdone(entry, &rxdesc);
 
-	/* Trim buffer to correct size */
-	skb_trim(entry->skb, rxdesc.size);
-
 	/*
 	 * The data behind the ieee80211 header must be
 	 * aligned on a 4 byte boundary.
@@ -396,17 +395,22 @@ void rt2x00lib_rxdone(struct rt2x00_dev *rt2x00dev,
 	/*
 	 * Hardware might have stripped the IV/EIV/ICV data,
 	 * in that case it is possible that the data was
-	 * provided seperately (through hardware descriptor)
+	 * provided separately (through hardware descriptor)
 	 * in which case we should reinsert the data into the frame.
 	 */
 	if ((rxdesc.dev_flags & RXDONE_CRYPTO_IV) &&
 	    (rxdesc.flags & RX_FLAG_IV_STRIPPED))
 		rt2x00crypto_rx_insert_iv(entry->skb, header_length,
 					  &rxdesc);
-	else if (rxdesc.dev_flags & RXDONE_L2PAD)
+	else if (header_length &&
+		 (rxdesc.size > header_length) &&
+		 (rxdesc.dev_flags & RXDONE_L2PAD))
 		rt2x00queue_remove_l2pad(entry->skb, header_length);
 	else
 		rt2x00queue_align_payload(entry->skb, header_length);
+
+	/* Trim buffer to correct size */
+	skb_trim(entry->skb, rxdesc.size);
 
 	/*
 	 * Check if the frame was received using HT. In that case,
@@ -430,9 +434,7 @@ void rt2x00lib_rxdone(struct rt2x00_dev *rt2x00dev,
 
 	rx_status->mactime = rxdesc.timestamp;
 	rx_status->rate_idx = rate_idx;
-	rx_status->qual = rt2x00link_calculate_signal(rt2x00dev, rxdesc.rssi);
 	rx_status->signal = rxdesc.rssi;
-	rx_status->noise = rxdesc.noise;
 	rx_status->flag = rxdesc.flags;
 	rx_status->antenna = rt2x00dev->link.ant.active.rx;
 
@@ -852,6 +854,11 @@ int rt2x00lib_probe_dev(struct rt2x00_dev *rt2x00dev)
 		    BIT(NL80211_IFTYPE_WDS);
 
 	/*
+	 * Initialize configuration work.
+	 */
+	INIT_WORK(&rt2x00dev->intf_work, rt2x00lib_intf_scheduled);
+
+	/*
 	 * Let the driver probe the device to detect the capabilities.
 	 */
 	retval = rt2x00dev->ops->lib->probe_hw(rt2x00dev);
@@ -859,11 +866,6 @@ int rt2x00lib_probe_dev(struct rt2x00_dev *rt2x00dev)
 		ERROR(rt2x00dev, "Failed to allocate device.\n");
 		goto exit;
 	}
-
-	/*
-	 * Initialize configuration work.
-	 */
-	INIT_WORK(&rt2x00dev->intf_work, rt2x00lib_intf_scheduled);
 
 	/*
 	 * Allocate queue array.

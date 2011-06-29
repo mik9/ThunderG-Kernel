@@ -169,7 +169,7 @@
 #include <asm/dma.h>
 #include <asm/div64.h>		/* do_div */
 
-#define VERSION 	"2.72"
+#define VERSION 	"2.73"
 #define IP_NAME_SZ 32
 #define MAX_MPLS_LABELS 16 /* This is the max label stack depth */
 #define MPLS_STACK_BOTTOM htonl(0x00000100)
@@ -190,6 +190,7 @@
 #define F_IPSEC_ON    (1<<12)	/* ipsec on for flows */
 #define F_QUEUE_MAP_RND (1<<13)	/* queue map Random */
 #define F_QUEUE_MAP_CPU (1<<14)	/* queue map mirrors smp_processor_id() */
+#define F_NODE          (1<<15)	/* Node memory alloc*/
 
 /* Thread control flag bits */
 #define T_STOP        (1<<0)	/* Stop run */
@@ -250,8 +251,7 @@ struct pktgen_dev {
 	__u64 count;		/* Default No packets to send */
 	__u64 sofar;		/* How many pkts we've sent so far */
 	__u64 tx_bytes;		/* How many bytes we've transmitted */
-	__u64 errors;		/* Errors when trying to transmit,
-				   pkts will be re-sent */
+	__u64 errors;		/* Errors when trying to transmit, */
 
 	/* runtime counters relating to clone_skb */
 
@@ -340,6 +340,7 @@ struct pktgen_dev {
 	__u16 cur_udp_src;
 	__u16 cur_queue_map;
 	__u32 cur_pkt_size;
+	__u32 last_pkt_size;
 
 	__u8 hh[14];
 	/* = {
@@ -372,6 +373,7 @@ struct pktgen_dev {
 
 	u16 queue_map_min;
 	u16 queue_map_max;
+	int node;               /* Memory node */
 
 #ifdef CONFIG_XFRM
 	__u8	ipsmode;		/* IPSEC mode (config) */
@@ -607,6 +609,9 @@ static int pktgen_if_show(struct seq_file *seq, void *v)
 	if (pkt_dev->traffic_class)
 		seq_printf(seq, "     traffic_class: 0x%02x\n", pkt_dev->traffic_class);
 
+	if (pkt_dev->node >= 0)
+		seq_printf(seq, "     node: %d\n", pkt_dev->node);
+
 	seq_printf(seq, "     Flags: ");
 
 	if (pkt_dev->flags & F_IPV6)
@@ -659,6 +664,9 @@ static int pktgen_if_show(struct seq_file *seq, void *v)
 
 	if (pkt_dev->flags & F_SVID_RND)
 		seq_printf(seq, "SVID_RND  ");
+
+	if (pkt_dev->flags & F_NODE)
+		seq_printf(seq, "NODE_ALLOC  ");
 
 	seq_puts(seq, "\n");
 
@@ -1074,6 +1082,21 @@ static ssize_t pktgen_if_write(struct file *file,
 			pkt_dev->dst_mac_count);
 		return count;
 	}
+	if (!strcmp(name, "node")) {
+		len = num_arg(&user_buffer[i], 10, &value);
+		if (len < 0)
+			return len;
+
+		i += len;
+
+		if (node_possible(value)) {
+			pkt_dev->node = value;
+			sprintf(pg_result, "OK: node=%d", pkt_dev->node);
+		}
+		else
+			sprintf(pg_result, "ERROR: node not possible");
+		return count;
+	}
 	if (!strcmp(name, "flag")) {
 		char f[32];
 		memset(f, 0, 32);
@@ -1166,12 +1189,18 @@ static ssize_t pktgen_if_write(struct file *file,
 		else if (strcmp(f, "!IPV6") == 0)
 			pkt_dev->flags &= ~F_IPV6;
 
+		else if (strcmp(f, "NODE_ALLOC") == 0)
+			pkt_dev->flags |= F_NODE;
+
+		else if (strcmp(f, "!NODE_ALLOC") == 0)
+			pkt_dev->flags &= ~F_NODE;
+
 		else {
 			sprintf(pg_result,
 				"Flag -:%s:- unknown\nAvailable flags, (prepend ! to un-set flag):\n%s",
 				f,
 				"IPSRC_RND, IPDST_RND, UDPSRC_RND, UDPDST_RND, "
-				"MACSRC_RND, MACDST_RND, TXSIZE_RND, IPV6, MPLS_RND, VID_RND, SVID_RND, FLOW_SEQ, IPSEC\n");
+				"MACSRC_RND, MACDST_RND, TXSIZE_RND, IPV6, MPLS_RND, VID_RND, SVID_RND, FLOW_SEQ, IPSEC, NODE_ALLOC\n");
 			return count;
 		}
 		sprintf(pg_result, "OK: flags=0x%x", pkt_dev->flags);
@@ -2051,9 +2080,8 @@ static void pktgen_setup_inject(struct pktgen_dev *pkt_dev)
 				read_lock_bh(&idev->lock);
 				for (ifp = idev->addr_list; ifp;
 				     ifp = ifp->if_next) {
-					if (ifp->scope == IFA_LINK
-					    && !(ifp->
-						 flags & IFA_F_TENTATIVE)) {
+					if (ifp->scope == IFA_LINK &&
+					    !(ifp->flags & IFA_F_TENTATIVE)) {
 						ipv6_addr_copy(&pkt_dev->
 							       cur_in6_saddr,
 							       &ifp->addr);
@@ -2142,7 +2170,7 @@ static void spin(struct pktgen_dev *pkt_dev, ktime_t spin_until)
 	end_time = ktime_now();
 
 	pkt_dev->idle_acc += ktime_to_ns(ktime_sub(end_time, start_time));
-	pkt_dev->next_tx = ktime_add_ns(end_time, pkt_dev->delay);
+	pkt_dev->next_tx = ktime_add_ns(spin_until, pkt_dev->delay);
 }
 
 static inline void set_pkt_overhead(struct pktgen_dev *pkt_dev)
@@ -2189,12 +2217,13 @@ static inline int f_pick(struct pktgen_dev *pkt_dev)
 /* If there was already an IPSEC SA, we keep it as is, else
  * we go look for it ...
 */
+#define DUMMY_MARK 0
 static void get_ipsec_sa(struct pktgen_dev *pkt_dev, int flow)
 {
 	struct xfrm_state *x = pkt_dev->flows[flow].x;
 	if (!x) {
 		/*slow path: we dont already have xfrm_state*/
-		x = xfrm_stateonly_find(&init_net,
+		x = xfrm_stateonly_find(&init_net, DUMMY_MARK,
 					(xfrm_address_t *)&pkt_dev->cur_daddr,
 					(xfrm_address_t *)&pkt_dev->cur_saddr,
 					AF_INET,
@@ -2572,9 +2601,27 @@ static struct sk_buff *fill_packet_ipv4(struct net_device *odev,
 	mod_cur_headers(pkt_dev);
 
 	datalen = (odev->hard_header_len + 16) & ~0xf;
-	skb = __netdev_alloc_skb(odev,
-				 pkt_dev->cur_pkt_size + 64
-				 + datalen + pkt_dev->pkt_overhead, GFP_NOWAIT);
+
+	if (pkt_dev->flags & F_NODE) {
+		int node;
+
+		if (pkt_dev->node >= 0)
+			node = pkt_dev->node;
+		else
+			node =  numa_node_id();
+
+		skb = __alloc_skb(NET_SKB_PAD + pkt_dev->cur_pkt_size + 64
+				  + datalen + pkt_dev->pkt_overhead, GFP_NOWAIT, 0, node);
+		if (likely(skb)) {
+			skb_reserve(skb, NET_SKB_PAD);
+			skb->dev = odev;
+		}
+	}
+	else
+	  skb = __netdev_alloc_skb(odev,
+				   pkt_dev->cur_pkt_size + 64
+				   + datalen + pkt_dev->pkt_overhead, GFP_NOWAIT);
+
 	if (!skb) {
 		sprintf(pkt_dev->result, "No memory");
 		return NULL;
@@ -3436,7 +3483,7 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 			pkt_dev->clone_count--;	/* back out increment, OOM */
 			return;
 		}
-
+		pkt_dev->last_pkt_size = pkt_dev->skb->len;
 		pkt_dev->allocated_skbs++;
 		pkt_dev->clone_count = 0;	/* reset counter */
 	}
@@ -3448,12 +3495,14 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 	txq = netdev_get_tx_queue(odev, queue_map);
 
 	__netif_tx_lock_bh(txq);
-	atomic_inc(&(pkt_dev->skb->users));
 
-	if (unlikely(netif_tx_queue_stopped(txq) || netif_tx_queue_frozen(txq)))
+	if (unlikely(netif_tx_queue_stopped(txq) || netif_tx_queue_frozen(txq))) {
 		ret = NETDEV_TX_BUSY;
-	else
-		ret = (*xmit)(pkt_dev->skb, odev);
+		pkt_dev->last_ok = 0;
+		goto unlock;
+	}
+	atomic_inc(&(pkt_dev->skb->users));
+	ret = (*xmit)(pkt_dev->skb, odev);
 
 	switch (ret) {
 	case NETDEV_TX_OK:
@@ -3461,7 +3510,13 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 		pkt_dev->last_ok = 1;
 		pkt_dev->sofar++;
 		pkt_dev->seq_num++;
-		pkt_dev->tx_bytes += pkt_dev->cur_pkt_size;
+		pkt_dev->tx_bytes += pkt_dev->last_pkt_size;
+		break;
+	case NET_XMIT_DROP:
+	case NET_XMIT_CN:
+	case NET_XMIT_POLICED:
+		/* skb has been consumed */
+		pkt_dev->errors++;
 		break;
 	default: /* Drivers are not supposed to return other values! */
 		if (net_ratelimit())
@@ -3475,6 +3530,7 @@ static void pktgen_xmit(struct pktgen_dev *pkt_dev)
 		atomic_dec(&(pkt_dev->skb->users));
 		pkt_dev->last_ok = 0;
 	}
+unlock:
 	__netif_tx_unlock_bh(txq);
 
 	/* If pkt_dev->count is zero, then run forever */
@@ -3623,6 +3679,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 {
 	struct pktgen_dev *pkt_dev;
 	int err;
+	int node = cpu_to_node(t->cpu);
 
 	/* We don't allow a device to be on several threads */
 
@@ -3632,12 +3689,13 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 		return -EBUSY;
 	}
 
-	pkt_dev = kzalloc(sizeof(struct pktgen_dev), GFP_KERNEL);
+	pkt_dev = kzalloc_node(sizeof(struct pktgen_dev), GFP_KERNEL, node);
 	if (!pkt_dev)
 		return -ENOMEM;
 
 	strcpy(pkt_dev->odevname, ifname);
-	pkt_dev->flows = vmalloc(MAX_CFLOWS * sizeof(struct flow_state));
+	pkt_dev->flows = vmalloc_node(MAX_CFLOWS * sizeof(struct flow_state),
+				      node);
 	if (pkt_dev->flows == NULL) {
 		kfree(pkt_dev);
 		return -ENOMEM;
@@ -3663,6 +3721,7 @@ static int pktgen_add_device(struct pktgen_thread *t, const char *ifname)
 	pkt_dev->svlan_p = 0;
 	pkt_dev->svlan_cfi = 0;
 	pkt_dev->svlan_id = 0xffff;
+	pkt_dev->node = -1;
 
 	err = pktgen_setup_dev(pkt_dev, ifname);
 	if (err)
@@ -3699,7 +3758,8 @@ static int __init pktgen_create_thread(int cpu)
 	struct proc_dir_entry *pe;
 	struct task_struct *p;
 
-	t = kzalloc(sizeof(struct pktgen_thread), GFP_KERNEL);
+	t = kzalloc_node(sizeof(struct pktgen_thread), GFP_KERNEL,
+			 cpu_to_node(cpu));
 	if (!t) {
 		printk(KERN_ERR "pktgen: ERROR: out of memory, can't "
 		       "create new thread.\n");

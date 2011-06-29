@@ -23,6 +23,7 @@
 
 #include <linux/irq.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/crc7.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/wl12xx.h>
@@ -270,6 +271,8 @@ static int __devinit wl1251_spi_probe(struct spi_device *spi)
 		return -ENODEV;
 	}
 
+	wl->use_eeprom = pdata->use_eeprom;
+
 	ret = request_irq(wl->irq, wl1251_irq, 0, DRIVER_NAME, wl);
 	if (ret < 0) {
 		wl1251_error("request_irq() failed: %d", ret);
@@ -307,7 +310,7 @@ static int __devexit wl1251_spi_remove(struct spi_device *spi)
 
 static struct spi_driver wl1251_spi_driver = {
 	.driver = {
-		.name		= "wl12xx",
+		.name		= DRIVER_NAME,
 		.bus		= &spi_bus_type,
 		.owner		= THIS_MODULE,
 	},

@@ -24,6 +24,7 @@
  */
 
 #include <linux/poll.h>
+#include <linux/slab.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 
@@ -31,7 +32,7 @@
 
 enum tpm_const {
 	TPM_MINOR = 224,	/* officially assigned */
-	TPM_BUFSIZE = 2048,
+	TPM_BUFSIZE = 4096,
 	TPM_NUM_DEVICES = 256,
 };
 
@@ -45,6 +46,16 @@ enum tpm_duration {
 #define TPM_MAX_ORDINAL 243
 #define TPM_MAX_PROTECTED_ORDINAL 12
 #define TPM_PROTECTED_ORDINAL_MASK 0xFF
+
+/*
+ * Bug workaround - some TPM's don't flush the most
+ * recently changed pcr on suspend, so force the flush
+ * with an extend to the selected _unused_ non-volatile pcr.
+ */
+static int tpm_suspend_pcr;
+module_param_named(suspend_pcr, tpm_suspend_pcr, uint, 0644);
+MODULE_PARM_DESC(suspend_pcr,
+		 "PCR to use for dummy writes to faciltate flush on suspend.");
 
 static LIST_HEAD(tpm_chip_list);
 static DEFINE_SPINLOCK(driver_lock);
@@ -353,14 +364,12 @@ unsigned long tpm_calc_ordinal_duration(struct tpm_chip *chip,
 		    tpm_protected_ordinal_duration[ordinal &
 						   TPM_PROTECTED_ORDINAL_MASK];
 
-	if (duration_idx != TPM_UNDEFINED) {
+	if (duration_idx != TPM_UNDEFINED)
 		duration = chip->vendor.duration[duration_idx];
-		/* if duration is 0, it's because chip->vendor.duration wasn't */
-		/* filled yet, so we set the lowest timeout just to give enough */
-		/* time for tpm_get_timeouts() to succeed */
-		return (duration <= 0 ? HZ : duration);
-	} else
+	if (duration <= 0)
 		return 2 * 60 * HZ;
+	else
+		return duration;
 }
 EXPORT_SYMBOL_GPL(tpm_calc_ordinal_duration);
 
@@ -566,11 +575,9 @@ duration:
 	if (rc)
 		return;
 
-	if (be32_to_cpu(tpm_cmd.header.out.return_code) != 0 ||
-	    be32_to_cpu(tpm_cmd.header.out.length)
-	    != sizeof(tpm_cmd.header.out) + sizeof(u32) + 3 * sizeof(u32))
+	if (be32_to_cpu(tpm_cmd.header.out.return_code)
+	    != 3 * sizeof(u32))
 		return;
-
 	duration_cap = &tpm_cmd.params.getcap_out.cap.duration;
 	chip->vendor.duration[TPM_SHORT] =
 	    usecs_to_jiffies(be32_to_cpu(duration_cap->tpm_short));
@@ -914,18 +921,6 @@ ssize_t tpm_show_caps_1_2(struct device * dev,
 }
 EXPORT_SYMBOL_GPL(tpm_show_caps_1_2);
 
-ssize_t tpm_show_timeouts(struct device *dev, struct device_attribute *attr,
-			  char *buf)
-{
-	struct tpm_chip *chip = dev_get_drvdata(dev);
-
-	return sprintf(buf, "%d %d %d\n",
-	               jiffies_to_usecs(chip->vendor.duration[TPM_SHORT]),
-	               jiffies_to_usecs(chip->vendor.duration[TPM_MEDIUM]),
-	               jiffies_to_usecs(chip->vendor.duration[TPM_LONG]));
-}
-EXPORT_SYMBOL_GPL(tpm_show_timeouts);
-
 ssize_t tpm_store_cancel(struct device *dev, struct device_attribute *attr,
 			const char *buf, size_t count)
 {
@@ -969,7 +964,7 @@ int tpm_open(struct inode *inode, struct file *file)
 		return -EBUSY;
 	}
 
-	chip->data_buffer = kzalloc(TPM_BUFSIZE, GFP_KERNEL);
+	chip->data_buffer = kmalloc(TPM_BUFSIZE * sizeof(u8), GFP_KERNEL);
 	if (chip->data_buffer == NULL) {
 		clear_bit(0, &chip->is_open);
 		put_device(chip->dev);
@@ -1083,6 +1078,15 @@ void tpm_remove_hardware(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(tpm_remove_hardware);
 
+#define TPM_ORD_SAVESTATE cpu_to_be32(152)
+#define SAVESTATE_RESULT_SIZE 10
+
+static struct tpm_input_header savestate_header = {
+	.tag = TPM_TAG_RQU_COMMAND,
+	.length = cpu_to_be32(10),
+	.ordinal = TPM_ORD_SAVESTATE
+};
+
 /*
  * We are about to suspend. Save the TPM state
  * so that it can be restored.
@@ -1090,17 +1094,29 @@ EXPORT_SYMBOL_GPL(tpm_remove_hardware);
 int tpm_pm_suspend(struct device *dev, pm_message_t pm_state)
 {
 	struct tpm_chip *chip = dev_get_drvdata(dev);
-	u8 savestate[] = {
-		0, 193,		/* TPM_TAG_RQU_COMMAND */
-		0, 0, 0, 10,	/* blob length (in bytes) */
-		0, 0, 0, 152	/* TPM_ORD_SaveState */
-	};
+	struct tpm_cmd_t cmd;
+	int rc;
+
+	u8 dummy_hash[TPM_DIGEST_SIZE] = { 0 };
 
 	if (chip == NULL)
 		return -ENODEV;
 
-	tpm_transmit(chip, savestate, sizeof(savestate));
-	return 0;
+	/* for buggy tpm, flush pcrs with extend to selected dummy */
+	if (tpm_suspend_pcr) {
+		cmd.header.in = pcrextend_header;
+		cmd.params.pcrextend_in.pcr_idx = cpu_to_be32(tpm_suspend_pcr);
+		memcpy(cmd.params.pcrextend_in.hash, dummy_hash,
+		       TPM_DIGEST_SIZE);
+		rc = transmit_cmd(chip, &cmd, EXTEND_PCR_RESULT_SIZE,
+				  "extending dummy pcr before suspend");
+	}
+
+	/* now do the actual savestate */
+	cmd.header.in = savestate_header;
+	rc = transmit_cmd(chip, &cmd, SAVESTATE_RESULT_SIZE,
+			  "sending savestate before suspend");
+	return rc;
 }
 EXPORT_SYMBOL_GPL(tpm_pm_suspend);
 

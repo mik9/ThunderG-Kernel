@@ -18,6 +18,7 @@
 #include <linux/page-flags.h>
 #include <linux/sched.h>
 #include <linux/highmem.h>
+#include <linux/perf_event.h>
 
 #include <asm/system.h>
 #include <asm/pgtable.h>
@@ -26,6 +27,10 @@
 #include <asm/io.h>
 #include <mach/msm_iomap.h>
 #endif
+
+#ifdef CONFIG_EMULATE_DOMAIN_MANAGER_V7
+#include <asm/domain.h>
+#endif /* CONFIG_EMULATE_DOMAIN_MANAGER_V7 */
 
 #include "fault.h"
 
@@ -323,6 +328,12 @@ do_page_fault(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 	fault = __do_page_fault(mm, addr, fsr, tsk);
 	up_read(&mm->mmap_sem);
 
+	perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS, 1, 0, regs, addr);
+	if (fault & VM_FAULT_MAJOR)
+		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MAJ, 1, 0, regs, addr);
+	else if (fault & VM_FAULT_MINOR)
+		perf_sw_event(PERF_COUNT_SW_PAGE_FAULTS_MIN, 1, 0, regs, addr);
+
 	/*
 	 * Handle the "normal" case first - VM_FAULT_MAJOR / VM_FAULT_MINOR
 	 */
@@ -504,7 +515,7 @@ do_imprecise_ext(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 		      : : "r" (0));
 #endif
 #ifdef CONFIG_ARCH_MSM_SCORPION
-	/* pr_info("%s: TCSR_SPARE2 = 0x%.8x\n", __func__, readl(MSM_TCSR_SPARE2)); */
+	pr_info("%s: TCSR_SPARE2 = 0x%.8x\n", __func__, readl(MSM_TCSR_SPARE2));
 #endif
 	return 1;
 }
@@ -523,7 +534,12 @@ static struct fsr_info {
 	{ do_bad,		SIGILL,	 BUS_ADRALN,	"alignment exception"		   },
 	{ do_bad,		SIGKILL, 0,		"terminal exception"		   },
 	{ do_bad,		SIGILL,	 BUS_ADRALN,	"alignment exception"		   },
+/* Do we need runtime check ? */
+#if __LINUX_ARM_ARCH__ < 6
 	{ do_bad,		SIGBUS,	 0,		"external abort on linefetch"	   },
+#else
+	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"I-cache maintenance fault"	   },
+#endif
 	{ do_translation_fault,	SIGSEGV, SEGV_MAPERR,	"section translation fault"	   },
 	{ do_bad,		SIGBUS,	 0,		"external abort on linefetch"	   },
 	{ do_page_fault,	SIGSEGV, SEGV_MAPERR,	"page translation fault"	   },
@@ -577,6 +593,11 @@ do_DataAbort(unsigned long addr, unsigned int fsr, struct pt_regs *regs)
 {
 	const struct fsr_info *inf = fsr_info + fsr_fs(fsr);
 	struct siginfo info;
+
+#ifdef CONFIG_EMULATE_DOMAIN_MANAGER_V7
+	if (emulate_domain_manager_data_abort(fsr, addr))
+		return;
+#endif
 
 	if (!inf->fn(addr, fsr & ~FSR_LNX_PF, regs))
 		return;
@@ -632,6 +653,11 @@ do_PrefetchAbort(unsigned long addr, unsigned int ifsr, struct pt_regs *regs)
 {
 	const struct fsr_info *inf = ifsr_info + fsr_fs(ifsr);
 	struct siginfo info;
+
+#ifdef CONFIG_EMULATE_DOMAIN_MANAGER_V7
+	if (emulate_domain_manager_prefetch_abort(ifsr, addr))
+		return;
+#endif
 
 	if (!inf->fn(addr, ifsr | FSR_LNX_PF, regs))
 		return;

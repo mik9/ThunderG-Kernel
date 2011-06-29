@@ -610,7 +610,6 @@ void b43_rx(struct b43_wldev *dev, struct sk_buff *skb, const void *_rxhdr)
 	}
 
 	/* Link quality statistics */
-	status.noise = dev->stats.link_noise;
 	if ((chanstat & B43_RX_CHAN_PHYTYPE) == B43_PHYTYPE_N) {
 //		s8 rssi = max(rxhdr->power0, rxhdr->power1);
 		//TODO: Find out what the rssi value is (dBm or percentage?)
@@ -621,7 +620,6 @@ void b43_rx(struct b43_wldev *dev, struct sk_buff *skb, const void *_rxhdr)
 						  (phystat0 & B43_RX_PHYST0_OFDM),
 						  (phystat0 & B43_RX_PHYST0_GAINCTL),
 						  (phystat3 & B43_RX_PHYST3_TRSTATE));
-		status.qual = (rxhdr->jssi * 100) / B43_RX_MAX_SSI;
 	}
 
 	if (phystat0 & B43_RX_PHYST0_OFDM)
@@ -690,10 +688,7 @@ void b43_rx(struct b43_wldev *dev, struct sk_buff *skb, const void *_rxhdr)
 	}
 
 	memcpy(IEEE80211_SKB_RXCB(skb), &status, sizeof(status));
-
-	local_bh_disable();
-	ieee80211_rx(dev->wl->hw, skb);
-	local_bh_enable();
+	ieee80211_rx_ni(dev->wl->hw, skb);
 
 #if B43_DEBUG
 	dev->rx_count++;

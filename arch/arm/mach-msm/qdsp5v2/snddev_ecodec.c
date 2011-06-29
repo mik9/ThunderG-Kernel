@@ -26,6 +26,7 @@
 #include <mach/qdsp5v2/aux_pcm.h>
 #include <mach/qdsp5v2/afe.h>
 #include <mach/debug_mm.h>
+#include <linux/slab.h>
 
 /* Context for each external codec device */
 struct snddev_ecodec_state {

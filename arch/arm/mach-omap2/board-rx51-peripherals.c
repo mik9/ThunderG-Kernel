@@ -14,27 +14,165 @@
 #include <linux/input.h>
 #include <linux/input/matrix_keypad.h>
 #include <linux/spi/spi.h>
+#include <linux/spi/wl12xx.h>
 #include <linux/i2c.h>
-#include <linux/i2c/twl4030.h>
+#include <linux/i2c/twl.h>
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/regulator/machine.h>
 #include <linux/gpio.h>
+#include <linux/gpio_keys.h>
 #include <linux/mmc/host.h>
 
-#include <mach/mcspi.h>
-#include <mach/mux.h>
-#include <mach/board.h>
-#include <mach/common.h>
-#include <mach/dma.h>
-#include <mach/gpmc.h>
-#include <mach/onenand.h>
-#include <mach/gpmc-smc91x.h>
+#include <plat/mcspi.h>
+#include <plat/mux.h>
+#include <plat/board.h>
+#include <plat/common.h>
+#include <plat/dma.h>
+#include <plat/gpmc.h>
+#include <plat/onenand.h>
+#include <plat/gpmc-smc91x.h>
 
-#include "mmc-twl4030.h"
+#include "mux.h"
+#include "hsmmc.h"
 
 #define SYSTEM_REV_B_USES_VAUX3	0x1699
 #define SYSTEM_REV_S_USES_VAUX3 0x8
+
+#define RX51_WL1251_POWER_GPIO		87
+#define RX51_WL1251_IRQ_GPIO		42
+
+/* list all spi devices here */
+enum {
+	RX51_SPI_WL1251,
+	RX51_SPI_MIPID,		/* LCD panel */
+	RX51_SPI_TSC2005,	/* Touch Controller */
+};
+
+static struct wl12xx_platform_data wl1251_pdata;
+
+static struct omap2_mcspi_device_config wl1251_mcspi_config = {
+	.turbo_mode	= 0,
+	.single_channel	= 1,
+};
+
+static struct omap2_mcspi_device_config mipid_mcspi_config = {
+	.turbo_mode	= 0,
+	.single_channel	= 1,
+};
+
+static struct omap2_mcspi_device_config tsc2005_mcspi_config = {
+	.turbo_mode	= 0,
+	.single_channel	= 1,
+};
+
+static struct spi_board_info rx51_peripherals_spi_board_info[] __initdata = {
+	[RX51_SPI_WL1251] = {
+		.modalias		= "wl1251",
+		.bus_num		= 4,
+		.chip_select		= 0,
+		.max_speed_hz   	= 48000000,
+		.mode                   = SPI_MODE_3,
+		.controller_data	= &wl1251_mcspi_config,
+		.platform_data		= &wl1251_pdata,
+	},
+	[RX51_SPI_MIPID] = {
+		.modalias		= "acx565akm",
+		.bus_num		= 1,
+		.chip_select		= 2,
+		.max_speed_hz		= 6000000,
+		.controller_data	= &mipid_mcspi_config,
+	},
+	[RX51_SPI_TSC2005] = {
+		.modalias		= "tsc2005",
+		.bus_num		= 1,
+		.chip_select		= 0,
+		/* .irq = OMAP_GPIO_IRQ(RX51_TSC2005_IRQ_GPIO),*/
+		.max_speed_hz		= 6000000,
+		.controller_data	= &tsc2005_mcspi_config,
+		/* .platform_data = &tsc2005_config,*/
+	},
+};
+
+#if defined(CONFIG_KEYBOARD_GPIO) || defined(CONFIG_KEYBOARD_GPIO_MODULE)
+
+#define RX51_GPIO_CAMERA_LENS_COVER	110
+#define RX51_GPIO_CAMERA_FOCUS		68
+#define RX51_GPIO_CAMERA_CAPTURE	69
+#define RX51_GPIO_KEYPAD_SLIDE		71
+#define RX51_GPIO_LOCK_BUTTON		113
+#define RX51_GPIO_PROXIMITY		89
+
+#define RX51_GPIO_DEBOUNCE_TIMEOUT	10
+
+static struct gpio_keys_button rx51_gpio_keys[] = {
+	{
+		.desc			= "Camera Lens Cover",
+		.type			= EV_SW,
+		.code			= SW_CAMERA_LENS_COVER,
+		.gpio			= RX51_GPIO_CAMERA_LENS_COVER,
+		.active_low		= 1,
+		.debounce_interval	= RX51_GPIO_DEBOUNCE_TIMEOUT,
+	}, {
+		.desc			= "Camera Focus",
+		.type			= EV_KEY,
+		.code			= KEY_CAMERA_FOCUS,
+		.gpio			= RX51_GPIO_CAMERA_FOCUS,
+		.active_low		= 1,
+		.debounce_interval	= RX51_GPIO_DEBOUNCE_TIMEOUT,
+	}, {
+		.desc			= "Camera Capture",
+		.type			= EV_KEY,
+		.code			= KEY_CAMERA,
+		.gpio			= RX51_GPIO_CAMERA_CAPTURE,
+		.active_low		= 1,
+		.debounce_interval	= RX51_GPIO_DEBOUNCE_TIMEOUT,
+	}, {
+		.desc			= "Lock Button",
+		.type			= EV_KEY,
+		.code			= KEY_SCREENLOCK,
+		.gpio			= RX51_GPIO_LOCK_BUTTON,
+		.active_low		= 1,
+		.debounce_interval	= RX51_GPIO_DEBOUNCE_TIMEOUT,
+	}, {
+		.desc			= "Keypad Slide",
+		.type			= EV_SW,
+		.code			= SW_KEYPAD_SLIDE,
+		.gpio			= RX51_GPIO_KEYPAD_SLIDE,
+		.active_low		= 1,
+		.debounce_interval	= RX51_GPIO_DEBOUNCE_TIMEOUT,
+	}, {
+		.desc			= "Proximity Sensor",
+		.type			= EV_SW,
+		.code			= SW_FRONT_PROXIMITY,
+		.gpio			= RX51_GPIO_PROXIMITY,
+		.active_low		= 0,
+		.debounce_interval	= RX51_GPIO_DEBOUNCE_TIMEOUT,
+	}
+};
+
+static struct gpio_keys_platform_data rx51_gpio_keys_data = {
+	.buttons	= rx51_gpio_keys,
+	.nbuttons	= ARRAY_SIZE(rx51_gpio_keys),
+};
+
+static struct platform_device rx51_gpio_keys_device = {
+	.name	= "gpio-keys",
+	.id	= -1,
+	.dev	= {
+		.platform_data	= &rx51_gpio_keys_data,
+	},
+};
+
+static void __init rx51_add_gpio_keys(void)
+{
+	platform_device_register(&rx51_gpio_keys_device);
+}
+#else
+static void __init rx51_add_gpio_keys(void)
+{
+}
+#endif /* CONFIG_KEYBOARD_GPIO || CONFIG_KEYBOARD_GPIO_MODULE */
 
 static int board_keymap[] = {
 	/*
@@ -110,7 +248,47 @@ static struct twl4030_madc_platform_data rx51_madc_data = {
 	.irq_line		= 1,
 };
 
-static struct twl4030_hsmmc_info mmc[] = {
+/* Enable input logic and pull all lines up when eMMC is on. */
+static struct omap_board_mux rx51_mmc2_on_mux[] = {
+	OMAP3_MUX(SDMMC2_CMD, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT0, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT1, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT2, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT3, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT4, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT5, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT6, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT7, OMAP_PIN_INPUT_PULLUP | OMAP_MUX_MODE0),
+	{ .reg_offset = OMAP_MUX_TERMINATOR },
+};
+
+/* Disable input logic and pull all lines down when eMMC is off. */
+static struct omap_board_mux rx51_mmc2_off_mux[] = {
+	OMAP3_MUX(SDMMC2_CMD, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT0, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT1, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT2, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT3, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT4, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT5, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT6, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	OMAP3_MUX(SDMMC2_DAT7, OMAP_PULL_ENA | OMAP_MUX_MODE0),
+	{ .reg_offset = OMAP_MUX_TERMINATOR },
+};
+
+/*
+ * Current flows to eMMC when eMMC is off and the data lines are pulled up,
+ * so pull them down. N.B. we pull 8 lines because we are using 8 lines.
+ */
+static void rx51_mmc2_remux(struct device *dev, int slot, int power_on)
+{
+	if (power_on)
+		omap_mux_write_array(rx51_mmc2_on_mux);
+	else
+		omap_mux_write_array(rx51_mmc2_off_mux);
+}
+
+static struct omap2_hsmmc_info mmc[] __initdata = {
 	{
 		.name		= "external",
 		.mmc		= 1,
@@ -123,25 +301,71 @@ static struct twl4030_hsmmc_info mmc[] = {
 	{
 		.name		= "internal",
 		.mmc		= 2,
-		.wires		= 8,
+		.wires		= 8, /* See also rx51_mmc2_remux */
 		.gpio_cd	= -EINVAL,
 		.gpio_wp	= -EINVAL,
 		.nonremovable	= true,
 		.power_saving	= true,
+		.remux		= rx51_mmc2_remux,
 	},
 	{}	/* Terminator */
 };
 
 static struct regulator_consumer_supply rx51_vmmc1_supply = {
-	.supply			= "vmmc",
+	.supply   = "vmmc",
+	.dev_name = "mmci-omap-hs.0",
 };
 
-static struct regulator_consumer_supply rx51_vmmc2_supply = {
-	.supply			= "vmmc",
+static struct regulator_consumer_supply rx51_vaux3_supply = {
+	.supply   = "vmmc",
+	.dev_name = "mmci-omap-hs.1",
 };
 
 static struct regulator_consumer_supply rx51_vsim_supply = {
-	.supply			= "vmmc_aux",
+	.supply   = "vmmc_aux",
+	.dev_name = "mmci-omap-hs.1",
+};
+
+static struct regulator_consumer_supply rx51_vmmc2_supplies[] = {
+	/* tlv320aic3x analog supplies */
+	{
+		.supply		= "AVDD",
+		.dev_name	= "2-0018",
+	},
+	{
+		.supply		= "DRVDD",
+		.dev_name	= "2-0018",
+	},
+	/* Keep vmmc as last item. It is not iterated for newer boards */
+	{
+		.supply		= "vmmc",
+		.dev_name	= "mmci-omap-hs.1",
+	},
+};
+
+static struct regulator_consumer_supply rx51_vio_supplies[] = {
+	/* tlv320aic3x digital supplies */
+	{
+		.supply		= "IOVDD",
+		.dev_name	= "2-0018"
+	},
+	{
+		.supply		= "DVDD",
+		.dev_name	= "2-0018"
+	},
+};
+
+#if defined(CONFIG_FB_OMAP2) || defined(CONFIG_FB_OMAP2_MODULE)
+extern struct platform_device rx51_display_device;
+#endif
+
+static struct regulator_consumer_supply rx51_vaux1_consumers[] = {
+#if defined(CONFIG_FB_OMAP2) || defined(CONFIG_FB_OMAP2_MODULE)
+	{
+		.supply	= "vdds_sdi",
+		.dev	= &rx51_display_device.dev,
+	},
+#endif
 };
 
 static struct regulator_init_data rx51_vaux1 = {
@@ -154,6 +378,8 @@ static struct regulator_init_data rx51_vaux1 = {
 		.valid_ops_mask		= REGULATOR_CHANGE_MODE
 					| REGULATOR_CHANGE_STATUS,
 	},
+	.num_consumer_supplies	= ARRAY_SIZE(rx51_vaux1_consumers),
+	.consumer_supplies	= rx51_vaux1_consumers,
 };
 
 static struct regulator_init_data rx51_vaux2 = {
@@ -195,7 +421,7 @@ static struct regulator_init_data rx51_vaux3_mmc = {
 					| REGULATOR_CHANGE_STATUS,
 	},
 	.num_consumer_supplies	= 1,
-	.consumer_supplies	= &rx51_vmmc2_supply,
+	.consumer_supplies	= &rx51_vaux3_supply,
 };
 
 static struct regulator_init_data rx51_vaux4 = {
@@ -227,9 +453,9 @@ static struct regulator_init_data rx51_vmmc1 = {
 
 static struct regulator_init_data rx51_vmmc2 = {
 	.constraints = {
-		.name			= "VMMC2_30",
-		.min_uV			= 1850000,
-		.max_uV			= 3150000,
+		.name			= "V28_A",
+		.min_uV			= 2800000,
+		.max_uV			= 3000000,
 		.apply_uV		= true,
 		.valid_modes_mask	= REGULATOR_MODE_NORMAL
 					| REGULATOR_MODE_STANDBY,
@@ -237,8 +463,8 @@ static struct regulator_init_data rx51_vmmc2 = {
 					| REGULATOR_CHANGE_MODE
 					| REGULATOR_CHANGE_STATUS,
 	},
-	.num_consumer_supplies	= 1,
-	.consumer_supplies	= &rx51_vmmc2_supply,
+	.num_consumer_supplies	= ARRAY_SIZE(rx51_vmmc2_supplies),
+	.consumer_supplies	= rx51_vmmc2_supplies,
 };
 
 static struct regulator_init_data rx51_vsim = {
@@ -268,6 +494,20 @@ static struct regulator_init_data rx51_vdac = {
 	},
 };
 
+static struct regulator_init_data rx51_vio = {
+	.constraints = {
+		.min_uV			= 1800000,
+		.max_uV			= 1800000,
+		.valid_modes_mask	= REGULATOR_MODE_NORMAL
+					| REGULATOR_MODE_STANDBY,
+		.valid_ops_mask		= REGULATOR_CHANGE_VOLTAGE
+					| REGULATOR_CHANGE_MODE
+					| REGULATOR_CHANGE_STATUS,
+	},
+	.num_consumer_supplies	= ARRAY_SIZE(rx51_vio_supplies),
+	.consumer_supplies	= rx51_vio_supplies,
+};
+
 static int rx51_twlgpio_setup(struct device *dev, unsigned gpio, unsigned n)
 {
 	/* FIXME this gpio setup is just a placeholder for now */
@@ -275,12 +515,6 @@ static int rx51_twlgpio_setup(struct device *dev, unsigned gpio, unsigned n)
 	gpio_direction_output(gpio + 6, 0);
 	gpio_request(gpio + 7, "speaker_en");
 	gpio_direction_output(gpio + 7, 1);
-
-	/* set up MMC adapters, linking their regulators to them */
-	twl4030_mmc_init(mmc);
-	rx51_vmmc1_supply.dev = mmc[0].dev;
-	rx51_vmmc2_supply.dev = mmc[1].dev;
-	rx51_vsim_supply.dev = mmc[1].dev;
 
 	return 0;
 }
@@ -303,15 +537,9 @@ static struct twl4030_usb_data rx51_usb_data = {
 
 static struct twl4030_ins sleep_on_seq[] __initdata = {
 /*
- * Turn off VDD1 and VDD2.
+ * Turn off everything
  */
-	{MSG_SINGULAR(DEV_GRP_P1, 0xf, RES_STATE_OFF), 4},
-	{MSG_SINGULAR(DEV_GRP_P1, 0x10, RES_STATE_OFF), 2},
-/*
- * And also turn off the OMAP3 PLLs and the sysclk output.
- */
-	{MSG_SINGULAR(DEV_GRP_P1, 0x7, RES_STATE_OFF), 3},
-	{MSG_SINGULAR(DEV_GRP_P1, 0x17, RES_STATE_OFF), 3},
+	{MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_ALL, 1, 0, RES_STATE_SLEEP), 2},
 };
 
 static struct twl4030_script sleep_on_script __initdata = {
@@ -322,14 +550,9 @@ static struct twl4030_script sleep_on_script __initdata = {
 
 static struct twl4030_ins wakeup_seq[] __initdata = {
 /*
- * Reenable the OMAP3 PLLs.
- * Wakeup VDD1 and VDD2.
- * Reenable sysclk output.
+ * Reenable everything
  */
-	{MSG_SINGULAR(DEV_GRP_P1, 0x7, RES_STATE_ACTIVE), 0x30},
-	{MSG_SINGULAR(DEV_GRP_P1, 0xf, RES_STATE_ACTIVE), 0x30},
-	{MSG_SINGULAR(DEV_GRP_P1, 0x10, RES_STATE_ACTIVE), 0x37},
-	{MSG_SINGULAR(DEV_GRP_P1, 0x19, RES_STATE_ACTIVE), 3},
+	{MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_ALL, 1, 0, RES_STATE_ACTIVE), 2},
 };
 
 static struct twl4030_script wakeup_script __initdata = {
@@ -340,10 +563,9 @@ static struct twl4030_script wakeup_script __initdata = {
 
 static struct twl4030_ins wakeup_p3_seq[] __initdata = {
 /*
- * Wakeup VDD1 (dummy to be able to insert a delay)
- * Enable CLKEN
+ * Reenable everything
  */
-	{MSG_SINGULAR(DEV_GRP_P1, 0x17, RES_STATE_ACTIVE), 3},
+	{MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_ALL, 1, 0, RES_STATE_ACTIVE), 2},
 };
 
 static struct twl4030_script wakeup_p3_script __initdata = {
@@ -364,12 +586,11 @@ static struct twl4030_ins wrst_seq[] __initdata = {
 	{MSG_SINGULAR(DEV_GRP_NULL, RES_RESET, RES_STATE_OFF), 2},
 	{MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_ALL, 0, 1, RES_STATE_ACTIVE),
 		0x13},
-	{MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_PP, 0, 2, RES_STATE_WRST), 0x13},
 	{MSG_BROADCAST(DEV_GRP_NULL, RES_GRP_PP, 0, 3, RES_STATE_OFF), 0x13},
 	{MSG_SINGULAR(DEV_GRP_NULL, RES_VDD1, RES_STATE_WRST), 0x13},
 	{MSG_SINGULAR(DEV_GRP_NULL, RES_VDD2, RES_STATE_WRST), 0x13},
 	{MSG_SINGULAR(DEV_GRP_NULL, RES_VPLL1, RES_STATE_WRST), 0x35},
-	{MSG_SINGULAR(DEV_GRP_P1, RES_HFCLKOUT, RES_STATE_ACTIVE), 2},
+	{MSG_SINGULAR(DEV_GRP_P3, RES_HFCLKOUT, RES_STATE_ACTIVE), 2},
 	{MSG_SINGULAR(DEV_GRP_NULL, RES_RESET, RES_STATE_ACTIVE), 2},
 };
 
@@ -391,22 +612,81 @@ static struct twl4030_script *twl4030_scripts[] __initdata = {
 };
 
 static struct twl4030_resconfig twl4030_rconfig[] __initdata = {
-	{ .resource = RES_VINTANA1, .devgroup = -1, .type = -1, .type2 = 1 },
-	{ .resource = RES_VINTANA2, .devgroup = -1, .type = -1, .type2 = 1 },
-	{ .resource = RES_VINTDIG, .devgroup = -1, .type = -1, .type2 = 1 },
-	{ .resource = RES_VMMC1, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VMMC2, .devgroup = DEV_GRP_NULL, .type = -1,
-	  .type2 = 3},
-	{ .resource = RES_VAUX1, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VAUX2, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VAUX3, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VAUX4, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VPLL2, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VDAC, .devgroup = -1, .type = -1, .type2 = 3},
-	{ .resource = RES_VSIM, .devgroup = DEV_GRP_NULL, .type = -1,
-	  .type2 = 3},
-	{ .resource = RES_CLKEN, .devgroup = DEV_GRP_P3, .type = -1,
-		.type2 = 1 },
+	{ .resource = RES_VDD1, .devgroup = -1,
+	  .type = 1, .type2 = -1, .remap_off = RES_STATE_OFF,
+	  .remap_sleep = RES_STATE_OFF
+	},
+	{ .resource = RES_VDD2, .devgroup = -1,
+	  .type = 1, .type2 = -1, .remap_off = RES_STATE_OFF,
+	  .remap_sleep = RES_STATE_OFF
+	},
+	{ .resource = RES_VPLL1, .devgroup = -1,
+	  .type = 1, .type2 = -1, .remap_off = RES_STATE_OFF,
+	  .remap_sleep = RES_STATE_OFF
+	},
+	{ .resource = RES_VPLL2, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VAUX1, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VAUX2, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VAUX3, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VAUX4, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VMMC1, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VMMC2, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VDAC, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VSIM, .devgroup = -1,
+	  .type = -1, .type2 = 3, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VINTANA1, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = -1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VINTANA2, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VINTDIG, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = -1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_VIO, .devgroup = DEV_GRP_P3,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_CLKEN, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = 1, .type2 = -1 , .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_REGEN, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_NRES_PWRON, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_SYSEN, .devgroup = DEV_GRP_P1 | DEV_GRP_P3,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_HFCLKOUT, .devgroup = DEV_GRP_P3,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_32KCLKOUT, .devgroup = -1,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_RESET, .devgroup = -1,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
+	{ .resource = RES_Main_Ref, .devgroup = -1,
+	  .type = 1, .type2 = -1, .remap_off = -1, .remap_sleep = -1
+	},
 	{ 0, 0},
 };
 
@@ -435,6 +715,7 @@ static struct twl4030_platform_data rx51_twldata __initdata = {
 	.vmmc1			= &rx51_vmmc1,
 	.vsim			= &rx51_vsim,
 	.vdac			= &rx51_vdac,
+	.vio			= &rx51_vio,
 };
 
 static struct i2c_board_info __initdata rx51_peripherals_i2c_board_info_1[] = {
@@ -446,18 +727,27 @@ static struct i2c_board_info __initdata rx51_peripherals_i2c_board_info_1[] = {
 	},
 };
 
+static struct i2c_board_info __initdata rx51_peripherals_i2c_board_info_2[] = {
+	{
+		I2C_BOARD_INFO("tlv320aic3x", 0x18),
+	},
+};
+
 static int __init rx51_i2c_init(void)
 {
 	if ((system_rev >= SYSTEM_REV_S_USES_VAUX3 && system_rev < 0x100) ||
-	    system_rev >= SYSTEM_REV_B_USES_VAUX3)
+	    system_rev >= SYSTEM_REV_B_USES_VAUX3) {
 		rx51_twldata.vaux3 = &rx51_vaux3_mmc;
-	else {
+		/* Only older boards use VMMC2 for internal MMC */
+		rx51_vmmc2.num_consumer_supplies--;
+	} else {
 		rx51_twldata.vaux3 = &rx51_vaux3_cam;
-		rx51_twldata.vmmc2 = &rx51_vmmc2;
 	}
+	rx51_twldata.vmmc2 = &rx51_vmmc2;
 	omap_register_i2c_bus(1, 2200, rx51_peripherals_i2c_board_info_1,
-			ARRAY_SIZE(rx51_peripherals_i2c_board_info_1));
-	omap_register_i2c_bus(2, 100, NULL, 0);
+			      ARRAY_SIZE(rx51_peripherals_i2c_board_info_1));
+	omap_register_i2c_bus(2, 100, rx51_peripherals_i2c_board_info_2,
+			      ARRAY_SIZE(rx51_peripherals_i2c_board_info_2));
 	omap_register_i2c_bus(3, 400, NULL, 0);
 	return 0;
 }
@@ -532,9 +822,9 @@ static struct omap_smc91x_platform_data board_smc91x_data = {
 
 static void __init board_smc91x_init(void)
 {
-	omap_cfg_reg(U8_34XX_GPIO54_DOWN);
-	omap_cfg_reg(G25_34XX_GPIO86_OUT);
-	omap_cfg_reg(H19_34XX_GPIO164_OUT);
+	omap_mux_init_gpio(54, OMAP_PIN_INPUT_PULLDOWN);
+	omap_mux_init_gpio(86, OMAP_PIN_OUTPUT);
+	omap_mux_init_gpio(164, OMAP_PIN_OUTPUT);
 
 	gpmc_smc91x_init(&board_smc91x_data);
 }
@@ -547,10 +837,65 @@ static inline void board_smc91x_init(void)
 
 #endif
 
+static void rx51_wl1251_set_power(bool enable)
+{
+	gpio_set_value(RX51_WL1251_POWER_GPIO, enable);
+}
+
+static void __init rx51_init_wl1251(void)
+{
+	int irq, ret;
+
+	ret = gpio_request(RX51_WL1251_POWER_GPIO, "wl1251 power");
+	if (ret < 0)
+		goto error;
+
+	ret = gpio_direction_output(RX51_WL1251_POWER_GPIO, 0);
+	if (ret < 0)
+		goto err_power;
+
+	ret = gpio_request(RX51_WL1251_IRQ_GPIO, "wl1251 irq");
+	if (ret < 0)
+		goto err_power;
+
+	ret = gpio_direction_input(RX51_WL1251_IRQ_GPIO);
+	if (ret < 0)
+		goto err_irq;
+
+	irq = gpio_to_irq(RX51_WL1251_IRQ_GPIO);
+	if (irq < 0)
+		goto err_irq;
+
+	wl1251_pdata.set_power = rx51_wl1251_set_power;
+	rx51_peripherals_spi_board_info[RX51_SPI_WL1251].irq = irq;
+
+	return;
+
+err_irq:
+	gpio_free(RX51_WL1251_IRQ_GPIO);
+
+err_power:
+	gpio_free(RX51_WL1251_POWER_GPIO);
+
+error:
+	printk(KERN_ERR "wl1251 board initialisation failed\n");
+	wl1251_pdata.set_power = NULL;
+
+	/*
+	 * Now rx51_peripherals_spi_board_info[1].irq is zero and
+	 * set_power is null, and wl1251_probe() will fail.
+	 */
+}
+
 void __init rx51_peripherals_init(void)
 {
 	rx51_i2c_init();
 	board_onenand_init();
 	board_smc91x_init();
+	rx51_add_gpio_keys();
+	rx51_init_wl1251();
+	spi_register_board_info(rx51_peripherals_spi_board_info,
+				ARRAY_SIZE(rx51_peripherals_spi_board_info));
+	omap2_hsmmc_init(mmc);
 }
 

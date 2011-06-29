@@ -17,9 +17,11 @@
  * USA.
  */
 
+#include <linux/slab.h>
+
 #include "usbip_common.h"
 #include "stub.h"
-#include "../../usb/core/hcd.h"
+#include <linux/usb/hcd.h>
 
 
 static int is_clear_halt_cmd(struct urb *urb)
@@ -168,23 +170,33 @@ static int tweak_set_configuration_cmd(struct urb *urb)
 
 static int tweak_reset_device_cmd(struct urb *urb)
 {
-	struct stub_priv *priv = (struct stub_priv *) urb->context;
-	struct stub_device *sdev = priv->sdev;
+	struct usb_ctrlrequest *req;
+	__u16 value;
+	__u16 index;
+	int ret;
 
-	usbip_uinfo("reset_device %s\n", dev_name(&urb->dev->dev));
+	req = (struct usb_ctrlrequest *) urb->setup_packet;
+	value = le16_to_cpu(req->wValue);
+	index = le16_to_cpu(req->wIndex);
 
-	/*
-	 * usb_lock_device_for_reset caused a deadlock: it causes the driver
-	 * to unbind. In the shutdown the rx thread is signalled to shut down
-	 * but this thread is pending in the usb_lock_device_for_reset.
-	 *
-	 * Instead queue the reset.
-	 *
-	 * Unfortunatly an existing usbip connection will be dropped due to
-	 * driver unbinding.
-	 */
-	usb_queue_reset_device(sdev->interface);
-	return 0;
+	usbip_uinfo("reset_device (port %d) to %s\n", index,
+						dev_name(&urb->dev->dev));
+
+	/* all interfaces should be owned by usbip driver, so just reset it.  */
+	ret = usb_lock_device_for_reset(urb->dev, NULL);
+	if (ret < 0) {
+		dev_err(&urb->dev->dev, "lock for reset\n");
+		return ret;
+	}
+
+	/* try to reset the device */
+	ret = usb_reset_device(urb->dev);
+	if (ret < 0)
+		dev_err(&urb->dev->dev, "device reset\n");
+
+	usb_unlock_device(urb->dev);
+
+	return ret;
 }
 
 /*
@@ -490,13 +502,13 @@ static void stub_recv_cmd_submit(struct stub_device *sdev,
 	}
 
 	/* set priv->urb->setup_packet */
-	priv->urb->setup_packet = kzalloc(8, GFP_KERNEL);
+	priv->urb->setup_packet = kmemdup(&pdu->u.cmd_submit.setup, 8,
+					  GFP_KERNEL);
 	if (!priv->urb->setup_packet) {
 		dev_err(&sdev->interface->dev, "allocate setup_packet\n");
 		usbip_event_add(ud, SDEV_EVENT_ERROR_MALLOC);
 		return;
 	}
-	memcpy(priv->urb->setup_packet, &pdu->u.cmd_submit.setup, 8);
 
 	/* set other members from the base header of pdu */
 	priv->urb->context                = (void *) priv;

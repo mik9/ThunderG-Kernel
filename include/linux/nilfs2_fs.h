@@ -151,6 +151,9 @@ struct nilfs_super_root {
 #define NILFS_MOUNT_BARRIER		0x1000  /* Use block barriers */
 #define NILFS_MOUNT_STRICT_ORDER	0x2000  /* Apply strict in-order
 						   semantics also for data */
+#define NILFS_MOUNT_NORECOVERY		0x4000  /* Disable write access during
+						   mount-time recovery */
+#define NILFS_MOUNT_DISCARD		0x8000  /* Issue DISCARD requests */
 
 
 /**
@@ -196,16 +199,15 @@ struct nilfs_super_block {
 	__le32	s_creator_os;		/* OS */
 	__le16	s_def_resuid;		/* Default uid for reserved blocks */
 	__le16	s_def_resgid;		/* Default gid for reserved blocks */
-	__le32	s_first_ino; 		/* First non-reserved inode */
+	__le32	s_first_ino;		/* First non-reserved inode */
 
-	__le16  s_inode_size; 		/* Size of an inode */
+	__le16  s_inode_size;		/* Size of an inode */
 	__le16  s_dat_entry_size;       /* Size of a dat entry */
 	__le16  s_checkpoint_size;      /* Size of a checkpoint */
 	__le16	s_segment_usage_size;	/* Size of a segment usage */
 
 	__u8	s_uuid[16];		/* 128-bit uuid for volume */
-	char	s_volume_name[16]; 	/* volume name */
-	char	s_last_mounted[64]; 	/* directory where last mounted */
+	char	s_volume_name[80];	/* volume name */
 
 	__le32  s_c_interval;           /* Commit interval of segment */
 	__le32  s_c_block_max;          /* Threshold of data amount for
@@ -374,6 +376,7 @@ union nilfs_binfo {
  * @ss_nfinfo: number of finfo structures
  * @ss_sumbytes: total size of segment summary in bytes
  * @ss_pad: padding
+ * @ss_cno: checkpoint number
  */
 struct nilfs_segment_summary {
 	__le32 ss_datasum;
@@ -388,6 +391,7 @@ struct nilfs_segment_summary {
 	__le32 ss_nfinfo;
 	__le32 ss_sumbytes;
 	__le32 ss_pad;
+	__le64 ss_cno;
 	/* array of finfo structures */
 };
 
@@ -403,6 +407,28 @@ struct nilfs_segment_summary {
 #define NILFS_SS_GC     0x0010  /* segment written for cleaner operation */
 
 /**
+ * struct nilfs_btree_node - B-tree node
+ * @bn_flags: flags
+ * @bn_level: level
+ * @bn_nchildren: number of children
+ * @bn_pad: padding
+ */
+struct nilfs_btree_node {
+	__u8 bn_flags;
+	__u8 bn_level;
+	__le16 bn_nchildren;
+	__le32 bn_pad;
+};
+
+/* flags */
+#define NILFS_BTREE_NODE_ROOT   0x01
+
+/* level */
+#define NILFS_BTREE_LEVEL_DATA          0
+#define NILFS_BTREE_LEVEL_NODE_MIN      (NILFS_BTREE_LEVEL_DATA + 1)
+#define NILFS_BTREE_LEVEL_MAX           14
+
+/**
  * struct nilfs_palloc_group_desc - block group descriptor
  * @pg_nfrees: number of free entries in block group
  */
@@ -412,10 +438,10 @@ struct nilfs_palloc_group_desc {
 
 /**
  * struct nilfs_dat_entry - disk address translation entry
- * @dt_blocknr: block number
- * @dt_start: start checkpoint number
- * @dt_end: end checkpoint number
- * @dt_rsv: reserved for future use
+ * @de_blocknr: block number
+ * @de_start: start checkpoint number
+ * @de_end: end checkpoint number
+ * @de_rsv: reserved for future use
  */
 struct nilfs_dat_entry {
 	__le64 de_blocknr;

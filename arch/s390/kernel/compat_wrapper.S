@@ -547,7 +547,7 @@ sys32_setdomainname_wrapper:
 	.globl	sys32_newuname_wrapper
 sys32_newuname_wrapper:
 	llgtr	%r2,%r2			# struct new_utsname *
-	jg	sys_s390_newuname	# branch to system call
+	jg	sys_newuname		# branch to system call
 
 	.globl	compat_sys_adjtimex_wrapper
 compat_sys_adjtimex_wrapper:
@@ -688,8 +688,6 @@ sys32_getsid_wrapper:
 sys32_fdatasync_wrapper:
 	llgfr	%r2,%r2			# unsigned int
 	jg	sys_fdatasync		# branch to system call
-
-#sys32_sysctl_wrapper			# tbd
 
 	.globl	sys32_mlock_wrapper
 sys32_mlock_wrapper:
@@ -1087,8 +1085,8 @@ sys32_stime_wrapper:
 
 	.globl	sys32_sysctl_wrapper
 sys32_sysctl_wrapper:
-	llgtr	%r2,%r2 		# struct __sysctl_args32 *
-	jg	sys32_sysctl
+	llgtr	%r2,%r2 		# struct compat_sysctl_args *
+	jg	compat_sys_sysctl
 
 	.globl	sys32_fstat64_wrapper
 sys32_fstat64_wrapper:

@@ -19,8 +19,7 @@
 #include <asm/inst.h>
 #include <asm/elf.h>
 #include <asm/bugs.h>
-
-#include "uasm.h"
+#include <asm/uasm.h>
 
 enum fields {
 	RS = 0x001,
@@ -32,7 +31,8 @@ enum fields {
 	BIMM = 0x040,
 	JIMM = 0x080,
 	FUNC = 0x100,
-	SET = 0x200
+	SET = 0x200,
+	SCIMM = 0x400
 };
 
 #define OP_MASK		0x3f
@@ -53,6 +53,8 @@ enum fields {
 #define FUNC_SH		0
 #define SET_MASK	0x7
 #define SET_SH		0
+#define SCIMM_MASK	0xfffff
+#define SCIMM_SH	6
 
 enum opcode {
 	insn_invalid,
@@ -60,11 +62,12 @@ enum opcode {
 	insn_beql, insn_bgez, insn_bgezl, insn_bltz, insn_bltzl,
 	insn_bne, insn_cache, insn_daddu, insn_daddiu, insn_dmfc0,
 	insn_dmtc0, insn_dsll, insn_dsll32, insn_dsra, insn_dsrl,
-	insn_dsrl32, insn_dsubu, insn_eret, insn_j, insn_jal, insn_jr,
-	insn_ld, insn_ll, insn_lld, insn_lui, insn_lw, insn_mfc0,
+	insn_dsrl32, insn_drotr, insn_dsubu, insn_eret, insn_j, insn_jal,
+	insn_jr, insn_ld, insn_ll, insn_lld, insn_lui, insn_lw, insn_mfc0,
 	insn_mtc0, insn_or, insn_ori, insn_pref, insn_rfe, insn_sc, insn_scd,
-	insn_sd, insn_sll, insn_sra, insn_srl, insn_subu, insn_sw,
-	insn_tlbp, insn_tlbwi, insn_tlbwr, insn_xor, insn_xori
+	insn_sd, insn_sll, insn_sra, insn_srl, insn_rotr, insn_subu, insn_sw,
+	insn_tlbp, insn_tlbr, insn_tlbwi, insn_tlbwr, insn_xor, insn_xori,
+	insn_dins, insn_syscall
 };
 
 struct insn {
@@ -104,6 +107,7 @@ static struct insn insn_table[] __cpuinitdata = {
 	{ insn_dsra, M(spec_op, 0, 0, 0, 0, dsra_op), RT | RD | RE },
 	{ insn_dsrl, M(spec_op, 0, 0, 0, 0, dsrl_op), RT | RD | RE },
 	{ insn_dsrl32, M(spec_op, 0, 0, 0, 0, dsrl32_op), RT | RD | RE },
+	{ insn_drotr, M(spec_op, 1, 0, 0, 0, dsrl_op), RT | RD | RE },
 	{ insn_dsubu, M(spec_op, 0, 0, 0, 0, dsubu_op), RS | RT | RD },
 	{ insn_eret,  M(cop0_op, cop_op, 0, 0, 0, eret_op),  0 },
 	{ insn_j,  M(j_op, 0, 0, 0, 0, 0),  JIMM },
@@ -126,13 +130,17 @@ static struct insn insn_table[] __cpuinitdata = {
 	{ insn_sll,  M(spec_op, 0, 0, 0, 0, sll_op),  RT | RD | RE },
 	{ insn_sra,  M(spec_op, 0, 0, 0, 0, sra_op),  RT | RD | RE },
 	{ insn_srl,  M(spec_op, 0, 0, 0, 0, srl_op),  RT | RD | RE },
+	{ insn_rotr,  M(spec_op, 1, 0, 0, 0, srl_op),  RT | RD | RE },
 	{ insn_subu,  M(spec_op, 0, 0, 0, 0, subu_op),  RS | RT | RD },
 	{ insn_sw,  M(sw_op, 0, 0, 0, 0, 0),  RS | RT | SIMM },
 	{ insn_tlbp,  M(cop0_op, cop_op, 0, 0, 0, tlbp_op),  0 },
+	{ insn_tlbr,  M(cop0_op, cop_op, 0, 0, 0, tlbr_op),  0 },
 	{ insn_tlbwi,  M(cop0_op, cop_op, 0, 0, 0, tlbwi_op),  0 },
 	{ insn_tlbwr,  M(cop0_op, cop_op, 0, 0, 0, tlbwr_op),  0 },
 	{ insn_xor,  M(spec_op, 0, 0, 0, 0, xor_op),  RS | RT | RD },
 	{ insn_xori,  M(xori_op, 0, 0, 0, 0, 0),  RS | RT | UIMM },
+	{ insn_dins, M(spec3_op, 0, 0, 0, 0, dins_op), RS | RT | RD | RE },
+	{ insn_syscall, M(spec_op, 0, 0, 0, 0, syscall_op), SCIMM},
 	{ insn_invalid, 0, 0 }
 };
 
@@ -205,6 +213,14 @@ static inline __cpuinit u32 build_jimm(u32 arg)
 	return (arg >> 2) & JIMM_MASK;
 }
 
+static inline __cpuinit u32 build_scimm(u32 arg)
+{
+	if (arg & ~SCIMM_MASK)
+		printk(KERN_WARNING "Micro-assembler field overflow\n");
+
+	return (arg & SCIMM_MASK) << SCIMM_SH;
+}
+
 static inline __cpuinit u32 build_func(u32 arg)
 {
 	if (arg & ~FUNC_MASK)
@@ -263,6 +279,8 @@ static void __cpuinit build_insn(u32 **buf, enum opcode opc, ...)
 		op |= build_func(va_arg(ap, u32));
 	if (ip->fields & SET)
 		op |= build_set(va_arg(ap, u32));
+	if (ip->fields & SCIMM)
+		op |= build_scimm(va_arg(ap, u32));
 	va_end(ap);
 
 	**buf = op;
@@ -303,6 +321,12 @@ Ip_u2s3u1(op)						\
 Ip_u2u1s3(op)						\
 {							\
 	build_insn(buf, insn##op, b, a, c);		\
+}
+
+#define I_u2u1msbu3(op)					\
+Ip_u2u1msbu3(op)					\
+{							\
+	build_insn(buf, insn##op, b, a, c+d-1, c);	\
 }
 
 #define I_u1u2(op)					\
@@ -350,6 +374,7 @@ I_u2u1u3(_dsll32)
 I_u2u1u3(_dsra)
 I_u2u1u3(_dsrl)
 I_u2u1u3(_dsrl32)
+I_u2u1u3(_drotr)
 I_u3u1u2(_dsubu)
 I_0(_eret)
 I_u1(_j)
@@ -372,13 +397,17 @@ I_u2s3u1(_sd)
 I_u2u1u3(_sll)
 I_u2u1u3(_sra)
 I_u2u1u3(_srl)
+I_u2u1u3(_rotr)
 I_u3u1u2(_subu)
 I_u2s3u1(_sw)
 I_0(_tlbp)
+I_0(_tlbr)
 I_0(_tlbwi)
 I_0(_tlbwr)
 I_u3u1u2(_xor)
 I_u2u1u3(_xori)
+I_u2u1msbu3(_dins);
+I_u1(_syscall);
 
 /* Handle labels. */
 void __cpuinit uasm_build_label(struct uasm_label **lab, u32 *addr, int lid)

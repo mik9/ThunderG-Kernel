@@ -97,9 +97,15 @@
  * stack during a system call.  Note that sizeof(struct pt_regs)
  * has to be a multiple of 8.
  */
+#ifndef __KERNEL__
 struct pt_regs {
 	long uregs[18];
 };
+#else /* __KERNEL__ */
+struct pt_regs {
+	unsigned long uregs[18];
+};
+#endif /* __KERNEL__ */
 
 #define ARM_cpsr	uregs[16]
 #define ARM_pc		uregs[15]
@@ -121,6 +127,8 @@ struct pt_regs {
 #define ARM_ORIG_r0	uregs[17]
 
 #ifdef __KERNEL__
+
+#define arch_has_single_step()	(1)
 
 #define user_mode(regs)	\
 	(((regs)->ARM_cpsr & 0xf) == 0)
@@ -168,6 +176,7 @@ static inline int valid_user_regs(struct pt_regs *regs)
 	 * Force CPSR to something logical...
 	 */
 	regs->ARM_cpsr &= PSR_f | PSR_s | PSR_x | PSR_T_BIT | MODE32_BIT;
+
 	if (!(elf_hwcap & HWCAP_26BIT))
 		regs->ARM_cpsr |= USR_MODE;
 

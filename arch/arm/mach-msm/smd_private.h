@@ -19,24 +19,21 @@
 #include <linux/types.h>
 #include <linux/spinlock.h>
 
-struct smem_heap_info
-{
+struct smem_heap_info {
 	unsigned initialized;
 	unsigned free_offset;
 	unsigned heap_remaining;
 	unsigned reserved;
 };
 
-struct smem_heap_entry
-{
+struct smem_heap_entry {
 	unsigned allocated;
 	unsigned offset;
 	unsigned size;
 	unsigned reserved;
 };
 
-struct smem_proc_comm
-{
+struct smem_proc_comm {
 	unsigned command;
 	unsigned status;
 	unsigned data1;
@@ -51,11 +48,11 @@ struct smem_proc_comm
 #define VERSION_MODEM_SBL 7
 #define VERSION_APPS      8
 #define VERSION_MODEM     9
+#define VERSION_DSPS      10
 
 #define SMD_HEAP_SIZE 512
 
-struct smem_shared
-{
+struct smem_shared {
 	struct smem_proc_comm proc_comm[4];
 	unsigned version[32];
 	struct smem_heap_info heap_info;
@@ -143,6 +140,8 @@ enum {
 #define SMSM_MODEM_WAIT        0x02000000
 #define SMSM_MODEM_BREAK       0x04000000
 #define SMSM_MODEM_CONTINUE    0x08000000
+#define SMSM_SYSTEM_REBOOT_USR 0x20000000
+#define SMSM_SYSTEM_PWRDWN_USR 0x40000000
 #define SMSM_UNKNOWN           0x80000000
 
 #define SMSM_WKUP_REASON_RPC	0x00000001
@@ -187,6 +186,7 @@ enum {
 	SMEM_DIAG_ERR_MESSAGE,
 	SMEM_SPINLOCK_ARRAY,
 	SMEM_MEMORY_BARRIER_LOCATION,
+	SMEM_FIXED_ITEM_LAST = SMEM_MEMORY_BARRIER_LOCATION,
 
 	/* dynamic items */
 	SMEM_AARM_PARTITION_TABLE,
@@ -315,7 +315,7 @@ struct smd_half_channel {
 	unsigned char fHEAD;
 	unsigned char fTAIL;
 	unsigned char fSTATE;
-	unsigned char fUNUSED;
+	unsigned char fBLOCKREADINTR;
 	unsigned tail;
 	unsigned head;
 };

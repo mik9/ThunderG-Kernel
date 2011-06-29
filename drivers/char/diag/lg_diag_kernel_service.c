@@ -651,10 +651,6 @@ static int diagchar_write( const char *buf, size_t count)
 		driver->usb_write_ptr_svc = (struct diag_request *)
 			(diagmem_alloc(driver, sizeof(struct diag_request),
 				POOL_TYPE_USB_STRUCT));
-
-		if (!driver->usb_write_ptr_svc)
-			return 0;
-		
 		/* LGE_CHANGE
 		 * protect to fail to allocation, for WBT
 		 * 2010-06-14, taehung.kim@lge.com

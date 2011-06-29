@@ -232,7 +232,6 @@ struct bnx2i_conn {
 	struct iscsi_cls_conn *cls_conn;
 	struct bnx2i_hba *hba;
 	struct completion cmd_cleanup_cmpl;
-	int is_bound;
 
 	u32 iscsi_conn_cid;
 #define BNX2I_CID_RESERVED	0x5AFF
@@ -363,6 +362,7 @@ struct bnx2i_hba {
 	u32 num_ccell;
 
 	int ofld_conns_active;
+	wait_queue_head_t eh_wait;
 
 	int max_active_conns;
 	struct iscsi_cid_queue cid_que;
@@ -382,6 +382,7 @@ struct bnx2i_hba {
 	spinlock_t lock;	/* protects hba structure access */
 	struct mutex net_dev_lock;/* sync net device access */
 
+	int hba_shutdown_tmo;
 	/*
 	 * PCI related info.
 	 */
@@ -685,6 +686,7 @@ extern unsigned int error_mask1, error_mask2;
 extern u64 iscsi_error_mask;
 extern unsigned int en_tcp_dack;
 extern unsigned int event_coal_div;
+extern unsigned int event_coal_min;
 
 extern struct scsi_transport_template *bnx2i_scsi_xport_template;
 extern struct iscsi_transport bnx2i_iscsi_transport;

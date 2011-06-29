@@ -11,6 +11,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/skbuff.h>
@@ -48,7 +49,7 @@ static int tcf_simp(struct sk_buff *skb, struct tc_action *a, struct tcf_result 
 	 * Example if this was the 3rd packet and the string was "hello"
 	 * then it would look like "hello_3" (without quotes)
 	 **/
-	printk("simple: %s_%d\n",
+	pr_info("simple: %s_%d\n",
 	       (char *)d->tcfd_defdata, d->tcf_bstats.packets);
 	spin_unlock(&d->tcf_lock);
 	return d->tcf_action;
@@ -163,14 +164,13 @@ static inline int tcf_simp_dump(struct sk_buff *skb, struct tc_action *a,
 {
 	unsigned char *b = skb_tail_pointer(skb);
 	struct tcf_defact *d = a->priv;
-	struct tc_defact opt = {
-		.index   = d->tcf_index,
-		.refcnt  = d->tcf_refcnt - ref,
-		.bindcnt = d->tcf_bindcnt - bind,
-		.action  = d->tcf_action,
-	};
+	struct tc_defact opt;
 	struct tcf_t t;
 
+	opt.index = d->tcf_index;
+	opt.refcnt = d->tcf_refcnt - ref;
+	opt.bindcnt = d->tcf_bindcnt - bind;
+	opt.action = d->tcf_action;
 	NLA_PUT(skb, TCA_DEF_PARMS, sizeof(opt), &opt);
 	NLA_PUT_STRING(skb, TCA_DEF_DATA, d->tcfd_defdata);
 	t.install = jiffies_to_clock_t(jiffies - d->tcf_tm.install);
@@ -205,7 +205,7 @@ static int __init simp_init_module(void)
 {
 	int ret = tcf_register_action(&act_simp_ops);
 	if (!ret)
-		printk("Simple TC action Loaded\n");
+		pr_info("Simple TC action Loaded\n");
 	return ret;
 }
 

@@ -28,6 +28,8 @@
 #define STACK_TOP_MAX	TASK_SIZE
 #endif
 
+extern unsigned int boot_reason;
+
 union debug_insn {
 	u32	arm;
 	u16	thumb;
@@ -91,11 +93,10 @@ extern void release_thread(struct task_struct *);
 
 unsigned long get_wchan(struct task_struct *p);
 
+#if __LINUX_ARM_ARCH__ == 6
+#define cpu_relax()			smp_mb()
+#else
 #define cpu_relax()			barrier()
-
-#if defined(CONFIG_CPU_32v6K) || __LINUX_ARM_ARCH__ >= 7
-#define sev() __asm__("sev")
-#define wfe() __asm__("wfe")
 #endif
 
 /*

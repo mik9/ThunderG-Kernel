@@ -51,12 +51,14 @@
 #include "xfs_quota.h"
 #include "xfs_inode_item.h"
 #include "xfs_export.h"
+#include "xfs_trace.h"
 
 #include <linux/capability.h>
 #include <linux/dcache.h>
 #include <linux/mount.h>
 #include <linux/namei.h>
 #include <linux/pagemap.h>
+#include <linux/slab.h>
 #include <linux/exportfs.h>
 
 /*
@@ -446,12 +448,12 @@ xfs_attrlist_by_handle(
 int
 xfs_attrmulti_attr_get(
 	struct inode		*inode,
-	char			*name,
-	char			__user *ubuf,
+	unsigned char		*name,
+	unsigned char		__user *ubuf,
 	__uint32_t		*len,
 	__uint32_t		flags)
 {
-	char			*kbuf;
+	unsigned char		*kbuf;
 	int			error = EFAULT;
 
 	if (*len > XATTR_SIZE_MAX)
@@ -475,12 +477,12 @@ xfs_attrmulti_attr_get(
 int
 xfs_attrmulti_attr_set(
 	struct inode		*inode,
-	char			*name,
-	const char		__user *ubuf,
+	unsigned char		*name,
+	const unsigned char	__user *ubuf,
 	__uint32_t		len,
 	__uint32_t		flags)
 {
-	char			*kbuf;
+	unsigned char		*kbuf;
 	int			error = EFAULT;
 
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
@@ -500,7 +502,7 @@ xfs_attrmulti_attr_set(
 int
 xfs_attrmulti_attr_remove(
 	struct inode		*inode,
-	char			*name,
+	unsigned char		*name,
 	__uint32_t		flags)
 {
 	if (IS_IMMUTABLE(inode) || IS_APPEND(inode))
@@ -518,12 +520,16 @@ xfs_attrmulti_by_handle(
 	xfs_fsop_attrmulti_handlereq_t am_hreq;
 	struct dentry		*dentry;
 	unsigned int		i, size;
-	char			*attr_name;
+	unsigned char		*attr_name;
 
 	if (!capable(CAP_SYS_ADMIN))
 		return -XFS_ERROR(EPERM);
 	if (copy_from_user(&am_hreq, arg, sizeof(xfs_fsop_attrmulti_handlereq_t)))
 		return -XFS_ERROR(EFAULT);
+
+	/* overflow check */
+	if (am_hreq.opcount >= INT_MAX / sizeof(xfs_attr_multiop_t))
+		return -E2BIG;
 
 	dentry = xfs_handlereq_to_dentry(parfilp, &am_hreq.hreq);
 	if (IS_ERR(dentry))
@@ -546,7 +552,7 @@ xfs_attrmulti_by_handle(
 
 	error = 0;
 	for (i = 0; i < am_hreq.opcount; i++) {
-		ops[i].am_error = strncpy_from_user(attr_name,
+		ops[i].am_error = strncpy_from_user((char *)attr_name,
 				ops[i].am_attrname, MAXNAMELEN);
 		if (ops[i].am_error == 0 || ops[i].am_error == MAXNAMELEN)
 			error = -ERANGE;
@@ -697,19 +703,14 @@ xfs_ioc_fsgeometry_v1(
 	xfs_mount_t		*mp,
 	void			__user *arg)
 {
-	xfs_fsop_geom_t         fsgeo;
+	xfs_fsop_geom_v1_t	fsgeo;
 	int			error;
 
-	error = xfs_fs_geometry(mp, &fsgeo, 3);
+	error = xfs_fs_geometry(mp, (xfs_fsop_geom_t *)&fsgeo, 3);
 	if (error)
 		return -error;
 
-	/*
-	 * Caller should have passed an argument of type
-	 * xfs_fsop_geom_v1_t.  This is a proper subset of the
-	 * xfs_fsop_geom_t that xfs_fs_geometry() fills in.
-	 */
-	if (copy_to_user(arg, &fsgeo, sizeof(xfs_fsop_geom_v1_t)))
+	if (copy_to_user(arg, &fsgeo, sizeof(fsgeo)))
 		return -XFS_ERROR(EFAULT);
 	return 0;
 }
@@ -1435,6 +1436,9 @@ xfs_file_ioctl(
 
 		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
+
+		if (mp->m_flags & XFS_MOUNT_RDONLY)
+			return -XFS_ERROR(EROFS);
 
 		if (copy_from_user(&inout, arg, sizeof(inout)))
 			return -XFS_ERROR(EFAULT);

@@ -59,11 +59,17 @@ enum ieee80211_internal_key_flags {
 	KEY_FLAG_TODO_DEFMGMTKEY	= BIT(6),
 };
 
+enum ieee80211_internal_tkip_state {
+	TKIP_STATE_NOT_INIT,
+	TKIP_STATE_PHASE1_DONE,
+	TKIP_STATE_PHASE1_HW_UPLOADED,
+};
+
 struct tkip_ctx {
 	u32 iv32;
 	u16 iv16;
 	u16 p1k[5];
-	int initialized;
+	enum ieee80211_internal_tkip_state state;
 };
 
 struct ieee80211_key {
@@ -118,18 +124,6 @@ struct ieee80211_key {
 	struct {
 		struct dentry *stalink;
 		struct dentry *dir;
-		struct dentry *keylen;
-		struct dentry *flags;
-		struct dentry *keyidx;
-		struct dentry *hw_key_idx;
-		struct dentry *tx_rx_count;
-		struct dentry *algorithm;
-		struct dentry *tx_spec;
-		struct dentry *rx_spec;
-		struct dentry *replays;
-		struct dentry *icverrors;
-		struct dentry *key;
-		struct dentry *ifindex;
 		int cnt;
 	} debugfs;
 #endif

@@ -53,6 +53,7 @@
 #include <linux/scatterlist.h>
 #include <linux/workqueue.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
 #include <asm/uaccess.h>
 #include <asm/system.h>
 #include <asm/byteorder.h>
@@ -62,8 +63,10 @@
 #include <media/v4l2-common.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-device.h>
+#include <media/v4l2-fh.h>
 #include <media/tuner.h>
 #include <media/cx2341x.h>
+#include <media/ir-kbd-i2c.h>
 
 #include <linux/ivtv.h>
 
@@ -113,6 +116,9 @@
 #define IVTV_REG_HW_BLOCKS 		(0x9054)
 #define IVTV_REG_VPU 			(0x9058)
 #define IVTV_REG_APU 			(0xA064)
+
+/* Other registers */
+#define IVTV_REG_DEC_LINE_FIELD		(0x28C0)
 
 /* debugging */
 extern int ivtv_debug;
@@ -176,12 +182,16 @@ extern int ivtv_debug;
 
 #define IVTV_MAX_PGM_INDEX (400)
 
+/* Default I2C SCL period in microseconds */
+#define IVTV_DEFAULT_I2C_CLOCK_PERIOD	20
+
 struct ivtv_options {
 	int kilobytes[IVTV_MAX_STREAMS];        /* size in kilobytes of each stream */
 	int cardtype;				/* force card type on load */
 	int tuner;				/* set tuner on load */
 	int radio;				/* enable/disable radio */
 	int newi2c;				/* new I2C algorithm */
+	int i2c_clock_period;			/* period of SCL for I2C bus */
 };
 
 /* ivtv-specific mailbox template */
@@ -366,12 +376,18 @@ struct ivtv_stream {
 };
 
 struct ivtv_open_id {
+	struct v4l2_fh fh;
 	u32 open_id;                    /* unique ID for this file descriptor */
 	int type;                       /* stream type */
 	int yuv_frames;                 /* 1: started OUT_UDMA_YUV output mode */
 	enum v4l2_priority prio;        /* priority */
 	struct ivtv *itv;
 };
+
+static inline struct ivtv_open_id *fh2id(struct v4l2_fh *fh)
+{
+	return container_of(fh, struct ivtv_open_id, fh);
+}
 
 struct yuv_frame_info
 {
@@ -677,6 +693,7 @@ struct ivtv {
 	int i2c_state;                  /* i2c bit state */
 	struct mutex i2c_bus_lock;      /* lock i2c bus */
 
+	struct IR_i2c_init_data ir_i2c_init_data;
 
 	/* Program Index information */
 	u32 pgm_info_offset;            /* start of pgm info in encoder memory */

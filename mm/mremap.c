@@ -9,7 +9,6 @@
 
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
-#include <linux/slab.h>
 #include <linux/shm.h>
 #include <linux/ksm.h>
 #include <linux/mman.h>
@@ -92,7 +91,9 @@ static void move_ptes(struct vm_area_struct *vma, pmd_t *old_pmd,
 		 */
 		mapping = vma->vm_file->f_mapping;
 		spin_lock(&mapping->i_mmap_lock);
-		new_vma->vm_truncate_count = 0;
+		if (new_vma->vm_truncate_count &&
+		    new_vma->vm_truncate_count != vma->vm_truncate_count)
+			new_vma->vm_truncate_count = 0;
 	}
 
 	/*
@@ -275,22 +276,15 @@ static struct vm_area_struct *vma_to_resize(unsigned long addr,
 	if (old_len > vma->vm_end - addr)
 		goto Efault;
 
-	/* Need to be careful about a growing mapping */
-	if (new_len > old_len) {
-		unsigned long pgoff;
-
-		if (vma->vm_flags & (VM_DONTEXPAND | VM_PFNMAP))
+	if (vma->vm_flags & (VM_DONTEXPAND | VM_PFNMAP)) {
+		if (new_len > old_len)
 			goto Efault;
-		pgoff = (addr - vma->vm_start) >> PAGE_SHIFT;
-		pgoff += vma->vm_pgoff;
-		if (pgoff + (new_len >> PAGE_SHIFT) < pgoff)
-			goto Einval;
 	}
 
 	if (vma->vm_flags & VM_LOCKED) {
 		unsigned long locked, lock_limit;
 		locked = mm->locked_vm << PAGE_SHIFT;
-		lock_limit = current->signal->rlim[RLIMIT_MEMLOCK].rlim_cur;
+		lock_limit = rlimit(RLIMIT_MEMLOCK);
 		locked += new_len - old_len;
 		if (locked > lock_limit && !capable(CAP_IPC_LOCK))
 			goto Eagain;
@@ -465,8 +459,11 @@ unsigned long do_mremap(unsigned long addr,
 		if (vma_expandable(vma, new_len - old_len)) {
 			int pages = (new_len - old_len) >> PAGE_SHIFT;
 
-			vma_adjust(vma, vma->vm_start,
-				addr + new_len, vma->vm_pgoff, NULL);
+			if (vma_adjust(vma, vma->vm_start, addr + new_len,
+				       vma->vm_pgoff, NULL)) {
+				ret = -ENOMEM;
+				goto out;
+			}
 
 			mm->total_vm += pages;
 			vm_stat_account(mm, vma->vm_flags, vma->vm_file, pages);

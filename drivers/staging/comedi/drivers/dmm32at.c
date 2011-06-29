@@ -629,7 +629,7 @@ static int dmm32at_ai_cmdtest(struct comedi_device *dev,
 
 	/* step 2: make sure trigger sources are unique and mutually compatible */
 
-	/* note that mutual compatiblity is not an issue here */
+	/* note that mutual compatibility is not an issue here */
 	if (cmd->scan_begin_src != TRIG_TIMER &&
 	    cmd->scan_begin_src != TRIG_EXT)
 		err++;
@@ -1048,11 +1048,10 @@ static int dmm32at_dio_insn_config(struct comedi_device *dev,
 	 * value COMEDI_INPUT or COMEDI_OUTPUT. */
 
 	/* if output clear the bit, otherwise set it */
-	if (data[0] == COMEDI_OUTPUT) {
+	if (data[0] == COMEDI_OUTPUT)
 		devpriv->dio_config &= ~chanbit;
-	} else {
+	else
 		devpriv->dio_config |= chanbit;
-	}
 	/* get access to the DIO regs */
 	dmm_outb(dev, DMM32AT_CNTRL, DMM32AT_DIOACC);
 	/* set the DIO's to the new configuration setting */

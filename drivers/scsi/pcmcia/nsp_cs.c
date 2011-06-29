@@ -1563,15 +1563,6 @@ static int nsp_cs_probe(struct pcmcia_device *link)
 	link->io.Attributes1	 = IO_DATA_PATH_WIDTH_AUTO;
 	link->io.IOAddrLines	 = 10;	/* not used */
 
-	/* Interrupt setup */
-	link->irq.Attributes	 = IRQ_TYPE_EXCLUSIVE | IRQ_HANDLE_PRESENT;
-	link->irq.IRQInfo1	 = IRQ_LEVEL_ID;
-
-	/* Interrupt handler */
-	link->irq.Handler	 = &nspintr;
-	link->irq.Instance       = info;
-	link->irq.Attributes     |= IRQF_SHARED;
-
 	/* General socket configuration */
 	link->conf.Attributes	 = CONF_ENABLE_IRQ;
 	link->conf.IntType	 = INT_MEMORY_AND_IO;
@@ -1648,8 +1639,7 @@ static int nsp_cs_config_check(struct pcmcia_device *p_dev,
 		}
 
 		/* Do we need to allocate an interrupt? */
-		if (cfg->irq.IRQInfo1 || dflt->irq.IRQInfo1)
-			p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
+		p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
 
 		/* IO window settings */
 		p_dev->io.NumPorts1 = p_dev->io.NumPorts2 = 0;
@@ -1684,10 +1674,10 @@ static int nsp_cs_config_check(struct pcmcia_device *p_dev,
 			if (cfg_mem->req.Size < 0x1000)
 				cfg_mem->req.Size = 0x1000;
 			cfg_mem->req.AccessSpeed = 0;
-			if (pcmcia_request_window(&p_dev, &cfg_mem->req, &p_dev->win) != 0)
+			if (pcmcia_request_window(p_dev, &cfg_mem->req, &p_dev->win) != 0)
 				goto next_entry;
 			map.Page = 0; map.CardOffset = mem->win[0].card_addr;
-			if (pcmcia_map_mem_page(p_dev->win, &map) != 0)
+			if (pcmcia_map_mem_page(p_dev, p_dev->win, &map) != 0)
 				goto next_entry;
 
 			cfg_mem->data->MmioAddress = (unsigned long) ioremap_nocache(cfg_mem->req.Base, cfg_mem->req.Size);
@@ -1719,12 +1709,11 @@ static int nsp_cs_config(struct pcmcia_device *link)
 	cfg_mem->data = data;
 
 	ret = pcmcia_loop_config(link, nsp_cs_config_check, cfg_mem);
+	if (ret)
 		goto cs_failed;
 
-	if (link->conf.Attributes & CONF_ENABLE_IRQ) {
-		if (pcmcia_request_irq(link, &link->irq))
-			goto cs_failed;
-	}
+	if (pcmcia_request_irq(link, nspintr))
+		goto cs_failed;
 
 	ret = pcmcia_request_configuration(link, &link->conf);
 	if (ret)
@@ -1742,7 +1731,7 @@ static int nsp_cs_config(struct pcmcia_device *link)
 	/* Set port and IRQ */
 	data->BaseAddress = link->io.BasePort1;
 	data->NumAddress  = link->io.NumPorts1;
-	data->IrqNumber   = link->irq.AssignedIRQ;
+	data->IrqNumber   = link->irq;
 
 	nsp_dbg(NSP_DEBUG_INIT, "I/O[0x%x+0x%x] IRQ %d",
 		data->BaseAddress, data->NumAddress, data->IrqNumber);
@@ -1765,8 +1754,6 @@ static int nsp_cs_config(struct pcmcia_device *link)
 
 	scsi_scan_host(host);
 
-	snprintf(info->node.dev_name, sizeof(info->node.dev_name), "scsi%d", host->host_no);
-	link->dev_node  = &info->node;
 	info->host = host;
 
 	/* Finally, report what we've done */
@@ -1776,7 +1763,7 @@ static int nsp_cs_config(struct pcmcia_device *link)
 		printk(", Vpp %d.%d", link->conf.Vpp/10, link->conf.Vpp%10);
 	}
 	if (link->conf.Attributes & CONF_ENABLE_IRQ) {
-		printk(", irq %d", link->irq.AssignedIRQ);
+		printk(", irq %d", link->irq);
 	}
 	if (link->io.NumPorts1) {
 		printk(", io 0x%04x-0x%04x", link->io.BasePort1,
@@ -1824,7 +1811,6 @@ static void nsp_cs_release(struct pcmcia_device *link)
 	if (info->host != NULL) {
 		scsi_remove_host(info->host);
 	}
-	link->dev_node = NULL;
 
 	if (link->win) {
 		if (data != NULL) {

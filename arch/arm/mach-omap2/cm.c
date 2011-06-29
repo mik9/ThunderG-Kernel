@@ -21,12 +21,11 @@
 
 #include <asm/atomic.h>
 
+#include <plat/common.h>
+
 #include "cm.h"
 #include "cm-regbits-24xx.h"
 #include "cm-regbits-34xx.h"
-
-/* MAX_MODULE_READY_TIME: max milliseconds for module to leave idle */
-#define MAX_MODULE_READY_TIME		20000
 
 static const u8 cm_idlest_offs[] = {
 	CM_IDLEST1, CM_IDLEST2, OMAP2430_CM_IDLEST3
@@ -61,9 +60,8 @@ int omap2_cm_wait_module_ready(s16 prcm_mod, u8 idlest_id, u8 idlest_shift)
 	mask = 1 << idlest_shift;
 
 	/* XXX should be OMAP2 CM */
-	while (((cm_read_mod_reg(prcm_mod, cm_idlest_reg) & mask) != ena) &&
-	       (i++ < MAX_MODULE_READY_TIME))
-		udelay(1);
+	omap_test_timeout(((cm_read_mod_reg(prcm_mod, cm_idlest_reg) & mask) == ena),
+			  MAX_MODULE_READY_TIME, i);
 
 	return (i < MAX_MODULE_READY_TIME) ? 0 : -EBUSY;
 }

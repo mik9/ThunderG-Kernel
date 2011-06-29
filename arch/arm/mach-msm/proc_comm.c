@@ -116,7 +116,7 @@ int msm_proc_comm(unsigned cmd, unsigned *data1, unsigned *data2)
 	writel(data2 ? *data2 : 0, base + APP_DATA2);
 
 	notify_other_proc_comm();
-	
+
 	//LGE_CHANGE_S [blue.park@lge.com] 2009-04-01 <For Error Handler> 
 		if (proc_comm_wait_for(base + APP_COMMAND, PCOM_CMD_DONE)) {
 			goto crash;

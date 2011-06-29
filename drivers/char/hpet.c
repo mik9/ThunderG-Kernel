@@ -31,6 +31,7 @@
 #include <linux/seq_file.h>
 #include <linux/bitops.h>
 #include <linux/clocksource.h>
+#include <linux/slab.h>
 
 #include <asm/current.h>
 #include <asm/uaccess.h>
@@ -215,9 +216,7 @@ static void hpet_timer_set_irq(struct hpet_dev *devp)
 	else
 		v &= ~0xffff;
 
-	for (irq = find_first_bit(&v, HPET_MAX_IRQ); irq < HPET_MAX_IRQ;
-		irq = find_next_bit(&v, HPET_MAX_IRQ, 1 + irq)) {
-
+	for_each_set_bit(irq, &v, HPET_MAX_IRQ) {
 		if (irq >= nr_irqs) {
 			irq = HPET_MAX_IRQ;
 			break;
@@ -432,14 +431,18 @@ static int hpet_release(struct inode *inode, struct file *file)
 
 static int hpet_ioctl_common(struct hpet_dev *, int, unsigned long, int);
 
-static int
-hpet_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
-	   unsigned long arg)
+static long hpet_ioctl(struct file *file, unsigned int cmd,
+			unsigned long arg)
 {
 	struct hpet_dev *devp;
+	int ret;
 
 	devp = file->private_data;
-	return hpet_ioctl_common(devp, cmd, arg, 0);
+	lock_kernel();
+	ret = hpet_ioctl_common(devp, cmd, arg, 0);
+	unlock_kernel();
+
+	return ret;
 }
 
 static int hpet_ioctl_ieon(struct hpet_dev *devp)
@@ -670,7 +673,7 @@ static const struct file_operations hpet_fops = {
 	.llseek = no_llseek,
 	.read = hpet_read,
 	.poll = hpet_poll,
-	.ioctl = hpet_ioctl,
+	.unlocked_ioctl = hpet_ioctl,
 	.open = hpet_open,
 	.release = hpet_release,
 	.fasync = hpet_fasync,
@@ -690,36 +693,33 @@ static int hpet_is_known(struct hpet_data *hdp)
 
 static ctl_table hpet_table[] = {
 	{
-	 .ctl_name = CTL_UNNUMBERED,
 	 .procname = "max-user-freq",
 	 .data = &hpet_max_freq,
 	 .maxlen = sizeof(int),
 	 .mode = 0644,
-	 .proc_handler = &proc_dointvec,
+	 .proc_handler = proc_dointvec,
 	 },
-	{.ctl_name = 0}
+	{}
 };
 
 static ctl_table hpet_root[] = {
 	{
-	 .ctl_name = CTL_UNNUMBERED,
 	 .procname = "hpet",
 	 .maxlen = 0,
 	 .mode = 0555,
 	 .child = hpet_table,
 	 },
-	{.ctl_name = 0}
+	{}
 };
 
 static ctl_table dev_root[] = {
 	{
-	 .ctl_name = CTL_DEV,
 	 .procname = "dev",
 	 .maxlen = 0,
 	 .mode = 0555,
 	 .child = hpet_root,
 	 },
-	{.ctl_name = 0}
+	{}
 };
 
 static struct ctl_table_header *sysctl_header;

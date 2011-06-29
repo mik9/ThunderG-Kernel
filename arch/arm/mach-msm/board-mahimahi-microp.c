@@ -21,6 +21,7 @@
 */
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/leds.h>
 #include <linux/workqueue.h>

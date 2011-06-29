@@ -23,6 +23,7 @@
 #include <linux/jbd2.h>
 #include <linux/mount.h>
 #include <linux/path.h>
+#include <linux/quotaops.h>
 #include "ext4.h"
 #include "ext4_jbd2.h"
 #include "xattr.h"
@@ -116,18 +117,16 @@ static int ext4_file_open(struct inode * inode, struct file * filp)
 		 * devices or filesystem images.
 		 */
 		memset(buf, 0, sizeof(buf));
-		path.mnt = mnt->mnt_parent;
-		path.dentry = mnt->mnt_mountpoint;
-		path_get(&path);
+		path.mnt = mnt;
+		path.dentry = mnt->mnt_root;
 		cp = d_path(&path, buf, sizeof(buf));
-		path_put(&path);
 		if (!IS_ERR(cp)) {
 			memcpy(sbi->s_es->s_last_mounted, cp,
 			       sizeof(sbi->s_es->s_last_mounted));
 			sb->s_dirt = 1;
 		}
 	}
-	return generic_file_open(inode, filp);
+	return dquot_file_open(inode, filp);
 }
 
 const struct file_operations ext4_file_operations = {

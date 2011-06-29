@@ -14,6 +14,7 @@
 #include <linux/types.h>
 #include <linux/fcntl.h>
 #include <linux/random.h>
+#include <linux/slab.h>
 #include <linux/cache.h>
 #include <linux/init.h>
 #include <linux/time.h>
@@ -116,10 +117,10 @@ static int inet_csk_diag_fill(struct sock *sk,
 	r->id.idiag_cookie[0] = (u32)(unsigned long)sk;
 	r->id.idiag_cookie[1] = (u32)(((unsigned long)sk >> 31) >> 1);
 
-	r->id.idiag_sport = inet->sport;
-	r->id.idiag_dport = inet->dport;
-	r->id.idiag_src[0] = inet->rcv_saddr;
-	r->id.idiag_dst[0] = inet->daddr;
+	r->id.idiag_sport = inet->inet_sport;
+	r->id.idiag_dport = inet->inet_dport;
+	r->id.idiag_src[0] = inet->inet_rcv_saddr;
+	r->id.idiag_dst[0] = inet->inet_daddr;
 
 #if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
 	if (r->idiag_family == AF_INET6) {
@@ -368,7 +369,7 @@ static int inet_diag_bc_run(const void *bc, int len,
 			yes = entry->sport >= op[1].no;
 			break;
 		case INET_DIAG_BC_S_LE:
-			yes = entry->dport <= op[1].no;
+			yes = entry->sport <= op[1].no;
 			break;
 		case INET_DIAG_BC_D_GE:
 			yes = entry->dport >= op[1].no;
@@ -489,11 +490,9 @@ static int inet_csk_diag_dump(struct sock *sk,
 {
 	struct inet_diag_req *r = NLMSG_DATA(cb->nlh);
 
-	if (nlmsg_attrlen(cb->nlh, sizeof(*r))) {
+	if (cb->nlh->nlmsg_len > 4 + NLMSG_SPACE(sizeof(*r))) {
 		struct inet_diag_entry entry;
-		const struct nlattr *bc = nlmsg_find_attr(cb->nlh,
-							  sizeof(*r),
-							  INET_DIAG_REQ_BYTECODE);
+		struct rtattr *bc = (struct rtattr *)(r + 1);
 		struct inet_sock *inet = inet_sk(sk);
 
 		entry.family = sk->sk_family;
@@ -506,14 +505,14 @@ static int inet_csk_diag_dump(struct sock *sk,
 		} else
 #endif
 		{
-			entry.saddr = &inet->rcv_saddr;
-			entry.daddr = &inet->daddr;
+			entry.saddr = &inet->inet_rcv_saddr;
+			entry.daddr = &inet->inet_daddr;
 		}
-		entry.sport = inet->num;
-		entry.dport = ntohs(inet->dport);
+		entry.sport = inet->inet_num;
+		entry.dport = ntohs(inet->inet_dport);
 		entry.userlocks = sk->sk_userlocks;
 
-		if (!inet_diag_bc_run(nla_data(bc), nla_len(bc), &entry))
+		if (!inet_diag_bc_run(RTA_DATA(bc), RTA_PAYLOAD(bc), &entry))
 			return 0;
 	}
 
@@ -528,11 +527,9 @@ static int inet_twsk_diag_dump(struct inet_timewait_sock *tw,
 {
 	struct inet_diag_req *r = NLMSG_DATA(cb->nlh);
 
-	if (nlmsg_attrlen(cb->nlh, sizeof(*r))) {
+	if (cb->nlh->nlmsg_len > 4 + NLMSG_SPACE(sizeof(*r))) {
 		struct inet_diag_entry entry;
-		const struct nlattr *bc = nlmsg_find_attr(cb->nlh,
-							  sizeof(*r),
-							  INET_DIAG_REQ_BYTECODE);
+		struct rtattr *bc = (struct rtattr *)(r + 1);
 
 		entry.family = tw->tw_family;
 #if defined(CONFIG_IPV6) || defined (CONFIG_IPV6_MODULE)
@@ -551,7 +548,7 @@ static int inet_twsk_diag_dump(struct inet_timewait_sock *tw,
 		entry.dport = ntohs(tw->tw_dport);
 		entry.userlocks = 0;
 
-		if (!inet_diag_bc_run(nla_data(bc), nla_len(bc), &entry))
+		if (!inet_diag_bc_run(RTA_DATA(bc), RTA_PAYLOAD(bc), &entry))
 			return 0;
 	}
 
@@ -588,7 +585,7 @@ static int inet_diag_fill_req(struct sk_buff *skb, struct sock *sk,
 	if (tmo < 0)
 		tmo = 0;
 
-	r->id.idiag_sport = inet->sport;
+	r->id.idiag_sport = inet->inet_sport;
 	r->id.idiag_dport = ireq->rmt_port;
 	r->id.idiag_src[0] = ireq->loc_addr;
 	r->id.idiag_dst[0] = ireq->rmt_addr;
@@ -621,7 +618,7 @@ static int inet_diag_dump_reqs(struct sk_buff *skb, struct sock *sk,
 	struct inet_diag_req *r = NLMSG_DATA(cb->nlh);
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct listen_sock *lopt;
-	const struct nlattr *bc = NULL;
+	struct rtattr *bc = NULL;
 	struct inet_sock *inet = inet_sk(sk);
 	int j, s_j;
 	int reqnum, s_reqnum;
@@ -641,10 +638,9 @@ static int inet_diag_dump_reqs(struct sk_buff *skb, struct sock *sk,
 	if (!lopt || !lopt->qlen)
 		goto out;
 
-	if (nlmsg_attrlen(cb->nlh, sizeof(*r))) {
-		bc = nlmsg_find_attr(cb->nlh, sizeof(*r),
-				     INET_DIAG_REQ_BYTECODE);
-		entry.sport = inet->num;
+	if (cb->nlh->nlmsg_len > 4 + NLMSG_SPACE(sizeof(*r))) {
+		bc = (struct rtattr *)(r + 1);
+		entry.sport = inet->inet_num;
 		entry.userlocks = sk->sk_userlocks;
 	}
 
@@ -676,8 +672,8 @@ static int inet_diag_dump_reqs(struct sk_buff *skb, struct sock *sk,
 					&ireq->rmt_addr;
 				entry.dport = ntohs(ireq->rmt_port);
 
-				if (!inet_diag_bc_run(nla_data(bc),
-						      nla_len(bc), &entry))
+				if (!inet_diag_bc_run(RTA_DATA(bc),
+						    RTA_PAYLOAD(bc), &entry))
 					continue;
 			}
 
@@ -737,7 +733,7 @@ static int inet_diag_dump(struct sk_buff *skb, struct netlink_callback *cb)
 					continue;
 				}
 
-				if (r->id.idiag_sport != inet->sport &&
+				if (r->id.idiag_sport != inet->inet_sport &&
 				    r->id.idiag_sport)
 					goto next_listen;
 
@@ -779,7 +775,7 @@ skip_listen_ht:
 	if (!(r->idiag_states & ~(TCPF_LISTEN | TCPF_SYN_RECV)))
 		goto unlock;
 
-	for (i = s_i; i < hashinfo->ehash_size; i++) {
+	for (i = s_i; i <= hashinfo->ehash_mask; i++) {
 		struct inet_ehash_bucket *head = &hashinfo->ehash[i];
 		spinlock_t *lock = inet_ehash_lockp(hashinfo, i);
 		struct sock *sk;
@@ -802,10 +798,10 @@ skip_listen_ht:
 				goto next_normal;
 			if (!(r->idiag_states & (1 << sk->sk_state)))
 				goto next_normal;
-			if (r->id.idiag_sport != inet->sport &&
+			if (r->id.idiag_sport != inet->inet_sport &&
 			    r->id.idiag_sport)
 				goto next_normal;
-			if (r->id.idiag_dport != inet->dport &&
+			if (r->id.idiag_dport != inet->inet_dport &&
 			    r->id.idiag_dport)
 				goto next_normal;
 			if (inet_csk_diag_dump(sk, skb, cb) < 0) {

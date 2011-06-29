@@ -120,12 +120,8 @@ int ext4_reserve_inode_write(handle_t *handle, struct inode *inode,
 int ext4_mark_inode_dirty(handle_t *handle, struct inode *inode);
 
 /*
- * Wrapper functions with which ext4 calls into JBD.  The intent here is
- * to allow these to be turned into appropriate stubs so ext4 can control
- * ext2 filesystems, so ext2+ext4 systems only nee one fs.  This work hasn't
- * been done yet.
+ * Wrapper functions with which ext4 calls into JBD.
  */
-
 void ext4_journal_abort_handle(const char *caller, const char *err_fn,
 		struct buffer_head *bh, handle_t *handle, int err);
 
@@ -135,13 +131,9 @@ int __ext4_journal_get_undo_access(const char *where, handle_t *handle,
 int __ext4_journal_get_write_access(const char *where, handle_t *handle,
 				struct buffer_head *bh);
 
-/* When called with an invalid handle, this will still do a put on the BH */
-int __ext4_journal_forget(const char *where, handle_t *handle,
-				struct buffer_head *bh);
-
-/* When called with an invalid handle, this will still do a put on the BH */
-int __ext4_journal_revoke(const char *where, handle_t *handle,
-				ext4_fsblk_t blocknr, struct buffer_head *bh);
+int __ext4_forget(const char *where, handle_t *handle, int is_metadata,
+		  struct inode *inode, struct buffer_head *bh,
+		  ext4_fsblk_t blocknr);
 
 int __ext4_journal_get_create_access(const char *where,
 				handle_t *handle, struct buffer_head *bh);
@@ -153,12 +145,11 @@ int __ext4_handle_dirty_metadata(const char *where, handle_t *handle,
 	__ext4_journal_get_undo_access(__func__, (handle), (bh))
 #define ext4_journal_get_write_access(handle, bh) \
 	__ext4_journal_get_write_access(__func__, (handle), (bh))
-#define ext4_journal_revoke(handle, blocknr, bh) \
-	__ext4_journal_revoke(__func__, (handle), (blocknr), (bh))
+#define ext4_forget(handle, is_metadata, inode, bh, block_nr) \
+	__ext4_forget(__func__, (handle), (is_metadata), (inode), (bh),\
+		      (block_nr))
 #define ext4_journal_get_create_access(handle, bh) \
 	__ext4_journal_get_create_access(__func__, (handle), (bh))
-#define ext4_journal_forget(handle, bh) \
-	__ext4_journal_forget(__func__, (handle), (bh))
 #define ext4_handle_dirty_metadata(handle, inode, bh) \
 	__ext4_handle_dirty_metadata(__func__, (handle), (inode), (bh))
 
@@ -311,6 +302,30 @@ static inline int ext4_should_writeback_data(struct inode *inode)
 	if (test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_WRITEBACK_DATA)
 		return 1;
 	return 0;
+}
+
+/*
+ * This function controls whether or not we should try to go down the
+ * dioread_nolock code paths, which makes it safe to avoid taking
+ * i_mutex for direct I/O reads.  This only works for extent-based
+ * files, and it doesn't work for nobh or if data journaling is
+ * enabled, since the dioread_nolock code uses b_private to pass
+ * information back to the I/O completion handler, and this conflicts
+ * with the jbd's use of b_private.
+ */
+static inline int ext4_should_dioread_nolock(struct inode *inode)
+{
+	if (!test_opt(inode->i_sb, DIOREAD_NOLOCK))
+		return 0;
+	if (test_opt(inode->i_sb, NOBH))
+		return 0;
+	if (!S_ISREG(inode->i_mode))
+		return 0;
+	if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS)))
+		return 0;
+	if (ext4_should_journal_data(inode))
+		return 0;
+	return 1;
 }
 
 #endif	/* _EXT4_JBD2_H */

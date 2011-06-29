@@ -50,6 +50,9 @@ libs-y += $(LIBGCC)
 core-y += arch/microblaze/kernel/
 core-y += arch/microblaze/mm/
 core-y += arch/microblaze/platform/
+core-$(CONFIG_PCI) += arch/microblaze/pci/
+
+drivers-$(CONFIG_OPROFILE) += arch/microblaze/oprofile/
 
 boot := arch/microblaze/boot
 
@@ -85,7 +88,7 @@ define archhelp
   echo '* linux.bin    - Create raw binary'
   echo '  linux.bin.gz - Create compressed raw binary'
   echo '  simpleImage.<dt> - ELF image with $(arch)/boot/dts/<dt>.dts linked in'
-  echo '                   - stripped elf with fdt blob
+  echo '                   - stripped elf with fdt blob'
   echo '  simpleImage.<dt>.unstrip - full ELF image with fdt blob'
   echo '  *_defconfig      - Select default config from arch/microblaze/configs'
   echo ''
@@ -95,3 +98,5 @@ define archhelp
   echo '  name of a dts file from the arch/microblaze/boot/dts/ directory'
   echo '  (minus the .dts extension).'
 endef
+
+MRPROPER_FILES += $(boot)/simpleImage.*

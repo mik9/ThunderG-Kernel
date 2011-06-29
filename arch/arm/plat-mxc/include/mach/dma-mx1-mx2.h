@@ -31,7 +31,13 @@
 #define DMA_MODE_WRITE		1
 #define DMA_MODE_MASK		1
 
-#define DMA_BASE IO_ADDRESS(DMA_BASE_ADDR)
+#define MX1_DMA_REG(offset)	MX1_IO_ADDRESS(MX1_DMA_BASE_ADDR + (offset))
+
+/* DMA Interrupt Mask Register */
+#define MX1_DMA_DIMR		MX1_DMA_REG(0x08)
+
+/* Channel Control Register */
+#define MX1_DMA_CCR(x)		MX1_DMA_REG(0x8c + ((x) << 6))
 
 #define IMX_DMA_MEMSIZE_32	(0 << 4)
 #define IMX_DMA_MEMSIZE_8	(1 << 4)
@@ -57,6 +63,14 @@ int
 imx_dma_setup_single(int channel, dma_addr_t dma_address,
 		unsigned int dma_length, unsigned int dev_addr,
 		unsigned int dmamode);
+
+
+/*
+ * Use this flag as the dma_length argument to imx_dma_setup_sg()
+ * to create an endless running dma loop. The end of the scatterlist
+ * must be linked to the beginning for this to work.
+ */
+#define IMX_DMA_LENGTH_LOOP	((unsigned int)-1)
 
 int
 imx_dma_setup_sg(int channel, struct scatterlist *sg,

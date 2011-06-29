@@ -15,11 +15,17 @@
  * 02110-1301, USA.
  */
 
+#include <linux/init.h>
+#include <linux/wait.h>
 #include <linux/gpio.h>
 #include <mach/pmic.h>
 #include <mach/msm_qdsp6_audio.h>
+#include <asm/string.h>
+#include <asm/mach-types.h>
 
 #define GPIO_HEADSET_AMP 157
+#define GPIO_SPEAKER_AMP 39
+#define GPIO_HEADSET_SHDN_N 48
 
 void analog_init(void)
 {
@@ -28,14 +34,22 @@ void analog_init(void)
 	pmic_spkr_set_gain(RIGHT_SPKR, SPKR_GAIN_PLUS12DB);
 	pmic_mic_set_volt(MIC_VOLT_1_80V);
 
-	gpio_direction_output(GPIO_HEADSET_AMP, 1);
-	gpio_set_value(GPIO_HEADSET_AMP, 0);
+	if (machine_is_qsd8x50a_st1_5()) {
+		gpio_set_value(GPIO_SPEAKER_AMP, 0);
+		gpio_set_value(GPIO_HEADSET_SHDN_N, 0);
+	} else {
+		gpio_direction_output(GPIO_HEADSET_AMP, 1);
+		gpio_set_value(GPIO_HEADSET_AMP, 0);
+	}
 }
 
 void analog_headset_enable(int en)
 {
 	/* enable audio amp */
-	gpio_set_value(GPIO_HEADSET_AMP, !!en);
+	if (machine_is_qsd8x50a_st1_5())
+		gpio_set_value(GPIO_HEADSET_SHDN_N, !!en);
+	else
+		gpio_set_value(GPIO_HEADSET_AMP, !!en);
 }
 
 void analog_speaker_enable(int en)
@@ -53,6 +67,14 @@ void analog_speaker_enable(int en)
 		pmic_set_spkr_configuration(&scm);
 		pmic_spkr_en(LEFT_SPKR, 1);
 		pmic_spkr_en(RIGHT_SPKR, 1);
+
+		/* Enable Speaker Amplifier */
+		if (machine_is_qsd8x50a_st1_5()) {
+			pmic_secure_mpp_control_digital_output(
+					PM_MPP_21, PM_MPP__DLOGIC__LVL_VDD,
+					PM_MPP__DLOGIC_OUT__CTRL_HIGH);
+			gpio_set_value(GPIO_SPEAKER_AMP, !!en);
+		}
 		
 		/* unmute */
 		pmic_spkr_en_mute(LEFT_SPKR, 1);
@@ -60,6 +82,14 @@ void analog_speaker_enable(int en)
 	} else {
 		pmic_spkr_en_mute(LEFT_SPKR, 0);
 		pmic_spkr_en_mute(RIGHT_SPKR, 0);
+
+		/* Disable Speaker Amplifier */
+		if (machine_is_qsd8x50a_st1_5()) {
+			gpio_set_value(GPIO_SPEAKER_AMP, !!en);
+			pmic_secure_mpp_control_digital_output(
+					PM_MPP_21, PM_MPP__DLOGIC__LVL_VDD,
+					PM_MPP__DLOGIC_OUT__CTRL_LOW);
+		}
 
 		pmic_spkr_en(LEFT_SPKR, 0);
 		pmic_spkr_en(RIGHT_SPKR, 0);

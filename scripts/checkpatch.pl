@@ -1,11 +1,17 @@
 #!/usr/bin/perl -w
-# (c) 2001, Dave Jones. <davej@redhat.com> (the file handling bit)
+# (c) 2001, Dave Jones. (the file handling bit)
 # (c) 2005, Joel Schopp <jschopp@austin.ibm.com> (the ugly bit)
 # (c) 2007,2008, Andy Whitcroft <apw@uk.ibm.com> (new conditions, test suite)
 # (c) 2008,2009, Andy Whitcroft <apw@canonical.com>
 # Licensed under the terms of the GNU GPL License version 2
 
 use strict;
+
+use constant BEFORE_SHORTTEXT => 0;
+use constant IN_SHORTTEXT => 1;
+use constant AFTER_SHORTTEXT => 2;
+use constant CHECK_NEXT_SHORTTEXT => 3;
+use constant SHORTTEXT_LIMIT => 75;
 
 my $P = $0;
 $P =~ s@.*/@@g;
@@ -145,11 +151,14 @@ our $Sparse	= qr{
 			__kprobes|
 			__ref
 		}x;
+
+# Notes to $Attribute:
+# We need \b after 'init' otherwise 'initconst' will cause a false positive in a check
 our $Attribute	= qr{
 			const|
 			__read_mostly|
 			__kprobes|
-			__(?:mem|cpu|dev|)(?:initdata|init)|
+			__(?:mem|cpu|dev|)(?:initdata|initconst|init\b)|
 			____cacheline_aligned|
 			____cacheline_aligned_in_smp|
 			____cacheline_internodealigned_in_smp|
@@ -187,6 +196,14 @@ our $UTF8	= qr {
 our $typeTypedefs = qr{(?x:
 	(?:__)?(?:u|s|be|le)(?:8|16|32|64)|
 	atomic_t
+)};
+
+our $logFunctions = qr{(?x:
+	printk|
+	pr_(debug|dbg|vdbg|devel|info|warning|err|notice|alert|crit|emerg|cont)|
+	dev_(printk|dbg|vdbg|info|warn|err|notice|alert|crit|emerg|WARN)|
+	WARN|
+	panic
 )};
 
 our @typeList = (
@@ -541,6 +558,9 @@ sub ctx_statement_block {
 			$type = ($level != 0)? '{' : '';
 
 			if ($level == 0) {
+				if (substr($blk, $off + 1, 1) eq ';') {
+					$off++;
+				}
 				last;
 			}
 		}
@@ -1114,6 +1134,8 @@ sub process {
 	my $prevrawline="";
 	my $stashline="";
 	my $stashrawline="";
+	my $subjectline="";
+	my $sublinenr="";
 
 	my $length;
 	my $indent;
@@ -1152,6 +1174,12 @@ sub process {
 	#
 	my @setup_docs = ();
 	my $setup_docs = 0;
+
+	my $in_code_block = 0;
+	my $exec_file = "";
+
+	my $shorttext = BEFORE_SHORTTEXT;
+	my $shorttext_exspc = 0;
 
 	sanitise_line_reset();
 	my $line;
@@ -1301,14 +1329,76 @@ sub process {
 			if ($realfile =~ m@^include/asm/@) {
 				ERROR("do not modify files in include/asm, change architecture specific files in include/asm-<architecture>\n" . "$here$rawline\n");
 			}
+			$in_code_block = 1;
 			next;
 		}
-
+		elsif ($rawline =~ /^diff.+a\/(.+)\sb\/.+$/) {
+			$exec_file = $1;
+			$in_code_block = 0;
+		}
+		#Check state to make sure we aren't in code block.
+		elsif  (!$in_code_block			   &&
+			($exec_file =~ /^.+\.[chS]$/ or
+			 $exec_file =~ /^.+\.txt$/ or
+			 $exec_file =~ /^.+\.ihex$/ or
+			 $exec_file =~ /^.+\.hex$/ or
+			 $exec_file =~ /^.+\.HEX$/ or
+			 $exec_file =~ /^.+defconfig$/ or
+			 $exec_file =~ /^Makefile$/ or
+			 $exec_file =~ /^Kconfig$/) &&
+			$rawline =~ /^new (file )?mode\s([0-9]+)$/ &&
+			(oct($2) & 0111))  {
+			    ERROR("Source file has +x permissions: " .
+			    "$exec_file\n");
+		}
 		$here .= "FILE: $realfile:$realline:" if ($realcnt != 0);
 
 		my $hereline = "$here\n$rawline\n";
 		my $herecurr = "$here\n$rawline\n";
 		my $hereprev = "$here\n$prevrawline\n$rawline\n";
+
+		if ($shorttext != AFTER_SHORTTEXT) {
+			if ($shorttext == IN_SHORTTEXT) {
+				if ($line=~/^---/ || $line=~/^diff.*/) {
+					$shorttext = AFTER_SHORTTEXT;
+				} elsif (length($line) > (SHORTTEXT_LIMIT +
+							  $shorttext_exspc)
+					 && $line !~ /^:([0-7]{6}\s){2}
+						      ([[:xdigit:]]+\.*
+						       \s){2}\w+\s\w+/xms) {
+					WARN("commit text line over " .
+					     SHORTTEXT_LIMIT .
+					     " characters\n" . $herecurr);
+				}
+			} elsif ($shorttext == CHECK_NEXT_SHORTTEXT) {
+				$shorttext = IN_SHORTTEXT;
+# Check for Subject line followed by a blank line.
+				if (length($line) != 0) {
+					WARN("non-blank line after summary " .
+					     "line\n" . $sublinenr . $here .
+					     "\n" . $subjectline . "\n" .
+					     $line . "\n");
+				}
+			} elsif ($line=~/^Subject: \[[^\]]*\] (.*)/) {
+				$shorttext = CHECK_NEXT_SHORTTEXT;
+				$subjectline = $line;
+				$sublinenr = "#$linenr & ";
+# Check for Subject line less than line limit
+				if (length($1) > SHORTTEXT_LIMIT) {
+					WARN("summary line over " .
+					     SHORTTEXT_LIMIT .
+					     " characters\n" . $herecurr);
+				}
+			} elsif ($line=~/^    (.*)/) {
+				$shorttext = IN_SHORTTEXT;
+				$shorttext_exspc = 4;
+				if (length($1) > SHORTTEXT_LIMIT) {
+					WARN("summary line over " .
+					     SHORTTEXT_LIMIT .
+					     " characters\n" . $herecurr);
+				}
+			}
+		}
 
 		$cnt_lines++ if ($realcnt != 0);
 
@@ -1324,6 +1414,14 @@ sub process {
 				WARN("space required after Signed-off-by:\n" .
 					$herecurr);
 			}
+			if ($line =~ /^\s*signed-off-by:.*(quicinc|qualcomm)\.com/i) {
+				WARN("invalid Signed-off-by identity\n" . $line );
+			}
+		}
+
+#check the patch for invalid author credentials
+		if ($line =~ /^From:.*(quicinc|qualcomm)\.com/) {
+			WARN("invalid author identity\n" . $line );
 		}
 
 # Check for wrappage within a valid hunk of the file
@@ -1377,10 +1475,16 @@ sub process {
 #80 column limit
 		if ($line =~ /^\+/ && $prevrawline !~ /\/\*\*/ &&
 		    $rawline !~ /^.\s*\*\s*\@$Ident\s/ &&
-		    $line !~ /^\+\s*printk\s*\(\s*(?:KERN_\S+\s*)?"[X\t]*"\s*(?:,|\)\s*;)\s*$/ &&
+		    $line !~ /^\+\s*$logFunctions\s*\(\s*(?:KERN_\S+\s*)?"[X\t]*"\s*(?:,|\)\s*;)\s*$/ &&
+		    $realfile ne "scripts/checkpatch.pl" &&
 		    $length > 80)
 		{
 			WARN("line over 80 characters\n" . $herecurr);
+		}
+
+# check for spaces before a quoted newline
+		if ($rawline =~ /^.*\".*\s\\n/) {
+			WARN("unnecessary whitespace before a quoted newline\n" . $herecurr);
 		}
 
 # check for adding lines without a newline.
@@ -1409,6 +1513,12 @@ sub process {
 		    $rawline =~ /^\+\s*        \s*/) {
 			my $herevet = "$here\n" . cat_vet($rawline) . "\n";
 			ERROR("code indent should use tabs where possible\n" . $herevet);
+		}
+
+# check for space before tabs.
+		if ($rawline =~ /^\+/ && $rawline =~ / \t/) {
+			my $herevet = "$here\n" . cat_vet($rawline) . "\n";
+			WARN("please, no space before tabs\n" . $herevet);
 		}
 
 # check we are in a valid C source file if not then ignore this hunk
@@ -2101,7 +2211,7 @@ sub process {
 
 # check spacing on parentheses
 		if ($line =~ /\(\s/ && $line !~ /\(\s*(?:\\)?$/ &&
-		    $line !~ /for\s*\(\s+;/) {
+		    $line !~ /for\s*\(\s+;/ && $line !~ /^\+\s*[A-Z_][A-Z\d_]*\(\s*\d+(\,.*)?\)\,?$/) {
 			ERROR("space prohibited after that open parenthesis '('\n" . $herecurr);
 		}
 		if ($line =~ /(\s+)\)/ && $line !~ /^.\s*\)/ &&
@@ -2182,8 +2292,10 @@ sub process {
 				# Find out how long the conditional actually is.
 				my @newlines = ($c =~ /\n/gs);
 				my $cond_lines = 1 + $#newlines;
+				my $stat_real = '';
 
-				my $stat_real = raw_line($linenr, $cond_lines);
+				$stat_real = raw_line($linenr, $cond_lines)
+							. "\n" if ($cond_lines);
 				if (defined($stat_real) && $cond_lines > 1) {
 					$stat_real = "[...]\n$stat_real";
 				}
@@ -2347,7 +2459,10 @@ sub process {
 				MODULE_PARAM_DESC|
 				DECLARE_PER_CPU|
 				DEFINE_PER_CPU|
+				CLK_[A-Z\d_]+|
 				__typeof__\(|
+				union|
+				struct|
 				\.$Ident\s*=\s*|
 				^\"|\"$
 			}x;
@@ -2510,8 +2625,13 @@ sub process {
 
 # warn about #if 0
 		if ($line =~ /^.\s*\#\s*if\s+0\b/) {
-			CHK("if this code is redundant consider removing it\n" .
-				$herecurr);
+			WARN("if this code is redundant consider removing it\n"
+				.  $herecurr);
+		}
+# warn about #if 1
+		if ($line =~ /^.\s*\#\s*if\s+1\b/) {
+			WARN("if this code is required consider removing"
+				. " #if 1\n" .  $herecurr);
 		}
 
 # check for needless kfree() checks
@@ -2527,6 +2647,11 @@ sub process {
 			if ($line =~ /\busb_free_urb\(\Q$expr\E\);/) {
 				WARN("usb_free_urb(NULL) is safe this check is probably not required\n" . $hereprev);
 			}
+		}
+
+# check the patch for use of mdelay
+		if ($line =~ /\bmdelay\s*\(/) {
+			WARN("use of mdelay() found: msleep() is the preferred API.\n" . $line );
 		}
 
 # warn about #ifdefs in C files
@@ -2560,6 +2685,11 @@ sub process {
 			CHK("architecture specific defines should be avoided\n" .  $herecurr);
 		}
 
+# Check that the storage class is at the beginning of a declaration
+		if ($line =~ /\b$Storage\b/ && $line !~ /^.\s*$Storage\b/) {
+			WARN("storage class should be at the beginning of the declaration\n" . $herecurr)
+		}
+
 # check the location of the inline attribute, that it is between
 # storage class and type.
 		if ($line =~ /\b$Type\s+$Inline\b/ ||
@@ -2570,6 +2700,11 @@ sub process {
 # Check for __inline__ and __inline, prefer inline
 		if ($line =~ /\b(__inline__|__inline)\b/) {
 			WARN("plain inline is preferred over $1\n" . $herecurr);
+		}
+
+# check for sizeof(&)
+		if ($line =~ /\bsizeof\s*\(\s*\&/) {
+			WARN("sizeof(& should be avoided\n" . $herecurr);
 		}
 
 # check for new externs in .c files.
@@ -2613,6 +2748,11 @@ sub process {
 			WARN("unnecessary cast may hide bugs, see http://c-faq.com/malloc/mallocnocast.html\n" . $herecurr);
 		}
 
+# check for return codes on error paths
+		if ($line =~ /\breturn\s+-\d+/) {
+			ERROR("illegal return value, please use an error code\n" . $herecurr);
+		}
+
 # check for gcc specific __FUNCTION__
 		if ($line =~ /__FUNCTION__/) {
 			WARN("__func__ should be used instead of gcc specific __FUNCTION__\n"  . $herecurr);
@@ -2625,6 +2765,7 @@ sub process {
 # check for semaphores used as mutexes
 		if ($line =~ /^.\s*init_MUTEX_LOCKED\s*\(/) {
 			WARN("consider using a completion\n" . $herecurr);
+
 		}
 # recommend strict_strto* over simple_strto*
 		if ($line =~ /\bsimple_(strto.*?)\s*\(/) {
@@ -2634,9 +2775,46 @@ sub process {
 		if ($line =~ /^.\s*__initcall\s*\(/) {
 			WARN("please use device_initcall() instead of __initcall()\n" . $herecurr);
 		}
-# check for struct file_operations, ensure they are const.
+# check for various ops structs, ensure they are const.
+		my $struct_ops = qr{acpi_dock_ops|
+				address_space_operations|
+				backlight_ops|
+				block_device_operations|
+				dentry_operations|
+				dev_pm_ops|
+				dma_map_ops|
+				extent_io_ops|
+				file_lock_operations|
+				file_operations|
+				hv_ops|
+				ide_dma_ops|
+				intel_dvo_dev_ops|
+				item_operations|
+				iwl_ops|
+				kgdb_arch|
+				kgdb_io|
+				kset_uevent_ops|
+				lock_manager_operations|
+				microcode_ops|
+				mtrr_ops|
+				neigh_ops|
+				nlmsvc_binding|
+				pci_raw_ops|
+				pipe_buf_operations|
+				platform_hibernation_ops|
+				platform_suspend_ops|
+				proto_ops|
+				rpc_pipe_ops|
+				seq_operations|
+				snd_ac97_build_ops|
+				soc_pcmcia_socket_ops|
+				stacktrace_ops|
+				sysfs_ops|
+				tty_operations|
+				usb_mon_operations|
+				wd_ops}x;
 		if ($line !~ /\bconst\b/ &&
-		    $line =~ /\bstruct\s+(file_operations|seq_operations)\b/) {
+		    $line =~ /\bstruct\s+($struct_ops)\b/) {
 			WARN("struct $1 should normally be const\n" .
 				$herecurr);
 		}
@@ -2670,6 +2848,16 @@ sub process {
 				ERROR("do not use in_atomic in drivers\n" . $herecurr);
 			} elsif ($realfile !~ m@^kernel/@) {
 				WARN("use of in_atomic() is incorrect outside core kernel code\n" . $herecurr);
+			}
+		}
+
+# check for lockdep_set_novalidate_class
+		if ($line =~ /^.\s*lockdep_set_novalidate_class\s*\(/ ||
+		    $line =~ /__lockdep_no_validate__\s*\)/ ) {
+			if ($realfile !~ m@^kernel/lockdep@ &&
+			    $realfile !~ m@^include/linux/lockdep@ &&
+			    $realfile !~ m@^drivers/base/core@) {
+				ERROR("lockdep_no_validate class is reserved for device->mutex.\n" . $herecurr);
 			}
 		}
 	}

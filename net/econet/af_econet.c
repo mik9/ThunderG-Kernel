@@ -30,6 +30,7 @@
 #include <linux/wireless.h>
 #include <linux/skbuff.h>
 #include <linux/udp.h>
+#include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <net/sock.h>
 #include <net/inet_common.h>
@@ -434,10 +435,10 @@ static int econet_sendmsg(struct kiocb *iocb, struct socket *sock,
 		udpdest.sin_addr.s_addr = htonl(network | addr.station);
 	}
 
-	memset(&ah, 0, sizeof(ah));
 	ah.port = port;
 	ah.cb = cb & 0x7f;
 	ah.code = 2;		/* magic */
+	ah.pad = 0;
 
 	/* tack our header on the front of the iovec */
 	size = sizeof(struct aunhdr);
@@ -595,13 +596,14 @@ static struct proto econet_proto = {
  *	Create an Econet socket
  */
 
-static int econet_create(struct net *net, struct socket *sock, int protocol)
+static int econet_create(struct net *net, struct socket *sock, int protocol,
+			 int kern)
 {
 	struct sock *sk;
 	struct econet_sock *eo;
 	int err;
 
-	if (net != &init_net)
+	if (!net_eq(net, &init_net))
 		return -EAFNOSUPPORT;
 
 	/* Econet only provides datagram services. */
@@ -735,7 +737,7 @@ static int econet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg
 	return 0;
 }
 
-static struct net_proto_family econet_family_ops = {
+static const struct net_proto_family econet_family_ops = {
 	.family =	PF_ECONET,
 	.create =	econet_create,
 	.owner	=	THIS_MODULE,
@@ -843,13 +845,9 @@ static void aun_incoming(struct sk_buff *skb, struct aunhdr *ah, size_t len)
 {
 	struct iphdr *ip = ip_hdr(skb);
 	unsigned char stn = ntohl(ip->saddr) & 0xff;
-	struct dst_entry *dst = skb_dst(skb);
-	struct ec_device *edev = NULL;
 	struct sock *sk;
 	struct sk_buff *newskb;
-
-	if (dst)
-		edev = dst->dev->ec_ptr;
+	struct ec_device *edev = skb->dev->ec_ptr;
 
 	if (! edev)
 		goto bad;

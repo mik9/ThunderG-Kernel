@@ -78,7 +78,7 @@ typedef struct tagSMib2Counter {
     LONG    ifType;
     LONG    ifMtu;
     DWORD   ifSpeed;
-    BYTE    ifPhysAddress[U_ETHER_ADDR_LEN];
+    BYTE    ifPhysAddress[ETH_ALEN];
     LONG    ifAdminStatus;
     LONG    ifOperStatus;
     DWORD   ifLastChange;
@@ -325,10 +325,10 @@ typedef struct tagSStatCounter {
    #ifdef Calcu_LinkQual
        //Tx count:
     ULONG TxNoRetryOkCount;         //success tx no retry !
-    ULONG TxRetryOkCount;              //sucess tx but retry !
+    ULONG TxRetryOkCount;              //success tx but retry !
     ULONG TxFailCount;                      //fail tx ?
       //Rx count:
-    ULONG RxOkCnt;                          //sucess rx !
+    ULONG RxOkCnt;                          //success rx !
     ULONG RxFcsErrCnt;                    //fail rx ?
       //statistic
     ULONG SignalStren;

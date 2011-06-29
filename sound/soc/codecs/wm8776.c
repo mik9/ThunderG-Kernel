@@ -20,6 +20,7 @@
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
 #include <linux/spi/spi.h>
+#include <linux/slab.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -218,7 +219,7 @@ static int wm8776_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_soc_dai *dai)
 {
 	struct snd_soc_codec *codec = dai->codec;
-	struct wm8776_priv *wm8776 = codec->private_data;
+	struct wm8776_priv *wm8776 = snd_soc_codec_get_drvdata(codec);
 	int iface_reg, iface;
 	int ratio_shift, master;
 	int i;
@@ -295,7 +296,7 @@ static int wm8776_set_sysclk(struct snd_soc_dai *dai,
 			     int clk_id, unsigned int freq, int dir)
 {
 	struct snd_soc_codec *codec = dai->codec;
-	struct wm8776_priv *wm8776 = codec->private_data;
+	struct wm8776_priv *wm8776 = snd_soc_codec_get_drvdata(codec);
 
 	BUG_ON(dai->id >= ARRAY_SIZE(wm8776->sysclk));
 
@@ -398,6 +399,8 @@ static int wm8776_resume(struct platform_device *pdev)
 
 	/* Sync reg_cache with the hardware */
 	for (i = 0; i < ARRAY_SIZE(wm8776_reg); i++) {
+		if (cache[i] == wm8776_reg[i])
+			continue;
 		data[0] = (i << 1) | ((cache[i] >> 8) & 0x0001);
 		data[1] = cache[i] & 0x00ff;
 		codec->hw_write(codec->control_data, data, 2);
@@ -439,17 +442,8 @@ static int wm8776_probe(struct platform_device *pdev)
 				  ARRAY_SIZE(wm8776_dapm_widgets));
 	snd_soc_dapm_add_routes(codec, routes, ARRAY_SIZE(routes));
 
-	ret = snd_soc_init_card(socdev);
-	if (ret < 0) {
-		dev_err(codec->dev, "failed to register card: %d\n", ret);
-		goto card_err;
-	}
-
 	return ret;
 
-card_err:
-	snd_soc_free_pcms(socdev);
-	snd_soc_dapm_free(socdev);
 pcm_err:
 	return ret;
 }
@@ -489,7 +483,7 @@ static int wm8776_register(struct wm8776_priv *wm8776,
 	INIT_LIST_HEAD(&codec->dapm_widgets);
 	INIT_LIST_HEAD(&codec->dapm_paths);
 
-	codec->private_data = wm8776;
+	snd_soc_codec_set_drvdata(codec, wm8776);
 	codec->name = "WM8776";
 	codec->owner = THIS_MODULE;
 	codec->bias_level = SND_SOC_BIAS_OFF;
@@ -608,21 +602,6 @@ static int __devexit wm8776_spi_remove(struct spi_device *spi)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int wm8776_spi_suspend(struct spi_device *spi, pm_message_t msg)
-{
-	return snd_soc_suspend_device(&spi->dev);
-}
-
-static int wm8776_spi_resume(struct spi_device *spi)
-{
-	return snd_soc_resume_device(&spi->dev);
-}
-#else
-#define wm8776_spi_suspend NULL
-#define wm8776_spi_resume NULL
-#endif
-
 static struct spi_driver wm8776_spi_driver = {
 	.driver = {
 		.name	= "wm8776",
@@ -630,8 +609,6 @@ static struct spi_driver wm8776_spi_driver = {
 		.owner	= THIS_MODULE,
 	},
 	.probe		= wm8776_spi_probe,
-	.suspend	= wm8776_spi_suspend,
-	.resume		= wm8776_spi_resume,
 	.remove		= __devexit_p(wm8776_spi_remove),
 };
 #endif /* CONFIG_SPI_MASTER */
@@ -665,21 +642,6 @@ static __devexit int wm8776_i2c_remove(struct i2c_client *client)
 	return 0;
 }
 
-#ifdef CONFIG_PM
-static int wm8776_i2c_suspend(struct i2c_client *i2c, pm_message_t msg)
-{
-	return snd_soc_suspend_device(&i2c->dev);
-}
-
-static int wm8776_i2c_resume(struct i2c_client *i2c)
-{
-	return snd_soc_resume_device(&i2c->dev);
-}
-#else
-#define wm8776_i2c_suspend NULL
-#define wm8776_i2c_resume NULL
-#endif
-
 static const struct i2c_device_id wm8776_i2c_id[] = {
 	{ "wm8776", 0 },
 	{ }
@@ -693,8 +655,6 @@ static struct i2c_driver wm8776_i2c_driver = {
 	},
 	.probe =    wm8776_i2c_probe,
 	.remove =   __devexit_p(wm8776_i2c_remove),
-	.suspend =  wm8776_i2c_suspend,
-	.resume =   wm8776_i2c_resume,
 	.id_table = wm8776_i2c_id,
 };
 #endif

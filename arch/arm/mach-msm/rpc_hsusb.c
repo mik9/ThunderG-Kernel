@@ -1,6 +1,6 @@
 /* linux/arch/arm/mach-msm/rpc_hsusb.c
  *
- * Copyright (c) 2008-2009, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
  *
  * All source code in this file is licensed under the following license except
  * where indicated.
@@ -81,7 +81,7 @@ static int msm_hsusb_init_rpc_ids(unsigned long vers)
 		usb_rpc_ids.disable_pmic_ulpi_data0	= 19;
 		return 0;
 	} else {
-		pr_info("%s: no matches found for version\n",
+		pr_err("%s: no matches found for version\n",
 			__func__);
 		return -ENODATA;
 	}
@@ -90,7 +90,9 @@ static int msm_hsusb_init_rpc_ids(unsigned long vers)
 static int msm_chg_init_rpc(unsigned long vers)
 {
 	if (((vers & RPC_VERSION_MAJOR_MASK) == 0x00010000) ||
-	    ((vers & RPC_VERSION_MAJOR_MASK) == 0x00020000)) {
+	    ((vers & RPC_VERSION_MAJOR_MASK) == 0x00020000) ||
+	    ((vers & RPC_VERSION_MAJOR_MASK) == 0x00030000) ||
+	    ((vers & RPC_VERSION_MAJOR_MASK) == 0x00040000)) {
 		chg_ep = msm_rpc_connect_compatible(MSM_RPC_CHG_PROG, vers,
 						     MSM_RPC_UNINTERRUPTIBLE);
 		if (IS_ERR(chg_ep))
@@ -110,7 +112,7 @@ int msm_hsusb_rpc_connect(void)
 {
 
 	if (usb_ep && !IS_ERR(usb_ep)) {
-		pr_info("%s: usb_ep already connected\n", __func__);
+		pr_debug("%s: usb_ep already connected\n", __func__);
 		return 0;
 	}
 
@@ -168,6 +170,14 @@ int msm_chg_rpc_connect(void)
 		pr_debug("%s: chg_ep already connected\n", __func__);
 		return 0;
 	}
+
+	chg_vers = 0x00040001;
+	if (!msm_chg_init_rpc(chg_vers))
+		goto chg_found;
+
+	chg_vers = 0x00030001;
+	if (!msm_chg_init_rpc(chg_vers))
+		goto chg_found;
 
 	chg_vers = 0x00020001;
 	if (!msm_chg_init_rpc(chg_vers))
@@ -297,7 +307,7 @@ int msm_hsusb_send_productID(uint32_t product_id)
 }
 EXPORT_SYMBOL(msm_hsusb_send_productID);
 
-int msm_hsusb_send_serial_number(char *serial_number)
+int msm_hsusb_send_serial_number(const char *serial_number)
 {
 	int rc = 0, serial_len;
 	struct hsusb_phy_start_req {
@@ -613,6 +623,33 @@ int msm_hsusb_disable_pmic_ulpidata0(void)
 }
 EXPORT_SYMBOL(msm_hsusb_disable_pmic_ulpidata0);
 
+
+/* wrapper for sending pid and serial# info to bootloader */
+int usb_diag_update_pid_and_serial_num(uint32_t pid, const char *snum)
+{
+	int ret;
+
+	ret = msm_hsusb_send_productID(pid);
+	if (ret)
+		return ret;
+
+	if (!snum) {
+		ret = msm_hsusb_is_serial_num_null(1);
+		if (ret)
+			return ret;
+	}
+
+	ret = msm_hsusb_is_serial_num_null(0);
+	if (ret)
+		return ret;
+	ret = msm_hsusb_send_serial_number(snum);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+
 #ifdef CONFIG_USB_GADGET_MSM_72K
 /* charger api wrappers */
 int hsusb_chg_init(int connect)
@@ -672,7 +709,7 @@ EXPORT_SYMBOL(msm_hsusb_get_charger_type);
 /* NOTE: version of RPC depends on AMSS's setting(below is alohag's). */
 #define NV_IMEI_GET_VER             0x00060001
 #define NV_UE_IMEI_SIZE             9
-#define MAX_IMEI_SIZE               (NV_UE_IMEI_SIZE -1) * 2
+#define MAX_IMEI_SIZE               ((NV_UE_IMEI_SIZE - 1) * 2)
 
 int msm_nv_imei_get(unsigned char *nv_imei_ptr)
 {
@@ -680,24 +717,24 @@ int msm_nv_imei_get(unsigned char *nv_imei_ptr)
 	int rc = 0;
 	uint32_t nv_result;
 	uint32_t dummy1, dummy2;
-	nv_ue_imei_type imea_data;
+	struct nv_ue_imei_type imea_data;
 	int i;
 
 	struct msm_nv_imem_get_req {
 		struct rpc_request_hdr hdr;
-		nv_func_enum_type cmd;
-		nv_items_enum_type item;
+		enum nv_func_enum_type cmd;
+		enum nv_items_enum_type item;
 		uint32_t more_data;
-		nv_items_enum_type disc;
-		nv_ue_imei_type imea_data;;
+		enum nv_items_enum_type disc;
+		struct nv_ue_imei_type imea_data;;
 	} req;
 
 	struct hsusb_rpc_rep {
 		struct rpc_reply_hdr hdr;
-		nv_stat_enum_type result_item;
+		enum nv_stat_enum_type result_item;
 		uint32_t rep_more_data;
-		nv_items_enum_type rep_disc;
-		nv_ue_imei_type imea_data;;
+		enum nv_items_enum_type rep_disc;
+		struct nv_ue_imei_type imea_data;;
 	} rep;
 
 	nv_imei_get_ep = msm_rpc_connect_compatible(NV_IMEI_GET_PROG,
@@ -733,18 +770,17 @@ int msm_nv_imei_get(unsigned char *nv_imei_ptr)
 	dummy1 = be32_to_cpu(rep.rep_more_data);
 	dummy2 = be32_to_cpu(rep.rep_disc);
 
-	for(i = 0 ; i<NV_UE_IMEI_SIZE; i++)
-	{
+	for (i = 0; i < NV_UE_IMEI_SIZE; i++) {
 		if ((rep.imea_data.ue_imei[i] & 0x0F) >= 0xA)
-			*(nv_imei_ptr +i*2) = (rep.imea_data.ue_imei[i] & 0x0F) + 55;
+			*(nv_imei_ptr + i*2) = (rep.imea_data.ue_imei[i] & 0x0F) + 55;
 		else
-			*(nv_imei_ptr +i*2) = (rep.imea_data.ue_imei[i] & 0x0F) + 48;
-		if (((rep.imea_data.ue_imei[i] & 0xF0) >> 4) >=0xA)
-			*(nv_imei_ptr +i*2 + 1) = ((rep.imea_data.ue_imei[i] & 0xF0) >> 4) + 55;
+			*(nv_imei_ptr + i*2) = (rep.imea_data.ue_imei[i] & 0x0F) + 48;
+		if (((rep.imea_data.ue_imei[i] & 0xF0) >> 4) >= 0xA)
+			*(nv_imei_ptr + i*2 + 1) = ((rep.imea_data.ue_imei[i] & 0xF0) >> 4) + 55;
 		else
-			*(nv_imei_ptr +i*2 + 1) = ((rep.imea_data.ue_imei[i] & 0xF0) >> 4) + 48;
+			*(nv_imei_ptr + i*2 + 1) = ((rep.imea_data.ue_imei[i] & 0xF0) >> 4) + 48;
 	}
-	*(nv_imei_ptr +MAX_IMEI_SIZE + 2) = '\0';
+	*(nv_imei_ptr + MAX_IMEI_SIZE + 2) = '\0';
 	msm_rpc_close(nv_imei_get_ep);
 
 	pr_info("%s: msm_rpc_call success. ver = 0x%x\n",
@@ -793,7 +829,7 @@ int msm_hsusb_detect_chg_type(void)
 
 	if (!chg_ep || IS_ERR(chg_ep)) {
 		pr_err("%s: hsusb rpc connection not initialized, rc = %ld\n",
-			__func__, PTR_ERR(chg_ep));
+				__func__, PTR_ERR(chg_ep));
 		return -EAGAIN;
 	}
 
@@ -808,34 +844,34 @@ int msm_hsusb_detect_chg_type(void)
 
 	if (rc < 0) {
 		printk(KERN_ERR "%s: rpc call failed !  rc = %d\n",
-			__func__, rc);
+				__func__, rc);
 		return rc;
 	}
 
 	rep.charger_type = be32_to_cpu(rep.charger_type);
 
 	/* ret value is matched to charger type in msm_hsusb.c */
-	switch(rep.charger_type) {
-		case USB_CHARGER_TYPE_WALL :
-		case USB_CHARGER_TYPE_USB_WALL :
-		case USB_CHARGER_TYPE_USB_CARKIT :
-			ret = 2; /* WALL CHARGER */
-			break;
-		case USB_CHARGER_TYPE_USB_PC :
-			ret = 0; /* HOST PC */
-			break;
-		case USB_CHARGER_TYPE_NONE :
-		case USB_CHARGER_TYPE_INVALID :
-		default :
-			ret = 3; /* INVALID */	
-			break;
+	switch (rep.charger_type) {
+	case USB_CHARGER_TYPE_WALL:
+	case USB_CHARGER_TYPE_USB_WALL:
+	case USB_CHARGER_TYPE_USB_CARKIT:
+		ret = 2; /* WALL CHARGER */
+		break;
+	case USB_CHARGER_TYPE_USB_PC:
+		ret = 0; /* HOST PC */
+		break;
+	case USB_CHARGER_TYPE_NONE:
+	case USB_CHARGER_TYPE_INVALID:
+	default:
+		ret = 3; /* INVALID */
+		break;
 	}
-	
+
 	return ret;
 }
-
 EXPORT_SYMBOL(msm_hsusb_detect_chg_type);
-#endif 
+
+#endif
 /* LGE_CHANGE_E [hyunhui.park@lge.com] 2009-04-21 */
 
 #endif

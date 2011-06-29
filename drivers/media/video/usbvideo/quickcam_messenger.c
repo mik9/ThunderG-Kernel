@@ -34,6 +34,7 @@
 #include <linux/init.h>
 #include <linux/input.h>
 #include <linux/usb/input.h>
+#include <linux/slab.h>
 
 #include "usbvideo.h"
 #include "quickcam_messenger.h"
@@ -89,7 +90,7 @@ static void qcm_register_input(struct qcm *cam, struct usb_device *dev)
 	int error;
 
 	usb_make_path(dev, cam->input_physname, sizeof(cam->input_physname));
-	strncat(cam->input_physname, "/input0", sizeof(cam->input_physname));
+	strlcat(cam->input_physname, "/input0", sizeof(cam->input_physname));
 
 	cam->input = input_dev = input_allocate_device();
 	if (!input_dev) {
@@ -692,12 +693,13 @@ static int qcm_start_data(struct uvd *uvd)
 
 static void qcm_stop_data(struct uvd *uvd)
 {
-	struct qcm *cam = (struct qcm *) uvd->user_data;
+	struct qcm *cam;
 	int i, j;
 	int ret;
 
 	if ((uvd == NULL) || (!uvd->streaming) || (uvd->dev == NULL))
 		return;
+	cam = (struct qcm *) uvd->user_data;
 
 	ret = qcm_camera_off(uvd);
 	if (ret)

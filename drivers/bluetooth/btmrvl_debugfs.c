@@ -19,6 +19,7 @@
  **/
 
 #include <linux/debugfs.h>
+#include <linux/slab.h>
 
 #include <net/bluetooth/bluetooth.h>
 #include <net/bluetooth/hci_core.h>
@@ -26,10 +27,10 @@
 #include "btmrvl_drv.h"
 
 struct btmrvl_debugfs_data {
-	struct dentry *root_dir, *config_dir, *status_dir;
+	struct dentry *config_dir;
+	struct dentry *status_dir;
 
 	/* config */
-	struct dentry *drvdbg;
 	struct dentry *psmode;
 	struct dentry *pscmd;
 	struct dentry *hsmode;
@@ -364,6 +365,9 @@ void btmrvl_debugfs_init(struct hci_dev *hdev)
 	struct btmrvl_private *priv = hdev->driver_data;
 	struct btmrvl_debugfs_data *dbg;
 
+	if (!hdev->debugfs)
+		return;
+
 	dbg = kzalloc(sizeof(*dbg), GFP_KERNEL);
 	priv->debugfs_data = dbg;
 
@@ -372,9 +376,7 @@ void btmrvl_debugfs_init(struct hci_dev *hdev)
 		return;
 	}
 
-	dbg->root_dir = debugfs_create_dir("btmrvl", NULL);
-
-	dbg->config_dir = debugfs_create_dir("config", dbg->root_dir);
+	dbg->config_dir = debugfs_create_dir("config", hdev->debugfs);
 
 	dbg->psmode = debugfs_create_file("psmode", 0644, dbg->config_dir,
 				hdev->driver_data, &btmrvl_psmode_fops);
@@ -389,7 +391,7 @@ void btmrvl_debugfs_init(struct hci_dev *hdev)
 	dbg->hscfgcmd = debugfs_create_file("hscfgcmd", 0644, dbg->config_dir,
 				hdev->driver_data, &btmrvl_hscfgcmd_fops);
 
-	dbg->status_dir = debugfs_create_dir("status", dbg->root_dir);
+	dbg->status_dir = debugfs_create_dir("status", hdev->debugfs);
 	dbg->curpsmode = debugfs_create_file("curpsmode", 0444,
 						dbg->status_dir,
 						hdev->driver_data,
@@ -425,8 +427,6 @@ void btmrvl_debugfs_remove(struct hci_dev *hdev)
 	debugfs_remove(dbg->hsstate);
 	debugfs_remove(dbg->txdnldready);
 	debugfs_remove(dbg->status_dir);
-
-	debugfs_remove(dbg->root_dir);
 
 	kfree(dbg);
 }

@@ -1,7 +1,7 @@
 /*******************************************************************************
 
   Intel 10 Gigabit PCI Express Linux driver
-  Copyright(c) 1999 - 2009 Intel Corporation.
+  Copyright(c) 1999 - 2010 Intel Corporation.
 
   This program is free software; you can redistribute it and/or modify it
   under the terms and conditions of the GNU General Public License,
@@ -31,6 +31,8 @@
 #include "ixgbe_dcb_82599.h"
 #endif /* CONFIG_IXGBE_DCB */
 #include <linux/if_ether.h>
+#include <linux/gfp.h>
+#include <linux/if_vlan.h>
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_device.h>
 #include <scsi/fc/fc_fs.h>
@@ -202,6 +204,15 @@ int ixgbe_fcoe_ddp_get(struct net_device *netdev, u16 xid,
 		addr = sg_dma_address(sg);
 		len = sg_dma_len(sg);
 		while (len) {
+			/* max number of buffers allowed in one DDP context */
+			if (j >= IXGBE_BUFFCNT_MAX) {
+				netif_err(adapter, drv, adapter->netdev,
+					  "xid=%x:%d,%d,%d:addr=%llx "
+					  "not enough descriptors\n",
+					  xid, i, j, dmacount, (u64)addr);
+				goto out_noddp_free;
+			}
+
 			/* get the offset of length of current buffer */
 			thisoff = addr & ((dma_addr_t)bufflen - 1);
 			thislen = min((bufflen - thisoff), len);
@@ -227,20 +238,13 @@ int ixgbe_fcoe_ddp_get(struct net_device *netdev, u16 xid,
 			len -= thislen;
 			addr += thislen;
 			j++;
-			/* max number of buffers allowed in one DDP context */
-			if (j > IXGBE_BUFFCNT_MAX) {
-				DPRINTK(DRV, ERR, "xid=%x:%d,%d,%d:addr=%llx "
-					"not enough descriptors\n",
-					xid, i, j, dmacount, (u64)addr);
-				goto out_noddp_free;
-			}
 		}
 	}
 	/* only the last buffer may have non-full bufflen */
 	lastsize = thisoff + thislen;
 
 	fcbuff = (IXGBE_FCBUFF_4KB << IXGBE_FCBUFF_BUFFSIZE_SHIFT);
-	fcbuff |= (j << IXGBE_FCBUFF_BUFFCNT_SHIFT);
+	fcbuff |= ((j & 0xff) << IXGBE_FCBUFF_BUFFCNT_SHIFT);
 	fcbuff |= (firstoff << IXGBE_FCBUFF_OFFSET_SHIFT);
 	fcbuff |= (IXGBE_FCBUFF_VALID);
 
@@ -309,10 +313,12 @@ int ixgbe_fcoe_ddp(struct ixgbe_adapter *adapter,
 	if (fcerr == IXGBE_FCERR_BADCRC)
 		skb->ip_summed = CHECKSUM_NONE;
 
-	skb_reset_network_header(skb);
-	skb_set_transport_header(skb, skb_network_offset(skb) +
-				 sizeof(struct fcoe_hdr));
-	fh = (struct fc_frame_header *)skb_transport_header(skb);
+	if (eth_hdr(skb)->h_proto == htons(ETH_P_8021Q))
+		fh = (struct fc_frame_header *)(skb->data +
+			sizeof(struct vlan_hdr) + sizeof(struct fcoe_hdr));
+	else
+		fh = (struct fc_frame_header *)(skb->data +
+			sizeof(struct fcoe_hdr));
 	fctl = ntoh24(fh->fh_f_ctl);
 	if (fctl & FC_FC_EX_CTX)
 		xid =  be16_to_cpu(fh->fh_ox_id);
@@ -499,6 +505,10 @@ void ixgbe_configure_fcoe(struct ixgbe_adapter *adapter)
 	struct ixgbe_hw *hw = &adapter->hw;
 	struct ixgbe_fcoe *fcoe = &adapter->fcoe;
 	struct ixgbe_ring_feature *f = &adapter->ring_feature[RING_F_FCOE];
+#ifdef CONFIG_IXGBE_DCB
+	u8 tc;
+	u32 up2tc;
+#endif
 
 	/* create the pool for ddp if not created yet */
 	if (!fcoe->pool) {
@@ -516,12 +526,15 @@ void ixgbe_configure_fcoe(struct ixgbe_adapter *adapter)
 	/* Enable L2 eth type filter for FCoE */
 	IXGBE_WRITE_REG(hw, IXGBE_ETQF(IXGBE_ETQF_FILTER_FCOE),
 			(ETH_P_FCOE | IXGBE_ETQF_FCOE | IXGBE_ETQF_FILTER_EN));
+	/* Enable L2 eth type filter for FIP */
+	IXGBE_WRITE_REG(hw, IXGBE_ETQF(IXGBE_ETQF_FILTER_FIP),
+			(ETH_P_FIP | IXGBE_ETQF_FILTER_EN));
 	if (adapter->ring_feature[RING_F_FCOE].indices) {
 		/* Use multiple rx queues for FCoE by redirection table */
 		for (i = 0; i < IXGBE_FCRETA_SIZE; i++) {
 			fcoe_i = f->mask + i % f->indices;
 			fcoe_i &= IXGBE_FCRETA_ENTRY_MASK;
-			fcoe_q = adapter->rx_ring[fcoe_i].reg_idx;
+			fcoe_q = adapter->rx_ring[fcoe_i]->reg_idx;
 			IXGBE_WRITE_REG(hw, IXGBE_FCRETA(i), fcoe_q);
 		}
 		IXGBE_WRITE_REG(hw, IXGBE_FCRECTL, IXGBE_FCRECTL_ENA);
@@ -529,17 +542,34 @@ void ixgbe_configure_fcoe(struct ixgbe_adapter *adapter)
 	} else  {
 		/* Use single rx queue for FCoE */
 		fcoe_i = f->mask;
-		fcoe_q = adapter->rx_ring[fcoe_i].reg_idx;
+		fcoe_q = adapter->rx_ring[fcoe_i]->reg_idx;
 		IXGBE_WRITE_REG(hw, IXGBE_FCRECTL, 0);
 		IXGBE_WRITE_REG(hw, IXGBE_ETQS(IXGBE_ETQF_FILTER_FCOE),
 				IXGBE_ETQS_QUEUE_EN |
 				(fcoe_q << IXGBE_ETQS_RX_QUEUE_SHIFT));
 	}
+	/* send FIP frames to the first FCoE queue */
+	fcoe_i = f->mask;
+	fcoe_q = adapter->rx_ring[fcoe_i]->reg_idx;
+	IXGBE_WRITE_REG(hw, IXGBE_ETQS(IXGBE_ETQF_FILTER_FIP),
+			IXGBE_ETQS_QUEUE_EN |
+			(fcoe_q << IXGBE_ETQS_RX_QUEUE_SHIFT));
 
 	IXGBE_WRITE_REG(hw, IXGBE_FCRXCTRL,
 			IXGBE_FCRXCTRL_FCOELLI |
 			IXGBE_FCRXCTRL_FCCRCBO |
 			(FC_FCOE_VER << IXGBE_FCRXCTRL_FCOEVER_SHIFT));
+#ifdef CONFIG_IXGBE_DCB
+	up2tc = IXGBE_READ_REG(&adapter->hw, IXGBE_RTTUP2TC);
+	for (i = 0; i < MAX_USER_PRIORITY; i++) {
+		tc = (u8)(up2tc >> (i * IXGBE_RTTUP2TC_UP_SHIFT));
+		tc &= (MAX_TRAFFIC_CLASS - 1);
+		if (fcoe->tc == tc) {
+			fcoe->up = i;
+			break;
+		}
+	}
+#endif
 }
 
 /**
@@ -599,9 +629,9 @@ int ixgbe_fcoe_enable(struct net_device *netdev)
 	netdev->vlan_features |= NETIF_F_FSO;
 	netdev->vlan_features |= NETIF_F_FCOE_MTU;
 	netdev->fcoe_ddp_xid = IXGBE_FCOE_DDP_MAX - 1;
-	netdev_features_change(netdev);
 
 	ixgbe_init_interrupt_scheme(adapter);
+	netdev_features_change(netdev);
 
 	if (netif_running(netdev))
 		netdev->netdev_ops->ndo_open(netdev);
@@ -645,11 +675,11 @@ int ixgbe_fcoe_disable(struct net_device *netdev)
 	netdev->vlan_features &= ~NETIF_F_FSO;
 	netdev->vlan_features &= ~NETIF_F_FCOE_MTU;
 	netdev->fcoe_ddp_xid = 0;
-	netdev_features_change(netdev);
 
 	ixgbe_cleanup_fcoe(adapter);
-
 	ixgbe_init_interrupt_scheme(adapter);
+	netdev_features_change(netdev);
+
 	if (netif_running(netdev))
 		netdev->netdev_ops->ndo_open(netdev);
 	rc = 0;
@@ -671,19 +701,7 @@ out_disable:
  */
 u8 ixgbe_fcoe_getapp(struct ixgbe_adapter *adapter)
 {
-	int i;
-	u8 tc;
-	u32 up2tc;
-
-	up2tc = IXGBE_READ_REG(&adapter->hw, IXGBE_RTTUP2TC);
-	for (i = 0; i < MAX_USER_PRIORITY; i++) {
-		tc = (u8)(up2tc >> (i * IXGBE_RTTUP2TC_UP_SHIFT));
-		tc &= (MAX_TRAFFIC_CLASS - 1);
-		if (adapter->fcoe.tc == tc)
-			return 1 << i;
-	}
-
-	return 0;
+	return 1 << adapter->fcoe.up;
 }
 
 /**
@@ -710,6 +728,7 @@ u8 ixgbe_fcoe_setapp(struct ixgbe_adapter *adapter, u8 up)
 				up2tc >>= (i * IXGBE_RTTUP2TC_UP_SHIFT);
 				up2tc &= (MAX_TRAFFIC_CLASS - 1);
 				adapter->fcoe.tc = (u8)up2tc;
+				adapter->fcoe.up = i;
 				return 0;
 			}
 		}
@@ -718,3 +737,49 @@ u8 ixgbe_fcoe_setapp(struct ixgbe_adapter *adapter, u8 up)
 	return 1;
 }
 #endif /* CONFIG_IXGBE_DCB */
+
+/**
+ * ixgbe_fcoe_get_wwn - get world wide name for the node or the port
+ * @netdev : ixgbe adapter
+ * @wwn : the world wide name
+ * @type: the type of world wide name
+ *
+ * Returns the node or port world wide name if both the prefix and the san
+ * mac address are valid, then the wwn is formed based on the NAA-2 for
+ * IEEE Extended name identifier (ref. to T10 FC-LS Spec., Sec. 15.3).
+ *
+ * Returns : 0 on success
+ */
+int ixgbe_fcoe_get_wwn(struct net_device *netdev, u64 *wwn, int type)
+{
+	int rc = -EINVAL;
+	u16 prefix = 0xffff;
+	struct ixgbe_adapter *adapter = netdev_priv(netdev);
+	struct ixgbe_mac_info *mac = &adapter->hw.mac;
+
+	switch (type) {
+	case NETDEV_FCOE_WWNN:
+		prefix = mac->wwnn_prefix;
+		break;
+	case NETDEV_FCOE_WWPN:
+		prefix = mac->wwpn_prefix;
+		break;
+	default:
+		break;
+	}
+
+	if ((prefix != 0xffff) &&
+	    is_valid_ether_addr(mac->san_addr)) {
+		*wwn = ((u64) prefix << 48) |
+		       ((u64) mac->san_addr[0] << 40) |
+		       ((u64) mac->san_addr[1] << 32) |
+		       ((u64) mac->san_addr[2] << 24) |
+		       ((u64) mac->san_addr[3] << 16) |
+		       ((u64) mac->san_addr[4] << 8)  |
+		       ((u64) mac->san_addr[5]);
+		rc = 0;
+	}
+	return rc;
+}
+
+

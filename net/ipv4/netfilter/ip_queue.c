@@ -26,6 +26,7 @@
 #include <linux/security.h>
 #include <linux/net.h>
 #include <linux/mutex.h>
+#include <linux/slab.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
 #include <net/route.h>
@@ -160,8 +161,7 @@ ipq_build_packet_message(struct nf_queue_entry *entry, int *errp)
 		break;
 
 	case IPQ_COPY_PACKET:
-		if ((entry->skb->ip_summed == CHECKSUM_PARTIAL ||
-		     entry->skb->ip_summed == CHECKSUM_COMPLETE) &&
+		if (entry->skb->ip_summed == CHECKSUM_PARTIAL &&
 		    (*errp = skb_checksum_help(entry->skb))) {
 			read_unlock_bh(&queue_lock);
 			return NULL;
@@ -461,7 +461,6 @@ __ipq_rcv_skb(struct sk_buff *skb)
 
 	if (flags & NLM_F_ACK)
 		netlink_ack(skb, nlh, 0);
-	return;
 }
 
 static void
@@ -497,10 +496,9 @@ ipq_rcv_nl_event(struct notifier_block *this,
 {
 	struct netlink_notify *n = ptr;
 
-	if (event == NETLINK_URELEASE &&
-	    n->protocol == NETLINK_FIREWALL && n->pid) {
+	if (event == NETLINK_URELEASE && n->protocol == NETLINK_FIREWALL) {
 		write_lock_bh(&queue_lock);
-		if ((n->net == &init_net) && (n->pid == peer_pid))
+		if ((net_eq(n->net, &init_net)) && (n->pid == peer_pid))
 			__ipq_reset();
 		write_unlock_bh(&queue_lock);
 	}
@@ -516,14 +514,13 @@ static struct ctl_table_header *ipq_sysctl_header;
 
 static ctl_table ipq_table[] = {
 	{
-		.ctl_name	= NET_IPQ_QMAX,
 		.procname	= NET_IPQ_QMAX_NAME,
 		.data		= &queue_maxlen,
 		.maxlen		= sizeof(queue_maxlen),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec
 	},
-	{ .ctl_name = 0 }
+	{ }
 };
 #endif
 
@@ -622,7 +619,7 @@ cleanup_netlink_notifier:
 static void __exit ip_queue_fini(void)
 {
 	nf_unregister_queue_handlers(&nfqh);
-	synchronize_net();
+
 	ipq_flush(NULL, 0);
 
 #ifdef CONFIG_SYSCTL

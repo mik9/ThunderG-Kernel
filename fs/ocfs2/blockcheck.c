@@ -47,7 +47,7 @@
  * Calculate the bit offset in the hamming code buffer based on the bit's
  * offset in the data buffer.  Since the hamming code reserves all
  * power-of-two bits for parity, the data bit number and the code bit
- * number are offest by all the parity bits beforehand.
+ * number are offset by all the parity bits beforehand.
  *
  * Recall that bit numbers in hamming code are 1-based.  This function
  * takes the 0-based data bit from the caller.
@@ -403,7 +403,7 @@ void ocfs2_block_check_compute(void *data, size_t blocksize,
 	 * No ecc'd ocfs2 structure is larger than 4K, so ecc will be no
 	 * larger than 16 bits.
 	 */
-	BUG_ON(ecc > USHORT_MAX);
+	BUG_ON(ecc > USHRT_MAX);
 
 	bc->bc_crc32e = cpu_to_le32(crc);
 	bc->bc_ecc = cpu_to_le16((u16)ecc);
@@ -508,7 +508,7 @@ void ocfs2_block_check_compute_bhs(struct buffer_head **bhs, int nr,
 	 * No ecc'd ocfs2 structure is larger than 4K, so ecc will be no
 	 * larger than 16 bits.
 	 */
-	BUG_ON(ecc > USHORT_MAX);
+	BUG_ON(ecc > USHRT_MAX);
 
 	bc->bc_crc32e = cpu_to_le32(crc);
 	bc->bc_ecc = cpu_to_le16((u16)ecc);

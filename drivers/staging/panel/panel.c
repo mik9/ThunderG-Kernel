@@ -41,7 +41,6 @@
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/spinlock.h>
-#include <linux/smp_lock.h>
 #include <linux/interrupt.h>
 #include <linux/miscdevice.h>
 #include <linux/slab.h>
@@ -55,10 +54,10 @@
 #include <linux/list.h>
 #include <linux/notifier.h>
 #include <linux/reboot.h>
-#include <linux/utsrelease.h>
+#include <generated/utsrelease.h>
 
 #include <linux/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/system.h>
 
 #define LCD_MINOR		156
@@ -378,7 +377,7 @@ static unsigned char lcd_bits[LCD_PORTS][LCD_BITS][BIT_STATES];
 
 #ifdef CONFIG_PANEL_LCD_CHARSET
 #undef DEFAULT_LCD_CHARSET
-#define DEFAULT_LCD_CHARSET
+#define DEFAULT_LCD_CHARSET CONFIG_PANEL_LCD_CHARSET
 #endif
 
 #endif /* DEFAULT_PROFILE == 0 */
@@ -1907,12 +1906,11 @@ static struct logical_input *panel_bind_key(char *name, char *press,
 {
 	struct logical_input *key;
 
-	key = kmalloc(sizeof(struct logical_input), GFP_KERNEL);
+	key = kzalloc(sizeof(struct logical_input), GFP_KERNEL);
 	if (!key) {
 		printk(KERN_ERR "panel: not enough memory\n");
 		return NULL;
 	}
-	memset(key, 0, sizeof(struct logical_input));
 	if (!input_name2mask(name, &key->mask, &key->value, &scan_mask_i,
 			     &scan_mask_o))
 		return NULL;

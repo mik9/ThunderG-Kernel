@@ -13,19 +13,49 @@ menuconfig MISC_DEVICES
 
 if MISC_DEVICES
 
+config AD525X_DPOT
+	tristate "Analog Devices Digital Potentiometers"
+	depends on (I2C || SPI) && SYSFS
+	help
+	  If you say yes here, you get support for the Analog Devices
+	  AD5258, AD5259, AD5251, AD5252, AD5253, AD5254, AD5255
+	  AD5160, AD5161, AD5162, AD5165, AD5200, AD5201, AD5203,
+	  AD5204, AD5206, AD5207, AD5231, AD5232, AD5233, AD5235,
+	  AD5260, AD5262, AD5263, AD5290, AD5291, AD5292, AD5293,
+	  AD7376, AD8400, AD8402, AD8403, ADN2850, AD5241, AD5242,
+	  AD5243, AD5245, AD5246, AD5247, AD5248, AD5280, AD5282,
+	  ADN2860, AD5273, AD5171, AD5170, AD5172, AD5173
+	  digital potentiometer chips.
+
+	  See Documentation/misc-devices/ad525x_dpot.txt for the
+	  userspace interface.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called ad525x_dpot.
+
+config AD525X_DPOT_I2C
+	tristate "support I2C bus connection"
+	depends on AD525X_DPOT && I2C
+	help
+	  Say Y here if you have a digital potentiometers hooked to an I2C bus.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad525x_dpot-i2c.
+
+config AD525X_DPOT_SPI
+	tristate "support SPI bus connection"
+	depends on AD525X_DPOT && SPI_MASTER
+	help
+	  Say Y here if you have a digital potentiometers hooked to an SPI bus.
+
+	  If unsure, say N (but it's safe to say "Y").
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad525x_dpot-spi.
+
 config ANDROID_PMEM
 	bool "Android pmem allocator"
 	default y
-
-config ANDROID_PMEM_DEBUG
-	bool "Android pmem debug"
-	depends on ANDROID_PMEM
-	default n
-
-config ANDROID_PMEM_KAPI_TEST
-	tristate "Simple module to test Android pmem kernel API"
-	depends on ANDROID_PMEM
-	default m
 
 config ANDROID_VIBRATOR
     bool "Android vibrator support"
@@ -48,7 +78,6 @@ config VIB_USE_HIGH_VOL_OVERDRIVE
 	default n
 	help
 	  This option enalbes device driver support for the high voltage overdriving tech. for Q-Coin Motor.
-
 
 config ATMEL_PWM
 	tristate "Atmel AT32/AT91 PWM support"
@@ -217,6 +246,40 @@ config SGI_XP
 	  this feature will allow for direct communication between SSIs
 	  based on a network adapter and DMA messaging.
 
+config CS5535_MFGPT
+	tristate "CS5535/CS5536 Geode Multi-Function General Purpose Timer (MFGPT) support"
+	depends on PCI
+	depends on X86
+	default n
+	help
+	  This driver provides access to MFGPT functionality for other
+	  drivers that need timers.  MFGPTs are available in the CS5535 and
+	  CS5536 companion chips that are found in AMD Geode and several
+	  other platforms.  They have a better resolution and max interval
+	  than the generic PIT, and are suitable for use as high-res timers.
+	  You probably don't want to enable this manually; other drivers that
+	  make use of it should enable it.
+
+config CS5535_MFGPT_DEFAULT_IRQ
+	int
+	depends on CS5535_MFGPT
+	default 7
+	help
+	  MFGPTs on the CS5535 require an interrupt.  The selected IRQ
+	  can be overridden as a module option as well as by driver that
+	  use the cs5535_mfgpt_ API; however, different architectures might
+	  want to use a different IRQ by default.  This is here for
+	  architectures to set as necessary.
+
+config CS5535_CLOCK_EVENT_SRC
+	tristate "CS5535/CS5536 high-res timer (MFGPT) events"
+	depends on GENERIC_TIME && GENERIC_CLOCKEVENTS && CS5535_MFGPT
+	help
+	  This driver provides a clock event source based on the MFGPT
+	  timer(s) in the CS5535 and CS5536 companion chips.
+	  MFGPTs have a better resolution and max interval than the
+	  generic PIT, and are suitable for use as high-res timers.
+
 config HP_ILO
 	tristate "Channel interface driver for HP iLO/iLO2 processor"
 	depends on PCI
@@ -254,19 +317,6 @@ config SGI_GRU_DEBUG
 	This option enables addition debugging code for the SGI GRU driver. If
 	you are unsure, say N.
 
-config DELL_LAPTOP
-	tristate "Dell Laptop Extras (EXPERIMENTAL)"
-	depends on X86
-	depends on DCDBAS
-	depends on EXPERIMENTAL
-	depends on BACKLIGHT_CLASS_DEVICE
-	depends on RFKILL
-	depends on POWER_SUPPLY
-	default n
-	---help---
-	This driver adds support for rfkill and backlight control to Dell
-	laptops.
-
 config ISL29003
 	tristate "Intersil ISL29003 ambient light sensor"
 	depends on I2C && SYSFS
@@ -276,6 +326,42 @@ config ISL29003
 
 	  This driver can also be built as a module.  If so, the module
 	  will be called isl29003.
+
+config SENSORS_TSL2550
+	tristate "Taos TSL2550 ambient light sensor"
+	depends on I2C && SYSFS
+	help
+	  If you say yes here you get support for the Taos TSL2550
+	  ambient light sensor.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called tsl2550.
+
+config SENSORS_AK8975
+	tristate "AK8975 compass support"
+	default n
+	depends on I2C
+	help
+	  If you say yes here you get support for Asahi Kasei's
+	  orientation sensor AK8975.
+
+config SENSORS_AKM8973
+	tristate "AKM8973 Compass Driver"
+	depends on I2C
+	help
+	 AKM8973 Compass Driver implemented by HTC.
+
+config SENSORS_AKM8976
+	tristate "AKM8976 Compass Driver"
+	depends on I2C
+	help
+	  AKM8976 Compass Driver implemented by HTC.
+
+config VP_A1026
+	tristate "A1026 Voice Processor Driver"
+	depends on I2C
+	help
+	  A1026 Voice Processor Driver implemented by HTC.
 
 config EP93XX_PWM
 	tristate "EP93xx PWM support"
@@ -290,9 +376,45 @@ config EP93XX_PWM
 	  To compile this driver as a module, choose M here: the module will
 	  be called ep93xx_pwm.
 
+config DS1682
+	tristate "Dallas DS1682 Total Elapsed Time Recorder with Alarm"
+	depends on I2C && EXPERIMENTAL
+	help
+	  If you say yes here you get support for Dallas Semiconductor
+	  DS1682 Total Elapsed Time Recorder.
+
+	  This driver can also be built as a module.  If so, the module
+	  will be called ds1682.
+
+config TI_DAC7512
+	tristate "Texas Instruments DAC7512"
+	depends on SPI && SYSFS
+	help
+	  If you say yes here you get support for the Texas Instruments
+	  DAC7512 16-bit digital-to-analog converter.
+
+	  This driver can also be built as a module. If so, the module
+	  will be calles ti_dac7512.
+
 config UID_STAT
 	bool "UID based statistics tracking exported to /proc/uid_stat"
 	default n
+
+config VMWARE_BALLOON
+	tristate "VMware Balloon Driver"
+	depends on X86
+	help
+	  This is VMware physical memory management driver which acts
+	  like a "balloon" that can be inflated to reclaim physical pages
+	  by reserving them in the guest and invalidating them in the
+	  monitor, freeing up the underlying machine pages so they can
+	  be allocated to other guests. The balloon can also be deflated
+	  to allow the guest to use more physical memory.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called vmware_balloon.
 
 config WL127X_RFKILL
 	tristate "Bluetooth power control driver for TI wl127x"
@@ -350,6 +472,13 @@ config TSIF_DEBUG
 	---help---
 	  This turns on debugging information for the tsif driver
 
+config HAPTIC_ISA1200
+	tristate "ISA1200 haptic support"
+	depends on I2C
+	default n
+	help
+	  The ISA1200 is a high performance enhanced haptic driver.
+
 config PMIC8058_PWM
 	tristate "Qualcomm PM8058 PWM support"
 	depends on PMIC8058
@@ -359,13 +488,6 @@ config PMIC8058_PWM
 	  on Qualcomm PM8058 chip. Pulse Width Modulation is used for
 	  purposes including software controlled brightness of backlight,
 	  motor control, and waveform generation.
-
-config HAPTIC_ISA1200
-	tristate "ISA1200 haptic support"
-	depends on I2C
-	default n
-	help
-	  The ISA1200 is a high performance enhanced haptic driver.
 
 config PMIC8058_VIBRATOR
 	tristate "Qualcomm PM8058 vibrator support"
@@ -383,6 +505,16 @@ config PMIC8058_NFC
 	  Qualcomm PM8058 chip has a module to support NFC (Near Field
 	  Communication). This option enables the driver to support it.
 
+config PMIC8058_UPL
+	tristate "Qualcomm PM8058 support for User Programmable Logic"
+	depends on PMIC8058
+	default n
+	help
+	  This option enables device driver support for User Programmable Logic
+	  on Qualcomm PM8058 chip.  The UPL module provides a means to implement
+	  simple truth table based logic via a set of control registers. I/O may
+	  be routed in and out of the UPL module via GPIO or DTEST pins.
+
 config LGE_AT_CMD_DEVICE
 	bool "Support LGE AT_CMD device"
 	default n
@@ -391,9 +523,36 @@ config LGE_AT_CMD_DEVICE
 	help
 	 Choose if use AT_CMD device used for sending uevent to user space
 
+config PMIC8058_XOADC
+	tristate "Qualcomm PM8058 XOADC driver"
+	depends on PMIC8058
+	default n
+	help
+	  Enables User processor ADC reads over the XOADC module of Qualcomm's
+	  PMIC8058. Driver interface to program registers of the ADC over
+	  AMUX channels, devices on programmable MPP's and xotherm.
+
+config PMIC8058_MISC
+	tristate "Qualcomm PM8058 Misc Device driver"
+	depends on PMIC8058
+	default n
+	help
+	  Provides functionality for various small drivers utilizing the
+	  Qualcomm PM8058 chip.  Examples include: signalling when the 32kHz
+	  oscillator malfunctions.
+
+config PMIC8058_BATTALARM
+	tristate "Qualcomm PM8058 Battery Alarm Device driver"
+	depends on PMIC8058
+	help
+	  This option enables support for the battery alarm module on the
+	  Qualcomm PM8058 PMIC chip.  This support allows for configuration of
+	  the alarm module as well as interrupt handling.
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
-source "drivers/misc/vidc/Kconfig"
+source "drivers/misc/iwmc3200top/Kconfig"
+source "drivers/misc/video_core/720p/Kconfig"
 
 endif # MISC_DEVICES

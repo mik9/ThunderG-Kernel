@@ -34,7 +34,7 @@
 #include <linux/android_pmem.h>
 #include <asm/ioctls.h>
 #include <mach/msm_adsp.h>
-
+#include <linux/slab.h>
 #include <mach/qdsp5v2/qdsp5audppmsg.h>
 #include <mach/qdsp5v2/qdsp5audplaycmdi.h>
 #include <mach/qdsp5v2/qdsp5audplaymsg.h>
@@ -185,6 +185,7 @@ static int audqcelp_enable(struct audio *audio)
 	if (audio->enabled)
 		return 0;
 
+	audio->dec_state = MSM_AUD_DECODER_STATE_NONE;
 	audio->out_tail = 0;
 	audio->out_needed = 0;
 
@@ -856,7 +857,6 @@ static long audqcelp_ioctl(struct file *file, unsigned int cmd,
 	switch (cmd) {
 	case AUDIO_START:
 		MM_DBG("AUDIO_START\n");
-		audio->dec_state = MSM_AUD_DECODER_STATE_NONE;
 		rc = audqcelp_enable(audio);
 		if (!rc) {
 			rc = wait_event_interruptible_timeout(audio->wait,
@@ -1031,8 +1031,7 @@ static long audqcelp_ioctl(struct file *file, unsigned int cmd,
 }
 
 /* Only useful in tunnel-mode */
-static int audqcelp_fsync(struct file *file, struct dentry *dentry,
-			int datasync)
+static int audqcelp_fsync(struct file *file, int datasync)
 {
 	struct audio *audio = file->private_data;
 	int rc = 0;

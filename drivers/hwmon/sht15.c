@@ -36,6 +36,7 @@
 #include <linux/err.h>
 #include <linux/sht15.h>
 #include <linux/regulator/consumer.h>
+#include <linux/slab.h>
 #include <asm/atomic.h>
 
 #define SHT15_MEASURE_TEMP	3
@@ -332,11 +333,11 @@ static inline int sht15_calc_humid(struct sht15_data *data)
 
 	const int c1 = -4;
 	const int c2 = 40500; /* x 10 ^ -6 */
-	const int c3 = -28; /* x 10 ^ -7 */
+	const int c3 = -2800; /* x10 ^ -9 */
 
 	RHlinear = c1*1000
 		+ c2 * data->val_humid/1000
-		+ (data->val_humid * data->val_humid * c3) / 10000;
+		+ (data->val_humid * data->val_humid * c3)/1000000;
 	return (temp - 25000) * (10000 + 80 * data->val_humid)
 		/ 1000000 + RHlinear;
 }

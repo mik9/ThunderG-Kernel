@@ -265,7 +265,7 @@ static void pmic_mpp_isink_set(struct led_classdev *led_cdev,
 		mpp_number = (int)PM_MPP_19;
 	else
 		return;
-	printk (" LED DEBUG: Value is %d \n",value);
+	/* printk (" LED DEBUG: Value is %d \n",value); //debug msg disable */
 	if(value == 0)
 		on_off = (int)PM_MPP__I_SINK__SWITCH_DIS;
 	else
@@ -297,7 +297,7 @@ static void pmic_mpp_isink_set(struct led_classdev *led_cdev,
 			brightness = PM_MPP__I_SINK__LEVEL_40mA;
 			break;
 		default :
-			brightness = PM_MPP__I_SINK__LEVEL_15mA;
+			brightness = PM_MPP__I_SINK__LEVEL_10mA;
 			break;
 	}
 

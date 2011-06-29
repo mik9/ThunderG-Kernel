@@ -36,6 +36,7 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_transport_sas.h>
 #include <linux/scatterlist.h>
+#include <linux/slab.h>
 
 struct block_device;
 
@@ -634,7 +635,8 @@ extern int sas_target_alloc(struct scsi_target *);
 extern int sas_slave_alloc(struct scsi_device *);
 extern int sas_slave_configure(struct scsi_device *);
 extern void sas_slave_destroy(struct scsi_device *);
-extern int sas_change_queue_depth(struct scsi_device *, int new_depth);
+extern int sas_change_queue_depth(struct scsi_device *, int new_depth,
+				  int reason);
 extern int sas_change_queue_type(struct scsi_device *, int qt);
 extern int sas_bios_param(struct scsi_device *,
 			  struct block_device *,

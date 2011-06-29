@@ -27,15 +27,16 @@
 #include <linux/gpio.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
+#include <linux/regulator/consumer.h>
 #include <asm/irq.h>
-
 
 /*
  * This code has been heavily tested on a Nokia 770, and lightly
- * tested on other ads7846 devices (OSK/Mistral, Lubbock).
+ * tested on other ads7846 devices (OSK/Mistral, Lubbock, Spitz).
  * TSC2046 is just newer ads7846 silicon.
  * Support for ads7843 tested on Atmel at91sam926x-EK.
  * Support for ads7845 has only been stubbed in.
+ * Support for Analog Devices AD7873 and AD7843 tested.
  *
  * IRQ handling needs a workaround because of a shortcoming in handling
  * edge triggered IRQs on some platforms like the OMAP1/2. These
@@ -43,7 +44,7 @@
  * have to maintain our own SW IRQ disabled status. This should be
  * removed as soon as the affected platform's IRQ handling is fixed.
  *
- * app note sbaa036 talks in more detail about accurate sampling...
+ * App note sbaa036 talks in more detail about accurate sampling...
  * that ought to help in situations like LCDs inducing noise (which
  * can also be helped by using synch signals) and more generally.
  * This driver tries to utilize the measures described in the app
@@ -86,6 +87,7 @@ struct ads7846 {
 	char			name[32];
 
 	struct spi_device	*spi;
+	struct regulator	*reg;
 
 #if defined(CONFIG_HWMON) || defined(CONFIG_HWMON_MODULE)
 	struct attribute_group	*attr_group;
@@ -566,10 +568,8 @@ static void ads7846_rx(void *ads)
 	 * once more the measurement
 	 */
 	if (packet->tc.ignore || Rt > ts->pressure_max) {
-#ifdef VERBOSE
-		pr_debug("%s: ignored %d pressure %d\n",
-			dev_name(&ts->spi->dev), packet->tc.ignore, Rt);
-#endif
+		dev_vdbg(&ts->spi->dev, "ignored %d pressure %d\n",
+			 packet->tc.ignore, Rt);
 		hrtimer_start(&ts->timer, ktime_set(0, TS_POLL_PERIOD),
 			      HRTIMER_MODE_REL);
 		return;
@@ -598,9 +598,7 @@ static void ads7846_rx(void *ads)
 		if (!ts->pendown) {
 			input_report_key(input, BTN_TOUCH, 1);
 			ts->pendown = 1;
-#ifdef VERBOSE
-			dev_dbg(&ts->spi->dev, "DOWN\n");
-#endif
+			dev_vdbg(&ts->spi->dev, "DOWN\n");
 		}
 
 		if (ts->swap_xy)
@@ -608,12 +606,10 @@ static void ads7846_rx(void *ads)
 
 		input_report_abs(input, ABS_X, x);
 		input_report_abs(input, ABS_Y, y);
-		input_report_abs(input, ABS_PRESSURE, Rt);
+		input_report_abs(input, ABS_PRESSURE, ts->pressure_max - Rt);
 
 		input_sync(input);
-#ifdef VERBOSE
-		dev_dbg(&ts->spi->dev, "%4d/%4d/%4d\n", x, y, Rt);
-#endif
+		dev_vdbg(&ts->spi->dev, "%4d/%4d/%4d\n", x, y, Rt);
 	}
 
 	hrtimer_start(&ts->timer, ktime_set(0, TS_POLL_PERIOD),
@@ -723,9 +719,7 @@ static enum hrtimer_restart ads7846_timer(struct hrtimer *handle)
 			input_sync(input);
 
 			ts->pendown = 0;
-#ifdef VERBOSE
-			dev_dbg(&ts->spi->dev, "UP\n");
-#endif
+			dev_vdbg(&ts->spi->dev, "UP\n");
 		}
 
 		/* measurement cycle ended */
@@ -797,6 +791,8 @@ static void ads7846_disable(struct ads7846 *ts)
 		}
 	}
 
+	regulator_disable(ts->reg);
+
 	/* we know the chip's in lowpower mode since we always
 	 * leave it that way after every request
 	 */
@@ -807,6 +803,8 @@ static void ads7846_enable(struct ads7846 *ts)
 {
 	if (!ts->disabled)
 		return;
+
+	regulator_enable(ts->reg);
 
 	ts->disabled = 0;
 	ts->irq_disabled = 0;
@@ -824,6 +822,9 @@ static int ads7846_suspend(struct spi_device *spi, pm_message_t message)
 
 	spin_unlock_irq(&ts->lock);
 
+	if (device_may_wakeup(&ts->spi->dev))
+		enable_irq_wake(ts->spi->irq);
+
 	return 0;
 
 }
@@ -831,6 +832,9 @@ static int ads7846_suspend(struct spi_device *spi, pm_message_t message)
 static int ads7846_resume(struct spi_device *spi)
 {
 	struct ads7846 *ts = dev_get_drvdata(&spi->dev);
+
+	if (device_may_wakeup(&ts->spi->dev))
+		disable_irq_wake(ts->spi->irq);
 
 	spin_lock_irq(&ts->lock);
 
@@ -986,6 +990,15 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 			pdata->pressure_min, pdata->pressure_max, 0, 0);
 
 	vref = pdata->keep_vref_on;
+
+	if (ts->model == 7873) {
+		/* The AD7873 is almost identical to the ADS7846
+		 * keep VREF off during differential/ratiometric
+		 * conversion modes
+		 */
+		ts->model = 7846;
+		vref = 0;
+	}
 
 	/* set up the transfers to read touchscreen state; this assumes we
 	 * use formula #2 for pressure, not #3.
@@ -1148,6 +1161,19 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 
 	ts->last_msg = m;
 
+	ts->reg = regulator_get(&spi->dev, "vcc");
+	if (IS_ERR(ts->reg)) {
+		err = PTR_ERR(ts->reg);
+		dev_err(&spi->dev, "unable to get regulator: %d\n", err);
+		goto err_free_gpio;
+	}
+
+	err = regulator_enable(ts->reg);
+	if (err) {
+		dev_err(&spi->dev, "unable to enable regulator: %d\n", err);
+		goto err_put_regulator;
+	}
+
 	if (request_irq(spi->irq, ads7846_irq, IRQF_TRIGGER_FALLING,
 			spi->dev.driver->name, ts)) {
 		dev_info(&spi->dev,
@@ -1157,7 +1183,7 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 				  spi->dev.driver->name, ts);
 		if (err) {
 			dev_dbg(&spi->dev, "irq %d busy?\n", spi->irq);
-			goto err_free_gpio;
+			goto err_disable_regulator;
 		}
 	}
 
@@ -1181,6 +1207,8 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 	if (err)
 		goto err_remove_attr_group;
 
+	device_init_wakeup(&spi->dev, pdata->wakeup);
+
 	return 0;
 
  err_remove_attr_group:
@@ -1189,6 +1217,10 @@ static int __devinit ads7846_probe(struct spi_device *spi)
 	ads784x_hwmon_unregister(spi, ts);
  err_free_irq:
 	free_irq(spi->irq, ts);
+ err_disable_regulator:
+	regulator_disable(ts->reg);
+ err_put_regulator:
+	regulator_put(ts->reg);
  err_free_gpio:
 	if (ts->gpio_pendown != -1)
 		gpio_free(ts->gpio_pendown);
@@ -1206,6 +1238,8 @@ static int __devexit ads7846_remove(struct spi_device *spi)
 {
 	struct ads7846		*ts = dev_get_drvdata(&spi->dev);
 
+	device_init_wakeup(&spi->dev, false);
+
 	ads784x_hwmon_unregister(spi, ts);
 	input_unregister_device(ts->input);
 
@@ -1216,6 +1250,9 @@ static int __devexit ads7846_remove(struct spi_device *spi)
 	free_irq(ts->spi->irq, ts);
 	/* suspend left the IRQ disabled */
 	enable_irq(ts->spi->irq);
+
+	regulator_disable(ts->reg);
+	regulator_put(ts->reg);
 
 	if (ts->gpio_pendown != -1)
 		gpio_free(ts->gpio_pendown);

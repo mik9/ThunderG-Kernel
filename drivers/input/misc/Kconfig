@@ -12,6 +12,46 @@ menuconfig INPUT_MISC
 
 if INPUT_MISC
 
+config INPUT_88PM860X_ONKEY
+	tristate "88PM860x ONKEY support"
+	depends on MFD_88PM860X
+	help
+	  Support the ONKEY of Marvell 88PM860x PMICs as an input device
+	  reporting power button status.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called 88pm860x_onkey.
+
+config INPUT_AD714X
+	tristate "Analog Devices AD714x Capacitance Touch Sensor"
+	help
+	  Say Y here if you want to support an AD7142/3/7/8/7A touch sensor.
+
+	  You should select a bus connection too.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad714x.
+
+config INPUT_AD714X_I2C
+	tristate "support I2C bus connection"
+	depends on INPUT_AD714X && I2C
+	default y
+	help
+	  Say Y here if you have AD7142/AD7147 hooked to an I2C bus.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad714x-i2c.
+
+config INPUT_AD714X_SPI
+	tristate "support SPI bus connection"
+	depends on INPUT_AD714X && SPI
+	default y
+	help
+	  Say Y here if you have AD7142/AD7147 hooked to a SPI bus.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ad714x-spi.
+
 config INPUT_PCSPKR
 	tristate "PC Speaker support"
 	depends on PCSPKR_PLATFORM
@@ -39,6 +79,16 @@ config INPUT_SPARCSPKR
 config INPUT_M68K_BEEP
 	tristate "M68k Beeper support"
 	depends on M68K
+
+config INPUT_MAX8925_ONKEY
+	tristate "MAX8925 ONKEY support"
+	depends on MFD_MAX8925
+	help
+	  Support the ONKEY of MAX8925 PMICs as an input device
+	  reporting power button status.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called max8925_onkey.
 
 config INPUT_APANEL
 	tristate "Fujitsu Lifebook Application Panel buttons"
@@ -80,6 +130,7 @@ config INPUT_WISTRON_BTNS
 	tristate "x86 Wistron laptop button interface"
 	depends on X86 && !X86_64
 	select INPUT_POLLDEV
+	select INPUT_SPARSEKMAP
 	select NEW_LEDS
 	select LEDS_CLASS
 	select CHECK_SIGNATURE
@@ -214,6 +265,17 @@ config INPUT_TWL4030_PWRBUTTON
 	  To compile this driver as a module, choose M here. The module will
 	  be called twl4030_pwrbutton.
 
+config INPUT_TWL4030_VIBRA
+	tristate "Support for TWL4030 Vibrator"
+	depends on TWL4030_CORE
+	select TWL4030_CODEC
+	select INPUT_FF_MEMLESS
+	help
+	  This option enables support for TWL4030 Vibrator Driver.
+
+	  To compile this driver as a module, choose M here. The module will
+	  be called twl4030_vibra.
+
 config INPUT_UINPUT
 	tristate "User level driver support"
 	help
@@ -256,6 +318,18 @@ config INPUT_GPIO
 	help
 	  Say Y here if you want to support gpio based keys, wheels etc...
 
+config INPUT_ISA1200_FF_MEMLESS
+	tristate "ISA1200 haptic ff-memless support"
+	depends on I2C
+	select INPUT_FF_MEMLESS
+	help
+	  ISA1200 is a high performance enhanced haptic chip.
+	  Say Y here if you want to support ISA1200 connected via I2C,
+	  and select N if you are unsure.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called isa1200-ff-memless.
+
 config HP_SDC_RTC
 	tristate "HP SDC Real Time Clock"
 	depends on (GSC || HP300) && SERIO
@@ -270,6 +344,16 @@ config INPUT_PCF50633_PMU
 	help
 	 Say Y to include support for delivering  PMU events via  input
 	 layer on NXP PCF50633.
+
+config INPUT_PCF8574
+	tristate "PCF8574 Keypad input device"
+	depends on I2C && EXPERIMENTAL
+	help
+	  Say Y here if you want to support a keypad connetced via I2C
+	  with a PCF8574.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called pcf8574_keypad.
 
 config INPUT_GPIO_ROTARY_ENCODER
 	tristate "Rotary encoders connected to GPIO pins"
@@ -297,6 +381,7 @@ config INPUT_RB532_BUTTON
 config INPUT_DM355EVM
 	tristate "TI DaVinci DM355 EVM Keypad and IR Remote"
 	depends on MFD_DM355EVM_MSP
+	select INPUT_SPARSEKMAP
 	help
 	  Supports the pushbuttons and IR remote used with
 	  the DM355 EVM board.
@@ -333,42 +418,36 @@ config INPUT_PCAP
 	  To compile this driver as a module, choose M here: the
 	  module will be called pcap_keys.
 
-config INPUT_CAPELLA_CM3602
-	tristate "Capella CM3602 proximity and light sensor"
-	help
-	  Say Y here to enable the Capella CM3602 Short Distance Proximity
-	  Sensor with Ambient Light Sensor.
-
 config PMIC8058_PWRKEY
-	tristate "PMIC8058 power key support"
-	default n
-	depends on PMIC8058
-	help
-	  Say Y here if you want support for the PMIC8058 power key.
+        tristate "PMIC8058 power key support"
+        default n
+        depends on PMIC8058
+        help
+          Say Y here if you want support for the PMIC8058 power key.
 
-	  To compile this driver as a module, choose M here: the
-	  module will be called pmic8058-pwrkey.
+          To compile this driver as a module, choose M here: the
+          module will be called pmic8058-pwrkey.
 
 config PMIC8058_OTHC
-	tristate "Qualcomm PMIC8058 OTHC support"
+        tristate "Qualcomm PMIC8058 OTHC support"
+        default n
+        depends on PMIC8058
+        help
+          Say Y here if you want support PMIC8058 OTHC.
+
+          To compile this driver as a module, choose M here: the
+          module will be called pmic8058-othc.
+
+config INPUT_PMIC8058_VIBRA_MEMLESS
+	tristate "Qualcomm PM8058 vibrator support (ff-memless)"
+	depends on PMIC8058 && INPUT_FF_MEMLESS
 	default n
-	depends on PMIC8058
 	help
-	  Say Y here if you want support PMIC8058 OTHC.
+	  This option enables device driver support for the vibrator
+	  on Qualcomm PM8058 chip. This driver supports ff-memless interface
+	  from input framework.
 
-	  To compile this driver as a module, choose M here: the
-	  module will be called pmic8058-othc.
-
-config INPUT_KP_FLIP_SWITCH
-	tristate "flip switch detection support"
-	default y
-	depends on PMIC8058 && ARCH_MSM7X30
-	help
-	  Say Y here if you want support for the flip switch detection.
-	  This driver can be used with Qualcomm MSM7x30 based development
-	  platforms which have flip switch as part of the PMIC8058 keypad.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called kp_flip_switch.
+	  To compile this driver as module, choose M here: the
+	  module will be called pmic8058-vib-memless.
 
 endif

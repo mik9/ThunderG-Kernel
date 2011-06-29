@@ -24,13 +24,15 @@ SECTIONS {
 	.text : AT(ADDR(.text) - LOAD_OFFSET) {
 		_text = . ;
 		_stext = . ;
-		*(.text .text.*)
+		HEAD_TEXT
+		TEXT_TEXT
 		*(.fixup)
-               EXIT_TEXT
-               EXIT_CALL
+		EXIT_TEXT
+		EXIT_CALL
 		SCHED_TEXT
 		LOCK_TEXT
 		KPROBES_TEXT
+		IRQENTRY_TEXT
 		. = ALIGN (4) ;
 		_etext = . ;
 	}
@@ -86,6 +88,7 @@ SECTIONS {
 		_KERNEL_SDA_BASE_ = _ssro + (_ssro_size / 2) ;
 	}
 
+	. = ALIGN(PAGE_SIZE);
 	__init_begin = .;
 
 	INIT_TEXT_SECTION(PAGE_SIZE)

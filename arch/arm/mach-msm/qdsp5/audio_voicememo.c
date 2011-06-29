@@ -31,6 +31,7 @@
 #include <linux/dma-mapping.h>
 #include <linux/delay.h>
 #include <linux/msm_audio_voicememo.h>
+#include <linux/slab.h>
 
 #include <asm/atomic.h>
 #include <asm/ioctls.h>

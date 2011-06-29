@@ -98,6 +98,11 @@ DECLARE_DELAYED_WORK(sleep_workqueue, bluesleep_sleep_work);
 #define CONFIG_LGE_BRCM_H4_LPM_SUPPORT_PATCH
 #endif
 
+//Un-comment for root permission
+// +++ BRCM_LOCAL : Thunder MR (root->bluetooth)
+//#define BTLA_ROOT_PERMISSION
+// --- BRCM_LOCAL
+
 /* global pointer to a single hci device. */
 static struct hci_dev *bluesleep_hdev;
 
@@ -231,6 +236,7 @@ static void bluesleep_hostwake_task(unsigned long data)
 	else
 		bluesleep_rx_idle();
 #endif
+
 	spin_unlock(&rw_lock);
 }
 
@@ -343,7 +349,7 @@ static void bluesleep_tx_timer_expire(unsigned long data)
  */
 static irqreturn_t bluesleep_hostwake_isr(int irq, void *dev_id)
 {
-	gpio_clear_detect_status(bsi->host_wake_irq);
+//	gpio_clear_detect_status(bsi->host_wake_irq);
 
 	/* schedule a tasklet to handle the change in the host wake line */
 	tasklet_schedule(&hostwake_task);
@@ -681,13 +687,17 @@ static int bluesleep_remove(struct platform_device *pdev)
 }
 
 static struct platform_driver bluesleep_driver = {
-	.probe = bluesleep_probe,
 	.remove = bluesleep_remove,
 	.driver = {
 		.name = "bluesleep",
 		.owner = THIS_MODULE,
 	},
 };
+
+#ifndef BTLA_ROOT_PERMISSION
+#define AID_BLUETOOTH	1002
+#endif
+
 /**
  * Initializes the module.
  * @return On success, 0. On error, -1, and <code>errno</code> is set
@@ -700,7 +710,7 @@ static int __init bluesleep_init(void)
 
 	BT_INFO("MSM Sleep Mode Driver Ver %s", VERSION);
 
-	retval = platform_driver_register(&bluesleep_driver);
+	retval = platform_driver_probe(&bluesleep_driver, bluesleep_probe);
 	if (retval)
 		return retval;
 
@@ -727,6 +737,10 @@ static int __init bluesleep_init(void)
 	}
 	ent->read_proc = bluepower_read_proc_btwake;
 	ent->write_proc = bluepower_write_proc_btwake;
+#ifndef BTLA_ROOT_PERMISSION
+	ent->uid = AID_BLUETOOTH;
+	ent->gid = AID_BLUETOOTH;
+#endif
 
 	/* read only proc entries */
 	if (create_proc_read_entry("hostwake", 0, sleep_dir,
@@ -745,6 +759,10 @@ static int __init bluesleep_init(void)
 	}
 	ent->read_proc = bluesleep_read_proc_proto;
 	ent->write_proc = bluesleep_write_proc_proto;
+#ifndef BTLA_ROOT_PERMISSION
+	ent->uid = AID_BLUETOOTH;
+	ent->gid = AID_BLUETOOTH;
+#endif
 
 	/* read only proc entries */
 	if (create_proc_read_entry("asleep", 0,

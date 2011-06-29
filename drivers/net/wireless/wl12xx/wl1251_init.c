@@ -23,6 +23,7 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/slab.h>
 
 #include "wl1251_init.h"
 #include "wl12xx_80211.h"
@@ -147,7 +148,8 @@ int wl1251_hw_init_beacon_filter(struct wl1251 *wl)
 {
 	int ret;
 
-	ret = wl1251_acx_beacon_filter_opt(wl);
+	/* disable beacon filtering at this stage */
+	ret = wl1251_acx_beacon_filter_opt(wl, false);
 	if (ret < 0)
 		return ret;
 
@@ -293,6 +295,11 @@ static int wl1251_hw_init_tx_queue_config(struct wl1251 *wl)
 			goto out;
 	}
 
+	wl1251_acx_ac_cfg(wl, AC_BE, CWMIN_BE, CWMAX_BE, AIFS_DIFS, TXOP_BE);
+	wl1251_acx_ac_cfg(wl, AC_BK, CWMIN_BK, CWMAX_BK, AIFS_DIFS, TXOP_BK);
+	wl1251_acx_ac_cfg(wl, AC_VI, CWMIN_VI, CWMAX_VI, AIFS_DIFS, TXOP_VI);
+	wl1251_acx_ac_cfg(wl, AC_VO, CWMIN_VO, CWMAX_VO, AIFS_DIFS, TXOP_VO);
+
 out:
 	kfree(config);
 	return ret;
@@ -361,6 +368,11 @@ int wl1251_hw_init(struct wl1251 *wl)
 
 	/* PHY layer config */
 	ret = wl1251_hw_init_phy_config(wl);
+	if (ret < 0)
+		goto out_free_data_path;
+
+	/* Initialize connection monitoring thresholds */
+	ret = wl1251_acx_conn_monit_params(wl);
 	if (ret < 0)
 		goto out_free_data_path;
 

@@ -311,7 +311,7 @@ asmlinkage long sys_oabi_semtimedop(int semid,
 	long err;
 	int i;
 
-	if (nsops < 1 || nsops > SEMOPM)
+	if (nsops < 1)
 		return -EINVAL;
 	sops = kmalloc(sizeof(*sops) * nsops, GFP_KERNEL);
 	if (!sops)
@@ -345,9 +345,6 @@ asmlinkage long sys_oabi_semop(int semid, struct oabi_sembuf __user *tsops,
 {
 	return sys_oabi_semtimedop(semid, tsops, nsops, NULL);
 }
-
-extern asmlinkage int sys_ipc(uint call, int first, int second, int third,
-			      void __user *ptr, long fifth);
 
 asmlinkage int sys_oabi_ipc(uint call, int first, int second, int third,
 			    void __user *ptr, long fifth)

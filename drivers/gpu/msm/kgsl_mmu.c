@@ -1,4 +1,4 @@
-/* Copyright (c) 2002,2007-2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2002,2007-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,6 +19,11 @@
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
 #include <linux/genalloc.h>
+#include <linux/slab.h>
+#include <linux/io.h>
+#include <linux/bitmap.h>
+#include <linux/dmapool.h>
+
 #ifdef CONFIG_MSM_KGSL_MMU
 #include <asm/pgalloc.h>
 #include <asm/pgtable.h>
@@ -40,10 +45,6 @@ struct kgsl_pte_debug {
 	unsigned int reserved:9;
 	unsigned int phyaddr:20;
 };
-
-#define GSL_PTE_SIZE	4
-#define GSL_PT_EXTRA_ENTRIES	16
-
 
 #define GSL_PT_PAGE_BITS_MASK	0x00000007
 #define GSL_PT_PAGE_ADDR_MASK	(~(KGSL_PAGESIZE - 1))
@@ -78,74 +79,46 @@ static const struct kgsl_mmu_reg mmu_reg[KGSL_DEVICE_MAX] = {
 		.interrupt_mask = ADDR_MH_INTERRUPT_MASK,
 		.interrupt_status = ADDR_MH_INTERRUPT_STATUS,
 		.interrupt_clear = ADDR_MH_INTERRUPT_CLEAR
+	},
+	{
+		.config = ADDR_MH_MMU_CONFIG,
+		.mpu_base = ADDR_MH_MMU_MPU_BASE,
+		.mpu_end = ADDR_MH_MMU_MPU_END,
+		.va_range = ADDR_MH_MMU_VA_RANGE,
+		.pt_page = ADDR_MH_MMU_PT_BASE,
+		.page_fault = ADDR_MH_MMU_PAGE_FAULT,
+		.tran_error = ADDR_MH_MMU_TRAN_ERROR,
+		.invalidate = ADDR_MH_MMU_INVALIDATE,
+		.interrupt_mask = ADDR_MH_INTERRUPT_MASK,
+		.interrupt_status = ADDR_MH_INTERRUPT_STATUS,
+		.interrupt_clear = ADDR_MH_INTERRUPT_CLEAR
 	}
 };
 
-uint32_t kgsl_pt_entry_get(struct kgsl_pagetable *pt, uint32_t va)
+static inline uint32_t
+kgsl_pt_entry_get(struct kgsl_pagetable *pt, uint32_t va)
 {
 	return (va - pt->va_base) >> KGSL_PAGESIZE_SHIFT;
 }
 
-uint32_t kgsl_pt_map_get(struct kgsl_pagetable *pt, uint32_t pte)
+static inline void
+kgsl_pt_map_set(struct kgsl_pagetable *pt, uint32_t pte, uint32_t val)
 {
 	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	return baseptr[pte];
+	writel(val, &baseptr[pte]);
 }
 
-void kgsl_pt_map_set(struct kgsl_pagetable *pt, uint32_t pte, uint32_t val)
+static inline uint32_t
+kgsl_pt_map_getaddr(struct kgsl_pagetable *pt, uint32_t pte)
 {
 	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	baseptr[pte] = val;
-}
-#define GSL_PT_MAP_DEBUG(pte)	((struct kgsl_pte_debug *) \
-		&gsl_pt_map_get(pagetable, pte))
-
-void kgsl_pt_map_setbits(struct kgsl_pagetable *pt, uint32_t pte, uint32_t bits)
-{
-	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	baseptr[pte] |= bits;
-}
-
-void kgsl_pt_map_setaddr(struct kgsl_pagetable *pt, uint32_t pte,
-					uint32_t pageaddr)
-{
-	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	uint32_t val = baseptr[pte];
-	val &= ~GSL_PT_PAGE_ADDR_MASK;
-	val |= (pageaddr & GSL_PT_PAGE_ADDR_MASK);
-	baseptr[pte] = val;
-}
-
-void kgsl_pt_map_resetall(struct kgsl_pagetable *pt, uint32_t pte)
-{
-	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	baseptr[pte] &= GSL_PT_PAGE_DIRTY;
-}
-
-void kgsl_pt_map_resetbits(struct kgsl_pagetable *pt, uint32_t pte,
-				uint32_t bits)
-{
-	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	baseptr[pte] &= ~(bits & GSL_PT_PAGE_BITS_MASK);
-}
-
-int kgsl_pt_map_isdirty(struct kgsl_pagetable *pt, uint32_t pte)
-{
-	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	return baseptr[pte] & GSL_PT_PAGE_DIRTY;
-}
-
-uint32_t kgsl_pt_map_getaddr(struct kgsl_pagetable *pt, uint32_t pte)
-{
-	uint32_t *baseptr = (uint32_t *)pt->base.hostptr;
-	return baseptr[pte] & GSL_PT_PAGE_ADDR_MASK;
+	return readl(&baseptr[pte]) & GSL_PT_PAGE_ADDR_MASK;
 }
 
 void kgsl_mh_intrcallback(struct kgsl_device *device)
 {
 	unsigned int status = 0;
 	unsigned int reg;
-	struct kgsl_mmu_debug dbg;
 
 	KGSL_MEM_VDBG("enter (device=%p)\n", device);
 
@@ -153,14 +126,11 @@ void kgsl_mh_intrcallback(struct kgsl_device *device)
 
 	if (status & MH_INTERRUPT_MASK__AXI_READ_ERROR) {
 		KGSL_MEM_FATAL("axi read error interrupt\n");
-		kgsl_mmu_debug(&device->mmu, &dbg);
 	} else if (status & MH_INTERRUPT_MASK__AXI_WRITE_ERROR) {
 		KGSL_MEM_FATAL("axi write error interrupt\n");
-		kgsl_mmu_debug(&device->mmu, &dbg);
 	} else if (status & MH_INTERRUPT_MASK__MMU_PAGE_FAULT) {
 		kgsl_regread(device, mmu_reg[device->id].page_fault, &reg);
 		KGSL_MEM_FATAL("mmu page fault interrupt: %08x\n", reg);
-		kgsl_mmu_debug(&device->mmu, &dbg);
 	} else {
 		KGSL_MEM_DBG("bad bits in REG_MH_INTERRUPT_STATUS %08x\n",
 			     status);
@@ -176,44 +146,12 @@ void kgsl_mh_intrcallback(struct kgsl_device *device)
 	KGSL_MEM_VDBG("return\n");
 }
 
-#ifdef DEBUG
-void kgsl_mmu_debug(struct kgsl_mmu *mmu, struct kgsl_mmu_debug *regs)
-{
-	unint32_t id = mmu->device->id;
-
-	memset(regs, 0, sizeof(struct kgsl_mmu_debug));
-	kgsl_regread(mmu->device, mmu_reg[id].config, &regs->config);
-	kgsl_regread(mmu->device, mmu_reg[id].mpu_base, &regs->mpu_base);
-	kgsl_regread(mmu->device, mmu_reg[id].mpu_end, &regs->mpu_end);
-	kgsl_regread(mmu->device, mmu_reg[id].va_range, &regs->va_range);
-	kgsl_regread(mmu->device, mmu_reg[id].pt_base, &regs->pt_base);
-	kgsl_regread(mmu->device, mmu_reg[id].page_fault, &regs->page_fault);
-	kgsl_regread(mmu->device, mmu_reg[id].tran_error, &regs->trans_error);
-	kgsl_regread(mmu->device, mmu_reg[id].axi_error, &regs->axi_error);
-	kgsl_regread(mmu->device, mmu_reg[id].interrupt_mask,
-				 &regs->interrupt_mask);
-	kgsl_regread(mmu->device, mmu_reg[id].interrupt_status,
-				&regs->interrupt_status);
-
-
-	KGSL_MEM_DBG("mmu config %08x mpu_base %08x mpu_end %08x\n",
-		     regs->config, regs->mpu_base, regs->mpu_end);
-	KGSL_MEM_DBG("mmu va_range %08x pt_base %08x \n",
-		     regs->va_range, regs->pt_base);
-	KGSL_MEM_DBG("mmu page_fault %08x tran_err %08x\n",
-		     regs->page_fault, regs->trans_error);
-	KGSL_MEM_DBG("mmu int mask %08x int status %08x\n",
-			regs->interrupt_mask, regs->interrupt_status);
-}
-#endif
-
 static struct kgsl_pagetable *kgsl_mmu_createpagetableobject(
 				struct kgsl_mmu *mmu,
 				unsigned int name)
 {
 	int status = 0;
 	struct kgsl_pagetable *pagetable = NULL;
-	uint32_t flags;
 
 	KGSL_MEM_VDBG("enter (mmu=%p)\n", mmu);
 
@@ -225,12 +163,13 @@ static struct kgsl_pagetable *kgsl_mmu_createpagetableobject(
 
 	pagetable->refcnt = 1;
 
+	spin_lock_init(&pagetable->lock);
+	pagetable->tlb_flags = 0;
 	pagetable->name = name;
 	pagetable->va_base = mmu->va_base;
 	pagetable->va_range = mmu->va_range;
 	pagetable->last_superpte = 0;
-	pagetable->max_entries = (mmu->va_range >> KGSL_PAGESIZE_SHIFT)
-				 + GSL_PT_EXTRA_ENTRIES;
+	pagetable->max_entries = KGSL_PAGETABLE_ENTRIES(mmu->va_range);
 
 	pagetable->tlbflushfilter.size = (mmu->va_range /
 				(PAGE_SIZE * GSL_PT_SUPER_PTE * 8)) + 1;
@@ -255,33 +194,27 @@ static struct kgsl_pagetable *kgsl_mmu_createpagetableobject(
 		goto err_pool;
 	}
 
-	/* allocate page table memory */
-	flags = (KGSL_MEMFLAGS_ALIGN4K | KGSL_MEMFLAGS_CONPHYS
-		 | KGSL_MEMFLAGS_STRICTREQUEST);
-	status = kgsl_sharedmem_alloc(flags,
-				      pagetable->max_entries * GSL_PTE_SIZE,
-				      &pagetable->base);
-	if (status != 0)
-		goto err_pool;
+	pagetable->base.hostptr = dma_pool_alloc(kgsl_driver.ptpool,
+						 GFP_KERNEL,
+						 &pagetable->base.physaddr);
 
-	/* reset page table entries
-	 * -- all pte's are marked as not dirty initially
-	 */
-	kgsl_sharedmem_set(&pagetable->base, 0, 0, pagetable->base.size);
+	if (pagetable->base.hostptr == NULL) {
+		KGSL_MEM_ERR("Unable to allocate memory for the pagetable\n");
+		goto err_pool;
+	}
 
 	pagetable->base.gpuaddr = pagetable->base.physaddr;
+	pagetable->base.size = kgsl_driver.ptsize;
 
 	status = kgsl_setup_pt(pagetable);
 	if (status)
-		goto err_free_sharedmem;
+		goto err_pool;
 
 	list_add(&pagetable->list, &kgsl_driver.pagetable_list);
 
 	KGSL_MEM_VDBG("return %p\n", pagetable);
 	return pagetable;
 
-err_free_sharedmem:
-	kgsl_sharedmem_free(&pagetable->base);
 err_pool:
 	gen_pool_destroy(pagetable->pool);
 err_flushfilter:
@@ -298,26 +231,23 @@ static void kgsl_mmu_destroypagetable(struct kgsl_pagetable *pagetable)
 
 	list_del(&pagetable->list);
 
-	if (pagetable) {
-		kgsl_cleanup_pt(pagetable);
-		if (pagetable->base.gpuaddr)
-			kgsl_sharedmem_free(&pagetable->base);
+	kgsl_cleanup_pt(pagetable);
 
-		if (pagetable->pool) {
-			gen_pool_destroy(pagetable->pool);
-			pagetable->pool = NULL;
-		}
+	dma_pool_free(kgsl_driver.ptpool, pagetable->base.hostptr,
+		      pagetable->base.physaddr);
 
-		if (pagetable->tlbflushfilter.base) {
-			pagetable->tlbflushfilter.size = 0;
-			kfree(pagetable->tlbflushfilter.base);
-			pagetable->tlbflushfilter.base = NULL;
-		}
-
-		kfree(pagetable);
-
+	if (pagetable->pool) {
+		gen_pool_destroy(pagetable->pool);
+		pagetable->pool = NULL;
 	}
-	KGSL_MEM_VDBG("return 0x%08x\n", 0);
+
+	if (pagetable->tlbflushfilter.base) {
+		pagetable->tlbflushfilter.size = 0;
+		kfree(pagetable->tlbflushfilter.base);
+		pagetable->tlbflushfilter.base = NULL;
+	}
+
+	kfree(pagetable);
 }
 
 struct kgsl_pagetable *kgsl_mmu_getpagetable(struct kgsl_mmu *mmu,
@@ -332,7 +262,9 @@ struct kgsl_pagetable *kgsl_mmu_getpagetable(struct kgsl_mmu *mmu,
 
 	list_for_each_entry(pt,	&kgsl_driver.pagetable_list, list) {
 		if (pt->name == name) {
+			spin_lock(&pt->lock);
 			pt->refcnt++;
+			spin_unlock(&pt->lock);
 			mutex_unlock(&kgsl_driver.pt_mutex);
 			return pt;
 		}
@@ -346,13 +278,17 @@ struct kgsl_pagetable *kgsl_mmu_getpagetable(struct kgsl_mmu *mmu,
 
 void kgsl_mmu_putpagetable(struct kgsl_pagetable *pagetable)
 {
-
+	bool dead;
 	if (pagetable == NULL)
 		return;
 
 	mutex_lock(&kgsl_driver.pt_mutex);
 
-	if (!--pagetable->refcnt)
+	spin_lock(&pagetable->lock);
+	dead = (--pagetable->refcnt) == 0;
+	spin_unlock(&pagetable->lock);
+
+	if (dead)
 		kgsl_mmu_destroypagetable(pagetable);
 
 	mutex_unlock(&kgsl_driver.pt_mutex);
@@ -373,6 +309,9 @@ int kgsl_mmu_setstate(struct kgsl_device *device,
 		KGSL_MEM_INFO("from %p to %p\n", mmu->hwpagetable, pagetable);
 		if (mmu->hwpagetable != pagetable) {
 			mmu->hwpagetable = pagetable;
+			spin_lock(&mmu->hwpagetable->lock);
+			mmu->hwpagetable->tlb_flags &= ~(1<<device->id);
+			spin_unlock(&mmu->hwpagetable->lock);
 
 			/* call device specific set page table */
 			status = kgsl_setstate(mmu->device,
@@ -395,15 +334,9 @@ int kgsl_mmu_init(struct kgsl_device *device)
 	 * call this with the global lock held
 	 */
 	int status;
-	uint32_t flags;
 	struct kgsl_mmu *mmu = &device->mmu;
 
 	KGSL_MEM_VDBG("enter (device=%p)\n", device);
-
-	if (mmu->flags & KGSL_FLAGS_INITIALIZED0) {
-		KGSL_MEM_INFO("MMU already initialized.\n");
-		return 0;
-	}
 
 	mmu->device = device;
 
@@ -421,8 +354,6 @@ int kgsl_mmu_init(struct kgsl_device *device)
 	BUG_ON(mmu->mpu_base & (KGSL_PAGESIZE - 1));
 	BUG_ON((mmu->mpu_base + mmu->mpu_range) & (KGSL_PAGESIZE - 1));
 
-	mmu->tlb_flags = 0;
-
 	/* sub-client MMU lookups require address translation */
 	if ((mmu->config & ~0x1) > 0) {
 		/*make sure virtual address range is a multiple of 64Kb */
@@ -431,9 +362,7 @@ int kgsl_mmu_init(struct kgsl_device *device)
 		/* allocate memory used for completing r/w operations that
 		 * cannot be mapped by the MMU
 		 */
-		flags = (KGSL_MEMFLAGS_ALIGN4K | KGSL_MEMFLAGS_CONPHYS
-			 | KGSL_MEMFLAGS_STRICTREQUEST);
-		status = kgsl_sharedmem_alloc(flags, 64, &mmu->dummyspace);
+		status = kgsl_sharedmem_alloc_coherent(&mmu->dummyspace, 64);
 		if (status != 0) {
 			KGSL_MEM_ERR
 			    ("Unable to allocate dummy space memory.\n");
@@ -444,7 +373,6 @@ int kgsl_mmu_init(struct kgsl_device *device)
 				   mmu->dummyspace.size);
 
 	}
-	mmu->flags |= KGSL_FLAGS_INITIALIZED;
 
 	KGSL_MEM_VDBG("return %d\n", 0);
 
@@ -590,11 +518,10 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 				unsigned int *gpuaddr,
 				unsigned int flags)
 {
-	int numpages, i;
+	int numpages;
 	unsigned int pte, ptefirst, ptelast, physaddr;
 	int flushtlb, alloc_size;
 	unsigned int align = flags & KGSL_MEMFLAGS_ALIGN_MASK;
-	struct kgsl_device *device;
 
 	KGSL_MEM_VDBG("enter (pt=%p, physaddr=%08x, range=%08d, gpuaddr=%p)\n",
 		      pagetable, address, range, gpuaddr);
@@ -651,6 +578,7 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 		((ptelast + 1) & (GSL_PT_SUPER_PTE-1)) != 0)
 		flushtlb = 1;
 
+	spin_lock(&pagetable->lock);
 	for (pte = ptefirst; pte < ptelast; pte++) {
 #ifdef VERBOSE_DEBUG
 		/* check if PTE exists */
@@ -677,6 +605,7 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 			KGSL_MEM_ERR
 			("Unable to find physaddr for address: %x\n",
 			     address);
+			spin_unlock(&pagetable->lock);
 			kgsl_mmu_unmap(pagetable, *gpuaddr, range);
 			return -EFAULT;
 		}
@@ -692,18 +621,11 @@ kgsl_mmu_map(struct kgsl_pagetable *pagetable,
 	/* Invalidate tlb only if current page table used by GPU is the
 	 * pagetable that we used to allocate */
 	if (flushtlb) {
-		for (i = 0; i < kgsl_driver.num_devs; i++) {
-			device = kgsl_driver.devp[i];
-			if (device != NULL) {
-				if ((device->flags & KGSL_FLAGS_INITIALIZED) &&
-				    (pagetable == device->mmu.hwpagetable)) {
-					device->mmu.tlb_flags |=
-							KGSL_MMUFLAGS_TLBFLUSH;
-				}
-			}
-		}
+		/*set all devices as needing flushing*/
+		pagetable->tlb_flags = UINT_MAX;
 		GSL_TLBFLUSH_FILTER_RESET();
 	}
+	spin_unlock(&pagetable->lock);
 
 
 	KGSL_MEM_VDBG("return %d\n", 0);
@@ -733,6 +655,7 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable, unsigned int gpuaddr,
 	KGSL_MEM_INFO("pt %p gpu %08x pte first %d last %d numpages %d\n",
 		      pagetable, gpuaddr, ptefirst, ptelast, numpages);
 
+	spin_lock(&pagetable->lock);
 	superpte = ptefirst - (ptefirst & (GSL_PT_SUPER_PTE-1));
 	GSL_TLBFLUSH_FILTER_SETDIRTY(superpte / GSL_PT_SUPER_PTE);
 	for (pte = ptefirst; pte < ptelast; pte++) {
@@ -748,6 +671,7 @@ kgsl_mmu_unmap(struct kgsl_pagetable *pagetable, unsigned int gpuaddr,
 	}
 
 	mb();
+	spin_unlock(&pagetable->lock);
 
 	gen_pool_free(pagetable->pool, gpuaddr, range);
 
@@ -828,13 +752,8 @@ int kgsl_mmu_close(struct kgsl_device *device)
 
 	KGSL_MEM_VDBG("enter (device=%p)\n", device);
 
-	if (mmu->flags & KGSL_FLAGS_INITIALIZED0) {
-		if (mmu->dummyspace.gpuaddr)
-			kgsl_sharedmem_free(&mmu->dummyspace);
-
-		mmu->flags &= ~KGSL_FLAGS_INITIALIZED;
-		mmu->flags &= ~KGSL_FLAGS_INITIALIZED0;
-	}
+	if (mmu->dummyspace.gpuaddr)
+		kgsl_sharedmem_free(&mmu->dummyspace);
 
 	KGSL_MEM_VDBG("return %d\n", 0);
 

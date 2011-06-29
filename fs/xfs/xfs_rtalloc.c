@@ -45,6 +45,7 @@
 #include "xfs_inode_item.h"
 #include "xfs_trans_space.h"
 #include "xfs_utils.h"
+#include "xfs_trace.h"
 
 
 /*
@@ -1516,6 +1517,8 @@ xfs_rtfree_range(
 	 */
 	error = xfs_rtfind_forw(mp, tp, end, mp->m_sb.sb_rextents - 1,
 		&postblock);
+	if (error)
+		return error;
 	/*
 	 * If there are blocks not being freed at the front of the
 	 * old extent, add summary data for them to be allocated.
@@ -2244,7 +2247,7 @@ xfs_rtmount_init(
 		cmn_err(CE_WARN, "XFS: realtime mount -- %llu != %llu",
 			(unsigned long long) XFS_BB_TO_FSB(mp, d),
 			(unsigned long long) mp->m_sb.sb_rblocks);
-		return XFS_ERROR(E2BIG);
+		return XFS_ERROR(EFBIG);
 	}
 	error = xfs_read_buf(mp, mp->m_rtdev_targp,
 				d - XFS_FSB_TO_BB(mp, 1),
@@ -2253,7 +2256,7 @@ xfs_rtmount_init(
 		cmn_err(CE_WARN,
 	"XFS: realtime mount -- xfs_read_buf failed, returned %d", error);
 		if (error == ENOSPC)
-			return XFS_ERROR(E2BIG);
+			return XFS_ERROR(EFBIG);
 		return error;
 	}
 	xfs_buf_relse(bp);

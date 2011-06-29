@@ -15,6 +15,7 @@
 
 #include <linux/init.h>
 #include <linux/pci.h>
+#include <linux/slab.h>
 #include <linux/firmware.h>
 #include <linux/etherdevice.h>
 #include <linux/delay.h>
@@ -31,7 +32,7 @@ MODULE_LICENSE("GPL");
 MODULE_ALIAS("prism54pci");
 MODULE_FIRMWARE("isl3886pci");
 
-static struct pci_device_id p54p_table[] __devinitdata = {
+static DEFINE_PCI_DEVICE_TABLE(p54p_table) = {
 	/* Intersil PRISM Duette/Prism GT Wireless LAN adapter */
 	{ PCI_DEVICE(0x1260, 0x3890) },
 	/* 3COM 3CRWE154G72 Wireless LAN adapter */
@@ -133,7 +134,7 @@ static int p54p_upload_firmware(struct ieee80211_hw *dev)
 
 static void p54p_refill_rx_ring(struct ieee80211_hw *dev,
 	int ring_index, struct p54p_desc *ring, u32 ring_limit,
-	struct sk_buff **rx_buf)
+	struct sk_buff **rx_buf, u32 index)
 {
 	struct p54p_priv *priv = dev->priv;
 	struct p54p_ring_control *ring_control = priv->ring_control;
@@ -141,7 +142,7 @@ static void p54p_refill_rx_ring(struct ieee80211_hw *dev,
 
 	idx = le32_to_cpu(ring_control->host_idx[ring_index]);
 	limit = idx;
-	limit -= le32_to_cpu(ring_control->device_idx[ring_index]);
+	limit -= index;
 	limit = ring_limit - limit;
 
 	i = idx % ring_limit;
@@ -198,7 +199,6 @@ static void p54p_check_rx_ring(struct ieee80211_hw *dev, u32 *index,
 	while (i != idx) {
 		u16 len;
 		struct sk_buff *skb;
-		dma_addr_t dma_addr;
 		desc = &ring[i];
 		len = le16_to_cpu(desc->len);
 		skb = rx_buf[i];
@@ -216,20 +216,17 @@ static void p54p_check_rx_ring(struct ieee80211_hw *dev, u32 *index,
 
 			len = priv->common.rx_mtu;
 		}
-		dma_addr = le32_to_cpu(desc->host_addr);
-		pci_dma_sync_single_for_cpu(priv->pdev, dma_addr,
-			priv->common.rx_mtu + 32, PCI_DMA_FROMDEVICE);
 		skb_put(skb, len);
 
 		if (p54_rx(dev, skb)) {
-			pci_unmap_single(priv->pdev, dma_addr,
-				priv->common.rx_mtu + 32, PCI_DMA_FROMDEVICE);
+			pci_unmap_single(priv->pdev,
+					 le32_to_cpu(desc->host_addr),
+					 priv->common.rx_mtu + 32,
+					 PCI_DMA_FROMDEVICE);
 			rx_buf[i] = NULL;
-			desc->host_addr = cpu_to_le32(0);
+			desc->host_addr = 0;
 		} else {
 			skb_trim(skb, 0);
-			pci_dma_sync_single_for_device(priv->pdev, dma_addr,
-				priv->common.rx_mtu + 32, PCI_DMA_FROMDEVICE);
 			desc->len = cpu_to_le16(priv->common.rx_mtu + 32);
 		}
 
@@ -237,17 +234,17 @@ static void p54p_check_rx_ring(struct ieee80211_hw *dev, u32 *index,
 		i %= ring_limit;
 	}
 
-	p54p_refill_rx_ring(dev, ring_index, ring, ring_limit, rx_buf);
+	p54p_refill_rx_ring(dev, ring_index, ring, ring_limit, rx_buf, *index);
 }
 
-/* caller must hold priv->lock */
 static void p54p_check_tx_ring(struct ieee80211_hw *dev, u32 *index,
 	int ring_index, struct p54p_desc *ring, u32 ring_limit,
-	void **tx_buf)
+	struct sk_buff **tx_buf)
 {
 	struct p54p_priv *priv = dev->priv;
 	struct p54p_ring_control *ring_control = priv->ring_control;
 	struct p54p_desc *desc;
+	struct sk_buff *skb;
 	u32 idx, i;
 
 	i = (*index) % ring_limit;
@@ -256,9 +253,8 @@ static void p54p_check_tx_ring(struct ieee80211_hw *dev, u32 *index,
 
 	while (i != idx) {
 		desc = &ring[i];
-		if (tx_buf[i])
-			if (FREE_AFTER_TX((struct sk_buff *) tx_buf[i]))
-				p54_free_skb(dev, tx_buf[i]);
+
+		skb = tx_buf[i];
 		tx_buf[i] = NULL;
 
 		pci_unmap_single(priv->pdev, le32_to_cpu(desc->host_addr),
@@ -269,16 +265,27 @@ static void p54p_check_tx_ring(struct ieee80211_hw *dev, u32 *index,
 		desc->len = 0;
 		desc->flags = 0;
 
+		if (skb && FREE_AFTER_TX(skb))
+			p54_free_skb(dev, skb);
+
 		i++;
 		i %= ring_limit;
 	}
 }
 
-static void p54p_rx_tasklet(unsigned long dev_id)
+static void p54p_tasklet(unsigned long dev_id)
 {
 	struct ieee80211_hw *dev = (struct ieee80211_hw *)dev_id;
 	struct p54p_priv *priv = dev->priv;
 	struct p54p_ring_control *ring_control = priv->ring_control;
+
+	p54p_check_tx_ring(dev, &priv->tx_idx_mgmt, 3, ring_control->tx_mgmt,
+			   ARRAY_SIZE(ring_control->tx_mgmt),
+			   priv->tx_buf_mgmt);
+
+	p54p_check_tx_ring(dev, &priv->tx_idx_data, 1, ring_control->tx_data,
+			   ARRAY_SIZE(ring_control->tx_data),
+			   priv->tx_buf_data);
 
 	p54p_check_rx_ring(dev, &priv->rx_idx_mgmt, 2, ring_control->rx_mgmt,
 		ARRAY_SIZE(ring_control->rx_mgmt), priv->rx_buf_mgmt);
@@ -294,46 +301,30 @@ static irqreturn_t p54p_interrupt(int irq, void *dev_id)
 {
 	struct ieee80211_hw *dev = dev_id;
 	struct p54p_priv *priv = dev->priv;
-	struct p54p_ring_control *ring_control = priv->ring_control;
 	__le32 reg;
 
-	spin_lock(&priv->lock);
 	reg = P54P_READ(int_ident);
 	if (unlikely(reg == cpu_to_le32(0xFFFFFFFF))) {
-		spin_unlock(&priv->lock);
-		return IRQ_HANDLED;
+		goto out;
 	}
-
 	P54P_WRITE(int_ack, reg);
 
 	reg &= P54P_READ(int_enable);
 
-	if (reg & cpu_to_le32(ISL38XX_INT_IDENT_UPDATE)) {
-		p54p_check_tx_ring(dev, &priv->tx_idx_mgmt,
-				   3, ring_control->tx_mgmt,
-				   ARRAY_SIZE(ring_control->tx_mgmt),
-				   priv->tx_buf_mgmt);
-
-		p54p_check_tx_ring(dev, &priv->tx_idx_data,
-				   1, ring_control->tx_data,
-				   ARRAY_SIZE(ring_control->tx_data),
-				   priv->tx_buf_data);
-
-		tasklet_schedule(&priv->rx_tasklet);
-
-	} else if (reg & cpu_to_le32(ISL38XX_INT_IDENT_INIT))
+	if (reg & cpu_to_le32(ISL38XX_INT_IDENT_UPDATE))
+		tasklet_schedule(&priv->tasklet);
+	else if (reg & cpu_to_le32(ISL38XX_INT_IDENT_INIT))
 		complete(&priv->boot_comp);
 
-	spin_unlock(&priv->lock);
-
+out:
 	return reg ? IRQ_HANDLED : IRQ_NONE;
 }
 
 static void p54p_tx(struct ieee80211_hw *dev, struct sk_buff *skb)
 {
+	unsigned long flags;
 	struct p54p_priv *priv = dev->priv;
 	struct p54p_ring_control *ring_control = priv->ring_control;
-	unsigned long flags;
 	struct p54p_desc *desc;
 	dma_addr_t mapping;
 	u32 device_idx, idx, i;
@@ -374,13 +365,13 @@ static void p54p_stop(struct ieee80211_hw *dev)
 	unsigned int i;
 	struct p54p_desc *desc;
 
-	tasklet_kill(&priv->rx_tasklet);
-
 	P54P_WRITE(int_enable, cpu_to_le32(0));
 	P54P_READ(int_enable);
 	udelay(10);
 
 	free_irq(priv->pdev->irq, dev);
+
+	tasklet_kill(&priv->tasklet);
 
 	P54P_WRITE(dev_int, cpu_to_le32(ISL38XX_DEV_INT_RESET));
 
@@ -439,7 +430,7 @@ static int p54p_open(struct ieee80211_hw *dev)
 	int err;
 
 	init_completion(&priv->boot_comp);
-	err = request_irq(priv->pdev->irq, &p54p_interrupt,
+	err = request_irq(priv->pdev->irq, p54p_interrupt,
 			  IRQF_SHARED, "p54pci", dev);
 	if (err) {
 		dev_err(&priv->pdev->dev, "failed to register IRQ handler\n");
@@ -456,10 +447,10 @@ static int p54p_open(struct ieee80211_hw *dev)
 	priv->rx_idx_mgmt = priv->tx_idx_mgmt = 0;
 
 	p54p_refill_rx_ring(dev, 0, priv->ring_control->rx_data,
-		ARRAY_SIZE(priv->ring_control->rx_data), priv->rx_buf_data);
+		ARRAY_SIZE(priv->ring_control->rx_data), priv->rx_buf_data, 0);
 
 	p54p_refill_rx_ring(dev, 2, priv->ring_control->rx_mgmt,
-		ARRAY_SIZE(priv->ring_control->rx_mgmt), priv->rx_buf_mgmt);
+		ARRAY_SIZE(priv->ring_control->rx_mgmt), priv->rx_buf_mgmt, 0);
 
 	P54P_WRITE(ring_control_base, cpu_to_le32(priv->ring_control_dma));
 	P54P_READ(ring_control_base);
@@ -565,7 +556,7 @@ static int __devinit p54p_probe(struct pci_dev *pdev,
 	priv->common.tx = p54p_tx;
 
 	spin_lock_init(&priv->lock);
-	tasklet_init(&priv->rx_tasklet, p54p_rx_tasklet, (unsigned long)dev);
+	tasklet_init(&priv->tasklet, p54p_tasklet, (unsigned long)dev);
 
 	err = request_firmware(&priv->firmware, "isl3886pci",
 			       &priv->pdev->dev);

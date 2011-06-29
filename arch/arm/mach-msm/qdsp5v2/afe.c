@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,6 +19,8 @@
 #include <linux/wait.h>
 #include <linux/sched.h>
 #include <linux/jiffies.h>
+#include <linux/debugfs.h>
+#include <asm/uaccess.h>
 #include <mach/qdsp5v2/qdsp5afecmdi.h>
 #include <mach/qdsp5v2/qdsp5afemsg.h>
 #include <mach/qdsp5v2/afe.h>
@@ -38,6 +40,11 @@ struct msm_afe_state {
 	wait_queue_head_t      wait;
 	u8			aux_conf_flag;
 };
+
+#ifdef CONFIG_DEBUG_FS
+static struct dentry *debugfs_afelb;
+#endif
+
 
 static struct msm_afe_state the_afe_state;
 
@@ -100,6 +107,37 @@ static void afe_dsp_codec_config(struct msm_afe_state *afe,
 	}
 	afe_send_queue(afe, &cmd, sizeof(cmd));
 }
+/* Function is called after afe module been enabled */
+void afe_loopback(int enable)
+{
+	struct afe_cmd_loopback cmd;
+	struct msm_afe_state *afe;
+
+	afe = &the_afe_state;
+	MM_DBG("enable %d\n", enable);
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.cmd_id = AFE_CMD_LOOPBACK;
+	if (enable)
+		cmd.enable_flag = AFE_LOOPBACK_ENABLE_COMMAND;
+
+	afe_send_queue(afe, &cmd, sizeof(cmd));
+}
+EXPORT_SYMBOL(afe_loopback);
+
+void afe_device_volume_ctrl(u16 device_id, u16 device_volume)
+{
+	struct afe_cmd_device_volume_ctrl cmd;
+	struct msm_afe_state *afe;
+
+	afe = &the_afe_state;
+	MM_DBG("device 0x%4x volume 0x%4x\n", device_id, device_volume);
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.cmd_id = AFE_CMD_DEVICE_VOLUME_CTRL;
+	cmd.device_id = device_id;
+	cmd.device_volume = device_volume;
+	afe_send_queue(afe, &cmd, sizeof(cmd));
+}
+EXPORT_SYMBOL(afe_device_volume_ctrl);
 
 int afe_enable(u8 path_id, struct msm_afe_config *config)
 {
@@ -107,6 +145,10 @@ int afe_enable(u8 path_id, struct msm_afe_config *config)
 	int rc;
 
 	MM_DBG("%s: path %d\n", __func__, path_id);
+	if ((GETDEVICEID(path_id) < 0) || (GETDEVICEID(path_id) > 5)) {
+		MM_ERR("Invalid path_id: %d\n", path_id);
+		return -EINVAL;
+	}
 	mutex_lock(&afe->lock);
 	if (!afe->in_use && !afe->aux_conf_flag) {
 		/* enable afe */
@@ -230,6 +272,44 @@ error_adsp_get:
 }
 EXPORT_SYMBOL(afe_config_fm_volume);
 
+int afe_config_fm_calibration_gain(uint16_t device_id,
+			uint16_t calibration_gain)
+{
+	struct afe_cmd_fm_calibgain_config cmd;
+	struct msm_afe_state *afe = &the_afe_state;
+	int rc = 0;
+
+	MM_INFO("Configure for rx device = 0x%4x, gain = 0x%4x\n", device_id,
+			calibration_gain);
+	mutex_lock(&afe->lock);
+	if (!afe->in_use) {
+		/* enable afe */
+		rc = msm_adsp_get("AFETASK", &afe->mod, &afe->adsp_ops, afe);
+		if (rc < 0) {
+			MM_ERR("%s: failed to get AFETASK module\n", __func__);
+			goto error_adsp_get;
+		}
+		rc = msm_adsp_enable(afe->mod);
+		if (rc < 0)
+			goto error_adsp_enable;
+	}
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.cmd_id = AFE_CMD_FM_CALIBRATION_GAIN_CMD;
+	cmd.device_id = device_id;
+	cmd.calibration_gain = calibration_gain;
+
+	afe_send_queue(afe, &cmd, sizeof(cmd));
+
+	mutex_unlock(&afe->lock);
+	return rc;
+error_adsp_enable:
+	msm_adsp_put(afe->mod);
+error_adsp_get:
+	mutex_unlock(&afe->lock);
+	return rc;
+}
+EXPORT_SYMBOL(afe_config_fm_calibration_gain);
+
 int afe_config_aux_codec(int pcm_ctl_value, int aux_codec_intf_value,
 				int data_format_pad)
 {
@@ -271,6 +351,54 @@ error_adsp_get:
 }
 EXPORT_SYMBOL(afe_config_aux_codec);
 
+int afe_config_rmc_block(struct acdb_rmc_block *acdb_rmc)
+{
+	struct afe_cmd_cfg_rmc cmd;
+	struct msm_afe_state *afe = &the_afe_state;
+	int rc = 0;
+	int i = 0;
+	unsigned short *ptrmem = (unsigned short *)&cmd;
+
+	MM_DBG(" configure rmc block\n");
+	mutex_lock(&afe->lock);
+	if (!afe->in_use) {
+		/* enable afe */
+		rc = msm_adsp_get("AFETASK", &afe->mod, &afe->adsp_ops, afe);
+		if (rc < 0) {
+			MM_DBG("%s: failed to get AFETASK module\n", __func__);
+			goto error_adsp_get;
+		}
+		rc = msm_adsp_enable(afe->mod);
+		if (rc < 0)
+			goto error_adsp_enable;
+	}
+	memset(&cmd, 0, sizeof(cmd));
+	cmd.cmd_id = AFE_CMD_CFG_RMC_PARAMS;
+
+	cmd.rmc_mode = acdb_rmc->rmc_enable;
+	cmd.rmc_ipw_length_ms =	acdb_rmc->rmc_ipw_length_ms;
+	cmd.rmc_peak_length_ms = acdb_rmc->rmc_peak_length_ms;
+	cmd.rmc_init_pulse_length_ms = acdb_rmc->rmc_init_pulse_length_ms;
+	cmd.rmc_total_int_length_ms = acdb_rmc->rmc_total_int_length_ms;
+	cmd.rmc_rampupdn_length_ms = acdb_rmc->rmc_rampupdn_length_ms;
+	cmd.rmc_delay_length_ms = acdb_rmc->rmc_delay_length_ms;
+	cmd.rmc_detect_start_threshdb = acdb_rmc->rmc_detect_start_threshdb;
+	cmd.rmc_init_pulse_threshdb = acdb_rmc->rmc_init_pulse_threshdb;
+
+	for (i = 0; i < sizeof(cmd)/2; i++, ++ptrmem)
+		MM_DBG("cmd[%d]=0x%04x\n", i, *ptrmem);
+	afe_send_queue(afe, &cmd, sizeof(cmd));
+
+	mutex_unlock(&afe->lock);
+	return rc;
+error_adsp_enable:
+	msm_adsp_put(afe->mod);
+error_adsp_get:
+	mutex_unlock(&afe->lock);
+	return rc;
+}
+EXPORT_SYMBOL(afe_config_rmc_block);
+
 int afe_disable(u8 path_id)
 {
 	struct msm_afe_state *afe = &the_afe_state;
@@ -302,6 +430,46 @@ int afe_disable(u8 path_id)
 }
 EXPORT_SYMBOL(afe_disable);
 
+
+#ifdef CONFIG_DEBUG_FS
+static int afe_debug_open(struct inode *inode, struct file *file)
+{
+	file->private_data = inode->i_private;
+	MM_INFO("debug intf %s\n", (char *) file->private_data);
+	return 0;
+}
+
+static ssize_t afe_debug_write(struct file *filp,
+	const char __user *ubuf, size_t cnt, loff_t *ppos)
+{
+	char *lb_str = filp->private_data;
+	char cmd;
+
+	if (get_user(cmd, ubuf))
+		return -EFAULT;
+
+	MM_INFO("%s %c\n", lb_str, cmd);
+
+	if (!strcmp(lb_str, "afe_loopback")) {
+		switch (cmd) {
+		case '1':
+			afe_loopback(1);
+			break;
+		case '0':
+			afe_loopback(0);
+			break;
+		}
+	}
+
+	return cnt;
+}
+
+static const struct file_operations afe_debug_fops = {
+	.open = afe_debug_open,
+	.write = afe_debug_write
+};
+#endif
+
 static int __init afe_init(void)
 {
 	struct msm_afe_state *afe = &the_afe_state;
@@ -313,12 +481,22 @@ static int __init afe_init(void)
 	mutex_init(&afe->lock);
 	init_waitqueue_head(&afe->wait);
 
+#ifdef CONFIG_DEBUG_FS
+	debugfs_afelb = debugfs_create_file("afe_loopback",
+	S_IFREG | S_IWUGO, NULL, (void *) "afe_loopback",
+	&afe_debug_fops);
+#endif
+
 	return 0;
 }
 
 static void __exit afe_exit(void)
 {
 	MM_INFO("AFE driver exit\n");
+#ifdef CONFIG_DEBUG_FS
+	if (debugfs_afelb)
+		debugfs_remove(debugfs_afelb);
+#endif
 	if (the_afe_state.mod)
 		msm_adsp_put(the_afe_state.mod);
 	return;

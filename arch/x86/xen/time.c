@@ -13,6 +13,7 @@
 #include <linux/clockchips.h>
 #include <linux/kernel_stat.h>
 #include <linux/math64.h>
+#include <linux/gfp.h>
 
 #include <asm/pvclock.h>
 #include <asm/xen/hypervisor.h>
@@ -31,14 +32,14 @@
 #define NS_PER_TICK	(1000000000LL / HZ)
 
 /* runstate info updated by Xen */
-static DEFINE_PER_CPU(struct vcpu_runstate_info, runstate);
+static DEFINE_PER_CPU(struct vcpu_runstate_info, xen_runstate);
 
 /* snapshots of runstate info */
-static DEFINE_PER_CPU(struct vcpu_runstate_info, runstate_snapshot);
+static DEFINE_PER_CPU(struct vcpu_runstate_info, xen_runstate_snapshot);
 
 /* unused ns of stolen and blocked time */
-static DEFINE_PER_CPU(u64, residual_stolen);
-static DEFINE_PER_CPU(u64, residual_blocked);
+static DEFINE_PER_CPU(u64, xen_residual_stolen);
+static DEFINE_PER_CPU(u64, xen_residual_blocked);
 
 /* return an consistent snapshot of 64-bit time/counter value */
 static u64 get64(const u64 *p)
@@ -79,7 +80,7 @@ static void get_runstate_snapshot(struct vcpu_runstate_info *res)
 
 	BUG_ON(preemptible());
 
-	state = &__get_cpu_var(runstate);
+	state = &__get_cpu_var(xen_runstate);
 
 	/*
 	 * The runstate info is always updated by the hypervisor on
@@ -97,14 +98,14 @@ static void get_runstate_snapshot(struct vcpu_runstate_info *res)
 /* return true when a vcpu could run but has no real cpu to run on */
 bool xen_vcpu_stolen(int vcpu)
 {
-	return per_cpu(runstate, vcpu).state == RUNSTATE_runnable;
+	return per_cpu(xen_runstate, vcpu).state == RUNSTATE_runnable;
 }
 
 void xen_setup_runstate_info(int cpu)
 {
 	struct vcpu_register_runstate_memory_area area;
 
-	area.addr.v = &per_cpu(runstate, cpu);
+	area.addr.v = &per_cpu(xen_runstate, cpu);
 
 	if (HYPERVISOR_vcpu_op(VCPUOP_register_runstate_memory_area,
 			       cpu, &area))
@@ -122,7 +123,7 @@ static void do_stolen_accounting(void)
 
 	WARN_ON(state.state != RUNSTATE_running);
 
-	snap = &__get_cpu_var(runstate_snapshot);
+	snap = &__get_cpu_var(xen_runstate_snapshot);
 
 	/* work out how much time the VCPU has not been runn*ing*  */
 	blocked = state.time[RUNSTATE_blocked] - snap->time[RUNSTATE_blocked];
@@ -133,24 +134,24 @@ static void do_stolen_accounting(void)
 
 	/* Add the appropriate number of ticks of stolen time,
 	   including any left-overs from last time. */
-	stolen = runnable + offline + __get_cpu_var(residual_stolen);
+	stolen = runnable + offline + __get_cpu_var(xen_residual_stolen);
 
 	if (stolen < 0)
 		stolen = 0;
 
 	ticks = iter_div_u64_rem(stolen, NS_PER_TICK, &stolen);
-	__get_cpu_var(residual_stolen) = stolen;
+	__get_cpu_var(xen_residual_stolen) = stolen;
 	account_steal_ticks(ticks);
 
 	/* Add the appropriate number of ticks of blocked time,
 	   including any left-overs from last time. */
-	blocked += __get_cpu_var(residual_blocked);
+	blocked += __get_cpu_var(xen_residual_blocked);
 
 	if (blocked < 0)
 		blocked = 0;
 
 	ticks = iter_div_u64_rem(blocked, NS_PER_TICK, &blocked);
-	__get_cpu_var(residual_blocked) = blocked;
+	__get_cpu_var(xen_residual_blocked) = blocked;
 	account_idle_ticks(ticks);
 }
 
@@ -424,8 +425,6 @@ void xen_timer_resume(void)
 {
 	int cpu;
 
-	pvclock_resume();
-
 	if (xen_clockevent != &xen_vcpuop_clockevent)
 		return;
 
@@ -438,6 +437,7 @@ void xen_timer_resume(void)
 __init void xen_time_init(void)
 {
 	int cpu = smp_processor_id();
+	struct timespec tp;
 
 	clocksource_register(&xen_clocksource);
 
@@ -449,9 +449,8 @@ __init void xen_time_init(void)
 	}
 
 	/* Set initial system time with full resolution */
-	xen_read_wallclock(&xtime);
-	set_normalized_timespec(&wall_to_monotonic,
-				-xtime.tv_sec, -xtime.tv_nsec);
+	xen_read_wallclock(&tp);
+	do_settimeofday(&tp);
 
 	setup_force_cpu_cap(X86_FEATURE_TSC);
 

@@ -1,5 +1,3 @@
-#warning compile out
-#if 0
 /*
  *  drivers/switch/switch_gpio.c
  *
@@ -22,6 +20,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <linux/switch.h>
 #include <linux/workqueue.h>
 #include <linux/gpio.h>
@@ -171,4 +170,3 @@ module_exit(gpio_switch_exit);
 MODULE_AUTHOR("Mike Lockwood <lockwood@android.com>");
 MODULE_DESCRIPTION("GPIO Switch driver");
 MODULE_LICENSE("GPL");
-#endif

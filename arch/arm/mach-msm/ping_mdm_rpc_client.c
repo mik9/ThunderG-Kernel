@@ -20,6 +20,7 @@
  * SMD RPC PING MODEM Driver
  */
 
+#include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/err.h>
 #include <linux/fs.h>

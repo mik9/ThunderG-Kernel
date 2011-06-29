@@ -145,13 +145,19 @@ config KS8695_WATCHDOG
 	  Watchdog timer embedded into KS8695 processor. This will reboot your
 	  system when the timeout is reached.
 
+config HAVE_S3C2410_WATCHDOG
+	bool
+	help
+	  This will include watchdog timer support for Samsung SoCs. If
+	  you want to include watchdog support for any machine, kindly
+	  select this in the respective mach-XXXX/Kconfig file.
+
 config S3C2410_WATCHDOG
 	tristate "S3C2410 Watchdog"
-	depends on ARCH_S3C2410
+	depends on ARCH_S3C2410 || HAVE_S3C2410_WATCHDOG
 	help
-	  Watchdog timer block in the Samsung S3C2410 chips. This will
-	  reboot the system when the timer expires with the watchdog
-	  enabled.
+	  Watchdog timer block in the Samsung SoCs. This will reboot
+	  the system when the timer expires with the watchdog enabled.
 
 	  The driver is limited by the speed of the system's PCLK
 	  signal, so with reasonably fast systems (PCLK around 50-66MHz)
@@ -175,7 +181,7 @@ config SA1100_WATCHDOG
 
 config MPCORE_WATCHDOG
 	tristate "MPcore watchdog"
-	depends on ARM_MPCORE_PLATFORM && LOCAL_TIMERS
+	depends on HAVE_ARM_TWD
 	help
 	  Watchdog timer embedded into the MPcore system.
 
@@ -194,10 +200,10 @@ config EP93XX_WATCHDOG
 
 config OMAP_WATCHDOG
 	tristate "OMAP Watchdog"
-	depends on ARCH_OMAP16XX || ARCH_OMAP24XX || ARCH_OMAP34XX
+	depends on ARCH_OMAP16XX || ARCH_OMAP2PLUS
 	help
-	  Support for TI OMAP1610/OMAP1710/OMAP2420/OMAP3430 watchdog.  Say 'Y'
-	  here to enable the OMAP1610/OMAP1710/OMAP2420/OMAP3430 watchdog timer.
+	  Support for TI OMAP1610/OMAP1710/OMAP2420/OMAP3430/OMAP4430 watchdog.  Say 'Y'
+	  here to enable the OMAP1610/OMAP1710/OMAP2420/OMAP3430/OMAP4430 watchdog timer.
 
 config PNX4008_WATCHDOG
 	tristate "PNX4008 Watchdog"
@@ -289,6 +295,35 @@ config ADX_WATCHDOG
 	  Say Y here if you want support for the watchdog timer on Avionic
 	  Design Xanthos boards.
 
+config TS72XX_WATCHDOG
+	tristate "TS-72XX SBC Watchdog"
+	depends on MACH_TS72XX
+	help
+	  Technologic Systems TS-7200, TS-7250 and TS-7260 boards have
+	  watchdog timer implemented in a external CPLD chip. Say Y here
+	  if you want to support for the watchdog timer on TS-72XX boards.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called ts72xx_wdt.
+
+config MAX63XX_WATCHDOG
+	tristate "Max63xx watchdog"
+	depends on ARM && HAS_IOMEM
+	help
+	  Support for memory mapped max63{69,70,71,72,73,74} watchdog timer.
+
+config IMX2_WDT
+	tristate "IMX2+ Watchdog"
+	depends on ARCH_MX2 || ARCH_MX25 || ARCH_MX3 || ARCH_MX5
+	help
+	  This is the driver for the hardware watchdog
+	  on the Freescale IMX2 and later processors.
+	  If you have one of these processors and wish to have
+	  watchdog support enabled, say Y, otherwise say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx2_wdt.
+
 # AVR32 Architecture
 
 config AT32AP700X_WDT
@@ -368,7 +403,7 @@ config ALIM7101_WDT
 
 config GEODE_WDT
 	tristate "AMD Geode CS5535/CS5536 Watchdog"
-	depends on MGEODE_LX
+	depends on CS5535_MFGPT
 	help
 	  This driver enables a watchdog capability built into the
 	  CS5535/CS5536 companion chips for the AMD Geode GX and LX
@@ -396,8 +431,8 @@ config SBC_FITPC2_WATCHDOG
 	tristate "Compulab SBC-FITPC2 watchdog"
 	depends on X86
 	---help---
-	  This is the driver for the built-in watchdog timer on the fit-PC2
-	  Single-board computer made by Compulab.
+	  This is the driver for the built-in watchdog timer on the fit-PC2,
+	  fit-PC2i, CM-iAM single-board computers made by Compulab.
 
 	  It`s possible to enable watchdog timer either from BIOS (F2) or from booted Linux.
 	  When "Watchdog Timer Value" enabled one can set 31-255 s operational range.
@@ -815,16 +850,6 @@ config PNX833X_WDT
 	  timer has expired and no process has written to /dev/watchdog during
 	  that time.
 
-config WDT_RM9K_GPI
-	tristate "RM9000/GPI hardware watchdog"
-	depends on CPU_RM9000
-	help
-	  Watchdog implementation using the GPI hardware found on
-	  PMC-Sierra RM9xxx CPUs.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called rm9k_wdt.
-
 config SIBYTE_WDOG
 	tristate "Sibyte SoC hardware watchdog"
 	depends on CPU_SB1
@@ -855,14 +880,16 @@ config TXX9_WDT
 # POWERPC Architecture
 
 config GEF_WDT
-	tristate "GE Fanuc Watchdog Timer"
+	tristate "GE Watchdog Timer"
 	depends on GEF_SBC610 || GEF_SBC310 || GEF_PPC9A
 	---help---
-	  Watchdog timer found in a number of GE Fanuc single board computers.
+	  Watchdog timer found in a number of GE single board computers.
 
 config MPC5200_WDT
-	tristate "MPC5200 Watchdog Timer"
+	bool "MPC52xx Watchdog Timer"
 	depends on PPC_MPC52xx
+	help
+	  Use General Purpose Timer (GPT) 0 on the MPC5200 as Watchdog.
 
 config 8xxx_WDT
 	tristate "MPC8xxx Platform Watchdog Timer"

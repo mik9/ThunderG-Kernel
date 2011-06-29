@@ -117,17 +117,18 @@ ENTRY(v4wt_coherent_user_range)
 	mov	pc, lr
 
 /*
- *	flush_kern_dcache_page(void *page)
+ *	flush_kern_dcache_area(void *addr, size_t size)
  *
  *	Ensure no D cache aliasing occurs, either with itself or
  *	the I cache
  *
- *	- addr	- page aligned address
+ *	- addr	- kernel address
+ *	- size	- region size
  */
-ENTRY(v4wt_flush_kern_dcache_page)
+ENTRY(v4wt_flush_kern_dcache_area)
 	mov	r2, #0
 	mcr	p15, 0, r2, c7, c5, 0		@ invalidate I cache
-	add	r1, r0, #PAGE_SZ
+	add	r1, r0, r1
 	/* fallthrough */
 
 /*
@@ -171,6 +172,29 @@ ENTRY(v4wt_dma_clean_range)
 	.globl	v4wt_dma_flush_range
 	.equ	v4wt_dma_flush_range, v4wt_dma_inv_range
 
+/*
+ *	dma_unmap_area(start, size, dir)
+ *	- start	- kernel virtual start address
+ *	- size	- size of region
+ *	- dir	- DMA direction
+ */
+ENTRY(v4wt_dma_unmap_area)
+	add	r1, r1, r0
+	teq	r2, #DMA_TO_DEVICE
+	bne	v4wt_dma_inv_range
+	/* FALLTHROUGH */
+
+/*
+ *	dma_map_area(start, size, dir)
+ *	- start	- kernel virtual start address
+ *	- size	- size of region
+ *	- dir	- DMA direction
+ */
+ENTRY(v4wt_dma_map_area)
+	mov	pc, lr
+ENDPROC(v4wt_dma_unmap_area)
+ENDPROC(v4wt_dma_map_area)
+
 	__INITDATA
 
 	.type	v4wt_cache_fns, #object
@@ -180,7 +204,9 @@ ENTRY(v4wt_cache_fns)
 	.long	v4wt_flush_user_cache_range
 	.long	v4wt_coherent_kern_range
 	.long	v4wt_coherent_user_range
-	.long	v4wt_flush_kern_dcache_page
+	.long	v4wt_flush_kern_dcache_area
+	.long	v4wt_dma_map_area
+	.long	v4wt_dma_unmap_area
 	.long	v4wt_dma_inv_range
 	.long	v4wt_dma_clean_range
 	.long	v4wt_dma_flush_range

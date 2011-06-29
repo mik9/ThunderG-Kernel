@@ -51,6 +51,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/i2o.h>
 
 #include <linux/mempool.h>
@@ -940,7 +941,7 @@ static const struct block_device_operations i2o_block_fops = {
  *	Allocate memory for the i2o_block_device struct, gendisk and request
  *	queue and initialize them as far as no additional information is needed.
  *
- *	Returns a pointer to the allocated I2O Block device on succes or a
+ *	Returns a pointer to the allocated I2O Block device on success or a
  *	negative error code on failure.
  */
 static struct i2o_block_device *i2o_block_device_alloc(void)
@@ -1065,9 +1066,8 @@ static int i2o_block_probe(struct device *dev)
 	queue = gd->queue;
 	queue->queuedata = i2o_blk_dev;
 
-	blk_queue_max_phys_segments(queue, I2O_MAX_PHYS_SEGMENTS);
-	blk_queue_max_sectors(queue, max_sectors);
-	blk_queue_max_hw_segments(queue, i2o_sg_tablesize(c, body_size));
+	blk_queue_max_hw_sectors(queue, max_sectors);
+	blk_queue_max_segments(queue, i2o_sg_tablesize(c, body_size));
 
 	osm_debug("max sectors = %d\n", queue->max_sectors);
 	osm_debug("phys segments = %d\n", queue->max_phys_segments);

@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2003 - 2009 Intel Corporation. All rights reserved.
+ * Copyright(c) 2003 - 2010 Intel Corporation. All rights reserved.
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
@@ -31,6 +31,9 @@
 #define __iwl_helpers_h__
 
 #include <linux/ctype.h>
+#include <net/mac80211.h>
+
+#include "iwl-io.h"
 
 #define IWL_MASK(lo, hi) ((1 << (hi)) | ((1 << (hi)) - (1 << (lo))))
 
@@ -158,12 +161,6 @@ static inline void iwl_disable_interrupts(struct iwl_priv *priv)
 	iwl_write32(priv, CSR_INT, 0xffffffff);
 	iwl_write32(priv, CSR_FH_INT_STATUS, 0xffffffff);
 	IWL_DEBUG_ISR(priv, "Disabled interrupts\n");
-}
-
-static inline void iwl_enable_rfkill_int(struct iwl_priv *priv)
-{
-	IWL_DEBUG_ISR(priv, "Enabling rfkill interrupt\n");
-	iwl_write32(priv, CSR_INT_MASK, CSR_INT_BIT_RF_KILL);
 }
 
 static inline void iwl_enable_interrupts(struct iwl_priv *priv)

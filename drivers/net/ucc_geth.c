@@ -37,6 +37,7 @@
 #include <asm/qe.h>
 #include <asm/ucc.h>
 #include <asm/ucc_fast.h>
+#include <asm/machdep.h>
 
 #include "ucc_geth.h"
 #include "fsl_pq_mdio.h"
@@ -429,7 +430,7 @@ static void hw_add_addr_in_hash(struct ucc_geth_private *ugeth,
 	    ucc_fast_get_qe_cr_subblock(ugeth->ug_info->uf_info.ucc_num);
 
 	/* Ethernet frames are defined in Little Endian mode,
-	therefor to insert */
+	therefore to insert */
 	/* the address to the hash (Big Endian mode), we reverse the bytes.*/
 
 	set_mac_addr(&p_82xx_addr_filt->taddr.h, p_enet_addr);
@@ -1306,8 +1307,8 @@ static int init_max_rx_buff_len(u16 max_rx_buf_len,
 				u16 __iomem *mrblr_register)
 {
 	/* max_rx_buf_len value must be a multiple of 128 */
-	if ((max_rx_buf_len == 0)
-	    || (max_rx_buf_len % UCC_GETH_MRBLR_ALIGNMENT))
+	if ((max_rx_buf_len == 0) ||
+	    (max_rx_buf_len % UCC_GETH_MRBLR_ALIGNMENT))
 		return -EINVAL;
 
 	out_be16(mrblr_register, max_rx_buf_len);
@@ -1334,7 +1335,7 @@ static int adjust_enet_interface(struct ucc_geth_private *ugeth)
 	struct ucc_geth __iomem *ug_regs;
 	struct ucc_fast __iomem *uf_regs;
 	int ret_val;
-	u32 upsmr, maccfg2, tbiBaseAddress;
+	u32 upsmr, maccfg2;
 	u16 value;
 
 	ugeth_vdbg("%s: IN", __func__);
@@ -1389,14 +1390,20 @@ static int adjust_enet_interface(struct ucc_geth_private *ugeth)
 	/* Note that this depends on proper setting in utbipar register. */
 	if ((ugeth->phy_interface == PHY_INTERFACE_MODE_TBI) ||
 	    (ugeth->phy_interface == PHY_INTERFACE_MODE_RTBI)) {
-		tbiBaseAddress = in_be32(&ug_regs->utbipar);
-		tbiBaseAddress &= UTBIPAR_PHY_ADDRESS_MASK;
-		tbiBaseAddress >>= UTBIPAR_PHY_ADDRESS_SHIFT;
-		value = ugeth->phydev->bus->read(ugeth->phydev->bus,
-				(u8) tbiBaseAddress, ENET_TBI_MII_CR);
+		struct ucc_geth_info *ug_info = ugeth->ug_info;
+		struct phy_device *tbiphy;
+
+		if (!ug_info->tbi_node)
+			ugeth_warn("TBI mode requires that the device "
+				"tree specify a tbi-handle\n");
+
+		tbiphy = of_phy_find_device(ug_info->tbi_node);
+		if (!tbiphy)
+			ugeth_warn("Could not get TBI device\n");
+
+		value = phy_read(tbiphy, ENET_TBI_MII_CR);
 		value &= ~0x1000;	/* Turn off autonegotiation */
-		ugeth->phydev->bus->write(ugeth->phydev->bus,
-				(u8) tbiBaseAddress, ENET_TBI_MII_CR, value);
+		phy_write(tbiphy, ENET_TBI_MII_CR, value);
 	}
 
 	init_check_frame_length_mode(ug_info->lengthCheckRx, &ug_regs->maccfg2);
@@ -1651,24 +1658,27 @@ static void adjust_link(struct net_device *dev)
 			ugeth->oldspeed = phydev->speed;
 		}
 
-		/*
-		 * To change the MAC configuration we need to disable the
-		 * controller. To do so, we have to either grab ugeth->lock,
-		 * which is a bad idea since 'graceful stop' commands might
-		 * take quite a while, or we can quiesce driver's activity.
-		 */
-		ugeth_quiesce(ugeth);
-		ugeth_disable(ugeth, COMM_DIR_RX_AND_TX);
-
-		out_be32(&ug_regs->maccfg2, tempval);
-		out_be32(&uf_regs->upsmr, upsmr);
-
-		ugeth_enable(ugeth, COMM_DIR_RX_AND_TX);
-		ugeth_activate(ugeth);
-
 		if (!ugeth->oldlink) {
 			new_state = 1;
 			ugeth->oldlink = 1;
+		}
+
+		if (new_state) {
+			/*
+			 * To change the MAC configuration we need to disable
+			 * the controller. To do so, we have to either grab
+			 * ugeth->lock, which is a bad idea since 'graceful
+			 * stop' commands might take quite a while, or we can
+			 * quiesce driver's activity.
+			 */
+			ugeth_quiesce(ugeth);
+			ugeth_disable(ugeth, COMM_DIR_RX_AND_TX);
+
+			out_be32(&ug_regs->maccfg2, tempval);
+			out_be32(&uf_regs->upsmr, upsmr);
+
+			ugeth_enable(ugeth, COMM_DIR_RX_AND_TX);
+			ugeth_activate(ugeth);
 		}
 	} else if (ugeth->oldlink) {
 			new_state = 1;
@@ -1989,10 +1999,9 @@ static void ucc_geth_memclean(struct ucc_geth_private *ugeth)
 static void ucc_geth_set_multi(struct net_device *dev)
 {
 	struct ucc_geth_private *ugeth;
-	struct dev_mc_list *dmi;
+	struct netdev_hw_addr *ha;
 	struct ucc_fast __iomem *uf_regs;
 	struct ucc_geth_82xx_address_filtering_pram __iomem *p_82xx_addr_filt;
-	int i;
 
 	ugeth = netdev_priv(dev);
 
@@ -2019,19 +2028,16 @@ static void ucc_geth_set_multi(struct net_device *dev)
 			out_be32(&p_82xx_addr_filt->gaddr_h, 0x0);
 			out_be32(&p_82xx_addr_filt->gaddr_l, 0x0);
 
-			dmi = dev->mc_list;
-
-			for (i = 0; i < dev->mc_count; i++, dmi = dmi->next) {
-
+			netdev_for_each_mc_addr(ha, dev) {
 				/* Only support group multicast for now.
 				 */
-				if (!(dmi->dmi_addr[0] & 1))
+				if (!(ha->addr[0] & 1))
 					continue;
 
 				/* Ask CPM to run CRC and set bit in
 				 * filter mask.
 				 */
-				hw_add_addr_in_hash(ugeth, dmi->dmi_addr);
+				hw_add_addr_in_hash(ugeth, ha->addr);
 			}
 		}
 	}
@@ -2162,8 +2168,8 @@ static int ucc_struct_init(struct ucc_geth_private *ugeth)
 	}
 
 	if ((ug_info->numStationAddresses !=
-	     UCC_GETH_NUM_OF_STATION_ADDRESSES_1)
-	    && ug_info->rxExtendedFiltering) {
+	     UCC_GETH_NUM_OF_STATION_ADDRESSES_1) &&
+	    ug_info->rxExtendedFiltering) {
 		if (netif_msg_probe(ugeth))
 			ugeth_err("%s: Number of station addresses greater than 1 "
 				  "not allowed in extended parsing mode.",
@@ -2287,9 +2293,9 @@ static int ucc_geth_startup(struct ucc_geth_private *ugeth)
 	     UCC_GETH_NUM_OF_STATION_ADDRESSES_1);
 
 	ugeth->rx_extended_features = ugeth->rx_non_dynamic_extended_features ||
-	    (ug_info->vlanOperationTagged != UCC_GETH_VLAN_OPERATION_TAGGED_NOP)
-	    || (ug_info->vlanOperationNonTagged !=
-		UCC_GETH_VLAN_OPERATION_NON_TAGGED_NOP);
+		(ug_info->vlanOperationTagged != UCC_GETH_VLAN_OPERATION_TAGGED_NOP) ||
+		(ug_info->vlanOperationNonTagged !=
+		 UCC_GETH_VLAN_OPERATION_NON_TAGGED_NOP);
 
 	init_default_reg_vals(&uf_regs->upsmr,
 			      &ug_regs->maccfg1, &ug_regs->maccfg2);
@@ -2990,11 +2996,11 @@ static int ucc_geth_startup(struct ucc_geth_private *ugeth)
 	ugeth->p_init_enet_param_shadow->rgftgfrxglobal |=
 	    ugeth->rx_glbl_pram_offset | ug_info->riscRx;
 	if ((ug_info->largestexternallookupkeysize !=
-	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_NONE)
-	    && (ug_info->largestexternallookupkeysize !=
-		QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_8_BYTES)
-	    && (ug_info->largestexternallookupkeysize !=
-		QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_16_BYTES)) {
+	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_NONE) &&
+	    (ug_info->largestexternallookupkeysize !=
+	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_8_BYTES) &&
+	    (ug_info->largestexternallookupkeysize !=
+	     QE_FLTR_LARGEST_EXTERNAL_TABLE_LOOKUP_KEY_SIZE_16_BYTES)) {
 		if (netif_msg_ifup(ugeth))
 			ugeth_err("%s: Invalid largest External Lookup Key Size.",
 				  __func__);
@@ -3142,8 +3148,6 @@ static int ucc_geth_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	/* set bd status and length */
 	out_be32((u32 __iomem *)bd, bd_status);
 
-	dev->trans_start = jiffies;
-
 	/* Move to next BD in the ring */
 	if (!(bd_status & T_W))
 		bd += sizeof(struct qe_bd);
@@ -3211,6 +3215,8 @@ static int ucc_geth_rx(struct ucc_geth_private *ugeth, u8 rxQ, int rx_work_limit
 					   __func__, __LINE__, (u32) skb);
 			if (skb) {
 				skb->data = skb->head + NET_SKB_PAD;
+				skb->len = 0;
+				skb_reset_tail_pointer(skb);
 				__skb_queue_head(&ugeth->rx_recycle, skb);
 			}
 
@@ -3603,6 +3609,7 @@ static int ucc_geth_suspend(struct of_device *ofdev, pm_message_t state)
 	if (!netif_running(ndev))
 		return 0;
 
+	netif_device_detach(ndev);
 	napi_disable(&ugeth->napi);
 
 	/*
@@ -3661,7 +3668,7 @@ static int ucc_geth_resume(struct of_device *ofdev)
 	phy_start(ugeth->phydev);
 
 	napi_enable(&ugeth->napi);
-	netif_start_queue(ndev);
+	netif_device_attach(ndev);
 
 	return 0;
 }
@@ -3714,7 +3721,7 @@ static const struct net_device_ops ucc_geth_netdev_ops = {
 static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *match)
 {
 	struct device *device = &ofdev->dev;
-	struct device_node *np = ofdev->node;
+	struct device_node *np = ofdev->dev.of_node;
 	struct net_device *dev = NULL;
 	struct ucc_geth_private *ugeth = NULL;
 	struct ucc_geth_info *ug_info;
@@ -3800,7 +3807,7 @@ static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *ma
 		prop = of_get_property(np, "tx-clock", NULL);
 		if (!prop) {
 			printk(KERN_ERR
-				"ucc_geth: mising tx-clock-name property\n");
+				"ucc_geth: missing tx-clock-name property\n");
 			return -EINVAL;
 		}
 		if ((*prop < QE_CLK_NONE) || (*prop > QE_CLK24)) {
@@ -3876,7 +3883,7 @@ static int ucc_geth_probe(struct of_device* ofdev, const struct of_device_id *ma
 	}
 
 	if (netif_msg_probe(&debug))
-		printk(KERN_INFO "ucc_geth: UCC%1d at 0x%8x (irq = %d) \n",
+		printk(KERN_INFO "ucc_geth: UCC%1d at 0x%8x (irq = %d)\n",
 			ug_info->uf_info.ucc_num + 1, ug_info->uf_info.regs,
 			ug_info->uf_info.irq);
 
@@ -3958,8 +3965,11 @@ static struct of_device_id ucc_geth_match[] = {
 MODULE_DEVICE_TABLE(of, ucc_geth_match);
 
 static struct of_platform_driver ucc_geth_driver = {
-	.name		= DRV_NAME,
-	.match_table	= ucc_geth_match,
+	.driver = {
+		.name = DRV_NAME,
+		.owner = THIS_MODULE,
+		.of_match_table = ucc_geth_match,
+	},
 	.probe		= ucc_geth_probe,
 	.remove		= ucc_geth_remove,
 	.suspend	= ucc_geth_suspend,

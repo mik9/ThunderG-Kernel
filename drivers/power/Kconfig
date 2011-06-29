@@ -29,6 +29,20 @@ config APM_POWER
 	  Say Y here to enable support APM status emulation using
 	  battery class devices.
 
+config MAX8925_POWER
+	tristate "MAX8925 battery charger support"
+	depends on MFD_MAX8925
+	help
+	  Say Y here to enable support for the battery charger in the Maxim
+	  MAX8925 PMIC.
+
+config WM831X_BACKUP
+	tristate "WM831X backup battery charger support"
+	depends on MFD_WM831X
+	help
+	  Say Y here to enable support for the backup battery charger
+	  in the Wolfson Microelectronics WM831x PMICs.
+
 config WM831X_POWER
 	tristate "WM831X PMU support"
 	depends on MFD_WM831X
@@ -43,6 +57,11 @@ config WM8350_POWER
           Say Y here to enable support for the power management unit
 	  provided by the Wolfson Microelectronics WM8350 PMIC.
 
+config TEST_POWER
+	tristate "Test power driver"
+	help
+	  This driver is used for testing. It's safe to say M here.
+
 config BATTERY_DS2760
 	tristate "DS2760 battery driver (HP iPAQ & others)"
 	select W1
@@ -51,17 +70,11 @@ config BATTERY_DS2760
 	  Say Y here to enable support for batteries with ds2760 chip.
 
 config BATTERY_DS2782
-	tristate "DS2782 standalone gas-gauge"
+	tristate "DS2782/DS2786 standalone gas-gauge"
 	depends on I2C
 	help
-	  Say Y here to enable support for the DS2782 standalone battery
+	  Say Y here to enable support for the DS2782/DS2786 standalone battery
 	  gas-gauge.
-
-config BATTERY_DS2784
-	tristate "DS2784 battery driver "
-	select W1
-	help
-	  Say Y here to enable support for batteries with ds2784 chip.
 
 config BATTERY_PMU
 	tristate "Apple PMU battery"
@@ -83,6 +96,13 @@ config BATTERY_TOSA
 	  Say Y to enable support for the battery on the Sharp Zaurus
 	  SL-6000 (tosa) models.
 
+config BATTERY_COLLIE
+	tristate "Sharp SL-5500 (collie) battery"
+	depends on SA1100_COLLIE && MCP_UCB1200
+	help
+	  Say Y to enable support for the battery on the Sharp Zaurus
+	  SL-5500 (collie) models.
+
 config BATTERY_WM97XX
 	bool "WM97xx generic battery driver"
 	depends on TOUCHSCREEN_WM97XX=y
@@ -90,10 +110,10 @@ config BATTERY_WM97XX
 	  Say Y to enable support for battery measured by WM97xx aux port.
 
 config BATTERY_BQ27x00
-	tristate "BQ27200 battery driver"
+	tristate "BQ27x00 battery driver"
 	depends on I2C
 	help
-	  Say Y here to enable support for batteries with BQ27200(I2C) chip.
+	  Say Y here to enable support for batteries with BQ27x00 (I2C) chips.
 
 config BATTERY_DA9030
 	tristate "DA9030 battery driver"
@@ -110,6 +130,12 @@ config BATTERY_MAX17040
 	  in handheld and portable equipment. The MAX17040 is configured
 	  to operate with a single lithium cell
 
+config BATTERY_Z2
+	tristate "Z2 battery driver"
+	depends on I2C && MACH_ZIPIT2
+	help
+	  Say Y to include support for the battery on the Zipit Z2.
+
 config CHARGER_PCF50633
 	tristate "NXP PCF50633 MBC"
 	depends on MFD_PCF50633
@@ -123,17 +149,67 @@ config BATTERY_MSM
 	help
 	  Say Y to enable support for the battery in Qualcomm MSM.
 
-config MAX17040_FUEL_GAUGE
-	tristate "MAX17040 fuel gauge"
-	depends on ARCH_MSM
+config BATTERY_MSM8X60
+	tristate "MSM8X60 battery"
+	depends on (MACH_MSM8X60_SURF|| MACH_MSM8X60_FFA || MACH_MSM8X60_CHARM_SURF || MACH_MSM8X60_CHARM_FFA)
+	help
+	  MSM8660 SURF has dual charging paths to charge the battery.
+	  Say Y to enable support for the battery charging in
+	  Qualcomm MSM8X60 surf.
+
+config PM8058_CHARGER
+	tristate "pmic8058 charger"
+	depends on BATTERY_MSM8X60
+	depends on PMIC8058
+	help
+	  Say Y to enable support for battery charging from the pmic8058.
+	  pmic8058 provides a linear charging circuit connected to the usb
+	  cable on Qualcomm's msm8x60 surf board.
+
+config ISL9519_CHARGER
+	tristate "isl9519 charger"
+	depends on BATTERY_MSM8X60
 	default n
 	help
-	  Say Y to enable support for MAX17040 fuel gauge.
+	  The isl9519q charger chip from intersil is connected to an external
+	  charger cable and is preferred way of charging the battery because
+	  of its high current rating.
+	  Choose Y if you are compiling for Qualcomm's msm8x60 surf/ffa board.
+
+config SMB137B_CHARGER
+	tristate "smb137b charger"
+	default n
+	depends on I2C
+	help
+         The smb137b charger chip from summit is a switching mode based
+	 charging solution.
+
+         Choose Y if you are compiling for Qualcomm's msm8x60 fluid board.
+	 To compile this driver as a module, choose M here: the module will
+	 be called smb137b.
+
 config BATTERY_MSM_FAKE
 	tristate "Fake MSM battery"
 	depends on ARCH_MSM && BATTERY_MSM
 	default n
 	help
 	  Say Y to bypass actual battery queries.
+
+config PM8058_FIX_USB
+	tristate "pmic8058 software workaround for usb removal"
+	depends on PMIC8058
+	depends on !PM8058_CHARGER
+	help
+	  Say Y to enable the software workaround to USB Vbus line
+	  staying high even when USB cable is removed. This option
+	  is in lieu of a complete pm8058 charging driver.
+
+config BATTERY_QCIBAT
+	tristate "Quanta Computer Inc. Battery"
+	depends on SENSORS_WPCE775X
+	default n
+	help
+	 Say Y here if you want to use the Quanta battery driver for ST15
+	 platform.
 
 endif # POWER_SUPPLY

@@ -4,6 +4,7 @@
 #include <linux/netfilter_ipv4.h>
 #include <linux/ip.h>
 #include <linux/skbuff.h>
+#include <linux/gfp.h>
 #include <net/route.h>
 #include <net/xfrm.h>
 #include <net/ip.h>
@@ -16,7 +17,7 @@ int ip_route_me_harder(struct sk_buff *skb, unsigned addr_type)
 	const struct iphdr *iph = ip_hdr(skb);
 	struct rtable *rt;
 	struct flowi fl = {};
-	struct dst_entry *odst;
+	unsigned long orefdst;
 	unsigned int hh_len;
 	unsigned int type;
 
@@ -50,14 +51,14 @@ int ip_route_me_harder(struct sk_buff *skb, unsigned addr_type)
 		if (ip_route_output_key(net, &rt, &fl) != 0)
 			return -1;
 
-		odst = skb_dst(skb);
+		orefdst = skb->_skb_refdst;
 		if (ip_route_input(skb, iph->daddr, iph->saddr,
 				   RT_TOS(iph->tos), rt->u.dst.dev) != 0) {
 			dst_release(&rt->u.dst);
 			return -1;
 		}
 		dst_release(&rt->u.dst);
-		dst_release(odst);
+		refdst_drop(orefdst);
 	}
 
 	if (skb_dst(skb)->error)
@@ -155,10 +156,10 @@ static int nf_ip_reroute(struct sk_buff *skb,
 	if (entry->hook == NF_INET_LOCAL_OUT) {
 		const struct iphdr *iph = ip_hdr(skb);
 
-		if (!(iph->tos == rt_info->tos
-		      && skb->mark == rt_info->mark
-		      && iph->daddr == rt_info->daddr
-		      && iph->saddr == rt_info->saddr))
+		if (!(iph->tos == rt_info->tos &&
+		      skb->mark == rt_info->mark &&
+		      iph->daddr == rt_info->daddr &&
+		      iph->saddr == rt_info->saddr))
 			return ip_route_me_harder(skb, RTN_UNSPEC);
 	}
 	return 0;
@@ -248,9 +249,9 @@ module_exit(ipv4_netfilter_fini);
 
 #ifdef CONFIG_SYSCTL
 struct ctl_path nf_net_ipv4_netfilter_sysctl_path[] = {
-	{ .procname = "net", .ctl_name = CTL_NET, },
-	{ .procname = "ipv4", .ctl_name = NET_IPV4, },
-	{ .procname = "netfilter", .ctl_name = NET_IPV4_NETFILTER, },
+	{ .procname = "net", },
+	{ .procname = "ipv4", },
+	{ .procname = "netfilter", },
 	{ }
 };
 EXPORT_SYMBOL_GPL(nf_net_ipv4_netfilter_sysctl_path);

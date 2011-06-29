@@ -80,8 +80,10 @@ struct panic_log_dump {
 	unsigned char buffer[0];
 };
 
-static struct panic_log_dump *panic_dump_log;
 static int (*reboot_key_detect)(void) = NULL;
+
+#ifndef CONFIG_LGE_HIDDEN_RESET_PATCH
+static struct panic_log_dump *panic_dump_log;
 static char *panic_init_strings[] = {
 	"K e r n e l   p a n i c   h a s   b e e n   g e n e r a t e d . . . ",
 	"F o l l o w i n g   m e s s a g e s   s h o w   c p u   c o n t e x t ",
@@ -96,6 +98,7 @@ static char *panic_init_strings[] = {
 };
 
 static DEFINE_SPINLOCK(lge_panic_lock);
+#endif
 
 static int dummy_arg;
 static int gen_panic(const char *val, struct kernel_param *kp)
@@ -116,8 +119,9 @@ module_param_named(
 		display_kernel_enable, display_kernel_enable,
 		int, S_IRUGO | S_IWUSR | S_IWGRP);
 
-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
+
 int hidden_reset_enable = 0;
+#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
 module_param_named(
 		hidden_reset_enable, hidden_reset_enable,
 		int, S_IRUGO | S_IWUSR | S_IWGRP);
@@ -139,6 +143,7 @@ static int __init check_hidden_reset(char *reset_mode)
 __setup("lge.hreset=", check_hidden_reset);
 #endif
 
+#ifndef CONFIG_LGE_HIDDEN_RESET_PATCH
 static struct ram_console_buffer *ram_console_buffer = 0;
 
 static int get_panic_report_start(uint32_t start, uint32_t size, uint8_t *data)
@@ -197,7 +202,33 @@ static void display_update(void)
 }
 
 void msm_pm_flush_console(void);
+#endif
 
+#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
+static int copy_frame_buffer(struct notifier_block *this, unsigned long event,
+		void *ptr)
+{
+	void *fb_addr;
+	void *copy_addr;
+	void *copy_phys_addr;
+	int fb_size = 320 * 480 * 2;
+
+	copy_addr = lge_get_fb_copy_virt_addr();
+	fb_addr = lge_get_fb_addr();
+	printk(KERN_INFO"%s: copy %x\n",__func__, (unsigned)copy_addr);
+	printk(KERN_INFO"%s: fbad %x\n",__func__, (unsigned)fb_addr);
+
+	memcpy(copy_addr, fb_addr, fb_size);
+
+	copy_phys_addr = lge_get_fb_copy_phys_addr();
+	lge_set_reboot_reason((unsigned int)copy_phys_addr);
+
+	*((unsigned *)copy_addr) = 0x12345678;
+	printk(KERN_INFO"%s: hidden magic  %x\n",__func__, *((unsigned *)copy_addr));
+
+	return NOTIFY_DONE;
+}
+#else
 static int display_panic_reason(struct notifier_block *this, unsigned long event,
 		void *ptr)
 {
@@ -251,7 +282,7 @@ static int display_panic_reason(struct notifier_block *this, unsigned long event
 		memset(store_buffer, 0x00, display_size * 2);
 		lge_set_reboot_reason(bank->size);
 
-		if (ptr == CRASH_ARM9) /* arm9 has crashed */
+		if ((unsigned int)ptr == CRASH_ARM9) /* arm9 has crashed */
 			panic_dump_log->magic_key = CRASH_ARM9;
 
 		if (report_start < start) {
@@ -363,31 +394,6 @@ reboot_system:
 
 	return NOTIFY_DONE;
 }
-
-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
-static int copy_frame_buffer(struct notifier_block *this, unsigned long event,
-		void *ptr)
-{
-	void *fb_addr;
-	void *copy_addr;
-	void *copy_phys_addr;
-	int fb_size = 320 * 480 * 2;
-
-	copy_addr = lge_get_fb_copy_virt_addr();
-	fb_addr = lge_get_fb_addr();
-	printk(KERN_INFO"%s: copy %x\n",__func__, copy_addr);
-	printk(KERN_INFO"%s: fbad %x\n",__func__, fb_addr);
-
-	memcpy(copy_addr, fb_addr, fb_size);
-
-	copy_phys_addr = lge_get_fb_copy_phys_addr();
-	lge_set_reboot_reason(copy_phys_addr);
-
-	*((unsigned *)copy_addr) = 0x12345678;
-	printk(KERN_INFO"%s: hidden magic  %x\n",__func__, *((unsigned *)copy_addr));
-
-	return NOTIFY_DONE;
-}
 #endif
 
 static struct notifier_block panic_handler_block = {
@@ -416,7 +422,7 @@ static int __devexit lge_panic_handler_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_driver panic_handler_driver = {
+static struct platform_driver panic_handler_driver __refdata = {
 	.probe = lge_panic_handler_probe,
 	.remove = __devexit_p(lge_panic_handler_remove),
 	.driver = {

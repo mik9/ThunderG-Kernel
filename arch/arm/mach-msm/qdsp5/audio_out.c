@@ -580,8 +580,7 @@ static long audio_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 }
 
 /* Only useful in tunnel-mode */
-static int audio_fsync(struct file *file, struct dentry *dentry,
-			int datasync)
+static int audio_fsync(struct file *file,	int datasync)
 {
 	struct audio *audio = file->private_data;
 	int rc = 0;

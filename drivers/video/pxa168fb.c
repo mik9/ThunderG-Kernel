@@ -668,7 +668,7 @@ static int __init pxa168fb_probe(struct platform_device *pdev)
 	/*
 	 * Map LCD controller registers.
 	 */
-	fbi->reg_base = ioremap_nocache(res->start, res->end - res->start);
+	fbi->reg_base = ioremap_nocache(res->start, resource_size(res));
 	if (fbi->reg_base == NULL) {
 		ret = -ENOMEM;
 		goto failed;
@@ -687,6 +687,7 @@ static int __init pxa168fb_probe(struct platform_device *pdev)
 	}
 
 	info->fix.smem_start = (unsigned long)fbi->fb_start_dma;
+	set_graphics_start(info, 0, 0);
 
 	/*
 	 * Set video mode according to platform data.

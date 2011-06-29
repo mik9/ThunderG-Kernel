@@ -36,6 +36,7 @@
 #include <linux/cdev.h>
 #include <linux/swap.h>
 #include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <linux/highmem.h>
 #include <linux/io.h>
 #include <linux/jiffies.h>
@@ -1821,7 +1822,6 @@ done:
 static int ipath_open(struct inode *in, struct file *fp)
 {
 	/* The real work is performed later in ipath_assign_port() */
-	cycle_kernel_lock();
 	fp->private_data = kzalloc(sizeof(struct ipath_filedata), GFP_KERNEL);
 	return fp->private_data ? 0 : -ENOMEM;
 }

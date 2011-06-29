@@ -24,6 +24,7 @@
 #include <linux/android_pmem.h>
 #include "adsp.h"
 #include <mach/debug_mm.h>
+#include <linux/slab.h>
 
 struct adsp_pmem_info {
 	int fd;

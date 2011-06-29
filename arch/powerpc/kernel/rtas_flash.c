@@ -6,7 +6,7 @@
  *      as published by the Free Software Foundation; either version
  *      2 of the License, or (at your option) any later version.
  *
- * /proc/ppc64/rtas/firmware_flash interface
+ * /proc/powerpc/rtas/firmware_flash interface
  *
  * This file implements a firmware_flash interface to pump a firmware
  * image into the kernel.  At reboot time rtas_restart() will see the
@@ -15,6 +15,7 @@
 
 #include <linux/module.h>
 #include <linux/init.h>
+#include <linux/slab.h>
 #include <linux/proc_fs.h>
 #include <asm/delay.h>
 #include <asm/uaccess.h>
@@ -109,7 +110,7 @@ static struct kmem_cache *flash_block_cache = NULL;
  * For convenience as we build the list we use virtual addrs,
  * we do not fill in the version number, and the length field
  * is treated as the number of entries currently in the block
- * (i.e. not a byte count).  This is all fixed when calling
+ * (i.e. not a byte count).  This is all fixed when calling 
  * the flash routine.
  */
 
@@ -743,7 +744,7 @@ static int __init rtas_flash_init(void)
 		return 1;
 	}
 
-	firmware_flash_pde = create_flash_pde("ppc64/rtas/"
+	firmware_flash_pde = create_flash_pde("powerpc/rtas/"
 					      FIRMWARE_FLASH_NAME,
 					      &rtas_flash_operations);
 	if (firmware_flash_pde == NULL) {
@@ -757,7 +758,7 @@ static int __init rtas_flash_init(void)
 	if (rc != 0)
 		goto cleanup;
 
-	firmware_update_pde = create_flash_pde("ppc64/rtas/"
+	firmware_update_pde = create_flash_pde("powerpc/rtas/"
 					       FIRMWARE_UPDATE_NAME,
 					       &rtas_flash_operations);
 	if (firmware_update_pde == NULL) {
@@ -771,7 +772,7 @@ static int __init rtas_flash_init(void)
 	if (rc != 0)
 		goto cleanup;
 
-	validate_pde = create_flash_pde("ppc64/rtas/" VALIDATE_FLASH_NAME,
+	validate_pde = create_flash_pde("powerpc/rtas/" VALIDATE_FLASH_NAME,
 			      		&validate_flash_operations);
 	if (validate_pde == NULL) {
 		rc = -ENOMEM;
@@ -784,7 +785,7 @@ static int __init rtas_flash_init(void)
 	if (rc != 0)
 		goto cleanup;
 
-	manage_pde = create_flash_pde("ppc64/rtas/" MANAGE_FLASH_NAME,
+	manage_pde = create_flash_pde("powerpc/rtas/" MANAGE_FLASH_NAME,
 				      &manage_flash_operations);
 	if (manage_pde == NULL) {
 		rc = -ENOMEM;

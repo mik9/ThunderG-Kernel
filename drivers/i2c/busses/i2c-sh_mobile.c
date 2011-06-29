@@ -31,6 +31,7 @@
 #include <linux/pm_runtime.h>
 #include <linux/clk.h>
 #include <linux/io.h>
+#include <linux/slab.h>
 
 /* Transmit operation:                                                      */
 /*                                                                          */
@@ -647,7 +648,7 @@ static int sh_mobile_i2c_runtime_nop(struct device *dev)
 	return 0;
 }
 
-static struct dev_pm_ops sh_mobile_i2c_dev_pm_ops = {
+static const struct dev_pm_ops sh_mobile_i2c_dev_pm_ops = {
 	.runtime_suspend = sh_mobile_i2c_runtime_nop,
 	.runtime_resume = sh_mobile_i2c_runtime_nop,
 };

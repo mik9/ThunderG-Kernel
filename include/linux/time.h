@@ -76,24 +76,8 @@ extern unsigned long mktime(const unsigned int year, const unsigned int mon,
 			    const unsigned int min, const unsigned int sec);
 
 extern void set_normalized_timespec(struct timespec *ts, time_t sec, s64 nsec);
-
-/*
- * timespec_add_safe assumes both values are positive and checks
- * for overflow. It will return TIME_T_MAX if the reutrn would be
- * smaller then either of the arguments.
- */
 extern struct timespec timespec_add_safe(const struct timespec lhs,
 					 const struct timespec rhs);
-
-
-static inline struct timespec timespec_add(struct timespec lhs,
-						struct timespec rhs)
-{
-	struct timespec ts_delta;
-	set_normalized_timespec(&ts_delta, lhs.tv_sec + rhs.tv_sec,
-				lhs.tv_nsec + rhs.tv_nsec);
-	return ts_delta;
-}
 
 /*
  * sub = lhs - rhs, in normalized form
@@ -166,7 +150,6 @@ extern struct timespec timespec_trunc(struct timespec t, unsigned gran);
 extern int timekeeping_valid_for_hres(void);
 extern u64 timekeeping_max_deferment(void);
 extern void update_wall_time(void);
-extern void update_xtime_cache(u64 nsec);
 extern void timekeeping_leap_insert(int leapsecond);
 
 struct tms;

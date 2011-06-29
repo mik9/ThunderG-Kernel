@@ -36,11 +36,11 @@
 
 /* define PMEM address size */
 #ifdef CONFIG_ARCH_MSM7X25
-#define MSM_PMEM_MDP_SIZE	0xb21000
-#define MSM_PMEM_ADSP_SIZE	0x97b000
-#define MSM_PMEM_AUDIO_SIZE	0x121000
-#define MSM_FB_SIZE		0x200000
-#define PMEM_KERNEL_EBI1_SIZE	0x64000
+#define MSM_PMEM_MDP_SIZE   0xb21000
+#define MSM_PMEM_ADSP_SIZE  0x97b000
+#define MSM_PMEM_AUDIO_SIZE 0x121000
+#define MSM_FB_SIZE     0x200000
+#define PMEM_KERNEL_EBI1_SIZE   0x64000
 #endif
 
 #ifdef CONFIG_ARCH_MSM7X27
@@ -95,6 +95,7 @@ struct touch_platform_data {
 	int ts_y_min;
 	int ts_y_max;
 	int (*power)(unsigned char onoff);
+	int (*pulldown)(int onoff);
 	int irq;
 	int scl;
 	int sda;
@@ -223,6 +224,7 @@ struct android_vibrator_platform_data {
 	int (*power_set)(int enable); 		/* LDO Power Set Function */
 	int (*pwm_set)(int enable, int gain); 		/* PWM Set Function */
 	int (*ic_enable_set)(int enable); 	/* Motor IC Set Function */
+	int (*gpio_request)(void);	/* gpio request */
 	int amp_value;				/* PWM tuning value */
 };
 
@@ -318,13 +320,13 @@ enum {
 	REBOOT_KEY_NOT_PRESS,
 };
 
-#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
 extern int hidden_reset_enable;
+#ifdef CONFIG_LGE_HIDDEN_RESET_PATCH
 extern int on_hidden_reset;
 void *lge_get_fb_addr(void);
-void *lge_get_fb_copy_virt_addr(void);
 void *lge_get_fb_copy_phys_addr(void);
 #endif
+void *lge_get_fb_copy_virt_addr(void);
 
 struct lge_panic_handler_platform_data {
 	int (*reboot_key_detect)(void);
@@ -365,5 +367,6 @@ void __init lge_add_gpio_i2c_device(gpio_i2c_init_func_t *init_func);
 void __init lge_add_gpio_i2c_devices(void);
 int __init lge_get_uart_mode(void);
 void __init lge_add_pm_devices(void);
+void __init lge_add_tsif_devices(void);
 
 #endif

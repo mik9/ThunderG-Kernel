@@ -3,7 +3,7 @@
 #
 
 config MMC_UNSAFE_RESUME
-	bool "Allow unsafe resume (DANGEROUS)"
+	bool "Assume MMC/SD cards are non-removable (DANGEROUS)"
 	help
 	  If you say Y here, the MMC layer will assume that all cards
 	  stayed in their respective slots during the suspend. The
@@ -13,6 +13,9 @@ config MMC_UNSAFE_RESUME
 
 	  This option is usually just for embedded systems which use
 	  a MMC/SD card for rootfs. Most people should say N here.
+
+	  This option sets a default which can be overridden by the
+	  module parameter "removable=0" or "removable=1".
 
 config MMC_EMBEDDED_SDIO
 	boolean "MMC embedded SDIO device support (EXPERIMENTAL)"

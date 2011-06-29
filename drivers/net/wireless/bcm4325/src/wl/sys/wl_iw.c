@@ -654,7 +654,7 @@ int wl_iw_set_dtim_val(struct net_device *dev)	//hyeok	: 100824
 }
 /* LGE_CHANGE_E, [jisung.yang@lge.com], 2010-08-24, <Set listen interval and dtim listen> */
 
-
+#if 0
 static int
 wl_iw_set_hostip(
 	struct net_device *dev,
@@ -710,6 +710,7 @@ wl_iw_set_hostip(
 
     return 0;
 }
+#endif
 #endif	/* defined(CONFIG_BRCM_LGE_WL_HOSTWAKEUP) && defined(CONFIG_BRCM_LGE_WL_ARPOFFLOAD) */
 
 
@@ -913,6 +914,9 @@ wl_iw_get_link_speed(
 /* MOD 0005568: [WLAN] Wi-Fi will be disconnected if the RSSI value is lower than -92 */
 int less_than_rssi = 0;
 /* END: 0005568 mingi.sung@lge.com 2010-03-27 */
+#if defined(CONFIG_LGE_BCM432X_PATCH)
+int wl_dtim_set = 0;
+#endif
 static int
 wl_iw_get_rssi(
 	struct net_device *dev,
@@ -966,6 +970,12 @@ wl_iw_get_rssi(
  * <some ssid use '<' character sometimes and it cause response discard
  * in wpa_supplicant (wpa_ctrl_request())> */
 	
+#if defined(CONFIG_LGE_BCM432X_PATCH)
+        if (wl_dtim_set && rssi < 0){
+                wl_iw_set_dtim_val(dev);        //by sjpark 10-12-15
+                wl_dtim_set = 0 ;
+        }
+#endif
 /* BEGIN: 0005568 mingi.sung@lge.com 2010-03-27 */
 /* MOD 0005568: [WLAN] Wi-Fi will be disconnected if the RSSI value is lower than -92 */
 #if defined(CONFIG_LGE_BCM432X_PATCH)
@@ -990,7 +1000,7 @@ wl_iw_get_rssi(
 	return error;
 }
 
-static int
+int
 wl_iw_send_priv_event(
 	struct net_device *dev,
 	char *evntmsg
@@ -4372,7 +4382,7 @@ wl_iw_set_power(
 
 	WL_TRACE(("%s: SIOCSIWPOWER\n", dev->name));
 
-	pm = vwrq->disabled ? PM_OFF : PM_FAST;
+	pm = vwrq->disabled ? PM_OFF : PM_MAX;
 
 	pm = htod32(pm);
 	if ((error = dev_wlc_ioctl(dev, WLC_SET_PM, &pm, sizeof(pm))))
@@ -4882,7 +4892,6 @@ wl_iw_set_powermode(
 	if (sscanf(extra, "%*s %d", &mode) != 1)
 		return -EINVAL;
 
-    mode = 0;
 	switch (mode) {
 	case 0: mode = 2; break; /* Fast PS mode */
 	case 1: mode = 0; break; /* No PS mode */
@@ -6264,8 +6273,10 @@ static int wl_iw_set_priv(
 	    else if (strnicmp(extra, "COUNTRY", strlen("COUNTRY")) == 0)
 			ret = wl_iw_set_country(dev, info, (union iwreq_data *)dwrq, extra);
 #if defined(CONFIG_BRCM_LGE_WL_HOSTWAKEUP) && defined(CONFIG_BRCM_LGE_WL_ARPOFFLOAD)
+#if 0
 	    else if (strnicmp(extra, "IPADDR", strlen("IPADDR")) == 0)
 			ret = wl_iw_set_hostip(dev, info, (union iwreq_data *)dwrq, extra);
+#endif		
 #endif	/* defined(CONFIG_BRCM_LGE_WL_HOSTWAKEUP) && defined(CONFIG_BRCM_LGE_WL_ARPOFFLOAD) */
 	    else if (strnicmp(extra, "STOP", strlen("STOP")) == 0)
 			ret = wl_iw_control_wl_off(dev, info);
@@ -7004,6 +7015,9 @@ wl_iw_event(struct net_device *dev, wl_event_msg_t *e, void* data)
 		memcpy(wrqu.addr.sa_data, &e->addr, ETHER_ADDR_LEN);
 		wrqu.addr.sa_family = ARPHRD_ETHER;
 		cmd = IWEVREGISTERED;
+#if defined(CONFIG_LGE_BCM432X_PATCH)
+                wl_dtim_set = 1 ;
+#endif
 		break;
 	case WLC_E_DEAUTH_IND:
 	case WLC_E_DISASSOC_IND:

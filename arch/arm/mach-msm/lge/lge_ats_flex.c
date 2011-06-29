@@ -22,6 +22,7 @@
 #include <linux/fcntl.h>
 #include <linux/syscalls.h>
 
+#include <linux/slab.h>
 
 #include "lge_ats.h"
 #include "lge_ats_flex.h"
@@ -33,7 +34,7 @@ int lg_get_flex_from_xml(char *strIndex, char* flexValue)
 	signed long int      res;
 	int                       iTotalCnt, iItemCnt,iValueCnt,j,iItemCntAll;
 		
-	char*                    s_bufFlexINI; //Flex INI ÆÄÀÏÀÇ ÀüÃ¼ string
+	char*                    s_bufFlexINI; //Flex INI ?????? ??ü string
 	char                    s_bufItem[500];     //one line
 	// char                    s_bufValue1[10];   //country
 	char                    s_bufValue2[400]; //value
@@ -57,23 +58,23 @@ int lg_get_flex_from_xml(char *strIndex, char* flexValue)
 	
 	sys_close(fd);
 
-	printk("read data flex.xml fd: %d iFlexSize : %d res;%d\n", fd, iFlexSize, res);
+	printk("read data flex.xml fd: %d iFlexSize : %d res;%ld\n", fd, iFlexSize, res);
 
 	iFlexSize=res;
 	
 	iItemCnt = 0;
 	iItemCntAll = 0;
 	
-	for(iTotalCnt=0; iTotalCnt<iFlexSize;iTotalCnt++)  //Flex ini ÆÄÀÏÀÇ ÇÑ character °¡Á®¿À±â
+	for(iTotalCnt=0; iTotalCnt<iFlexSize;iTotalCnt++)  //Flex ini ?????? ?? character ??��?��?
 	{
 		//printk("%x ",s_bufFlexINI[iTotalCnt]);
-		if ((s_bufFlexINI[iItemCntAll]) != '\n')  //¹®ÀÚ¿­À» ÇÑÁÙ ÀÐ¾î¼­ ¹öÆÛ¿¡ ³Ö±â
+		if ((s_bufFlexINI[iItemCntAll]) != '\n')  //???ڿ?�� ???? ?о ???ۿ? ?ֱ?
 		{
 			s_bufItem[iItemCnt]=s_bufFlexINI[iItemCntAll];
 			iItemCnt ++;
 			
 		} 
-		else  //ÀÐ¾î¿Â ¹®ÀÚ¿­ ºÐ¼®
+		else  //?о??? ???ڿ? ?м?
 		{	
 			//printk("\n",s_bufFlexINI[iTotalCnt]);
 			s_bufItem[iItemCnt]='\n';

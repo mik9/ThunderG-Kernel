@@ -13,6 +13,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/slab.h>
 #include "ext4_jbd2.h"
 #include "ext4_extents.h"
 
@@ -262,13 +263,17 @@ static int free_dind_blocks(handle_t *handle,
 	for (i = 0; i < max_entries; i++) {
 		if (tmp_idata[i]) {
 			extend_credit_for_blkdel(handle, inode);
-			ext4_free_blocks(handle, inode,
-					le32_to_cpu(tmp_idata[i]), 1, 1);
+			ext4_free_blocks(handle, inode, 0,
+					 le32_to_cpu(tmp_idata[i]), 1,
+					 EXT4_FREE_BLOCKS_METADATA |
+					 EXT4_FREE_BLOCKS_FORGET);
 		}
 	}
 	put_bh(bh);
 	extend_credit_for_blkdel(handle, inode);
-	ext4_free_blocks(handle, inode, le32_to_cpu(i_data), 1, 1);
+	ext4_free_blocks(handle, inode, 0, le32_to_cpu(i_data), 1,
+			 EXT4_FREE_BLOCKS_METADATA |
+			 EXT4_FREE_BLOCKS_FORGET);
 	return 0;
 }
 
@@ -297,7 +302,9 @@ static int free_tind_blocks(handle_t *handle,
 	}
 	put_bh(bh);
 	extend_credit_for_blkdel(handle, inode);
-	ext4_free_blocks(handle, inode, le32_to_cpu(i_data), 1, 1);
+	ext4_free_blocks(handle, inode, 0, le32_to_cpu(i_data), 1,
+			 EXT4_FREE_BLOCKS_METADATA |
+			 EXT4_FREE_BLOCKS_FORGET);
 	return 0;
 }
 
@@ -308,8 +315,10 @@ static int free_ind_block(handle_t *handle, struct inode *inode, __le32 *i_data)
 	/* ei->i_data[EXT4_IND_BLOCK] */
 	if (i_data[0]) {
 		extend_credit_for_blkdel(handle, inode);
-		ext4_free_blocks(handle, inode,
-				le32_to_cpu(i_data[0]), 1, 1);
+		ext4_free_blocks(handle, inode, 0,
+				le32_to_cpu(i_data[0]), 1,
+				 EXT4_FREE_BLOCKS_METADATA |
+				 EXT4_FREE_BLOCKS_FORGET);
 	}
 
 	/* ei->i_data[EXT4_DIND_BLOCK] */
@@ -419,7 +428,8 @@ static int free_ext_idx(handle_t *handle, struct inode *inode,
 	}
 	put_bh(bh);
 	extend_credit_for_blkdel(handle, inode);
-	ext4_free_blocks(handle, inode, block, 1, 1);
+	ext4_free_blocks(handle, inode, 0, block, 1,
+			 EXT4_FREE_BLOCKS_METADATA | EXT4_FREE_BLOCKS_FORGET);
 	return retval;
 }
 

@@ -45,10 +45,13 @@
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <linux/io.h>
+#include <linux/slab.h>
 
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/xen/hypervisor.h>
+
+#include <xen/xen.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
 #include <xen/page.h>

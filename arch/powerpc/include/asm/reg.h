@@ -293,10 +293,12 @@
 #define HID1_ABE	(1<<10)		/* 7450 Address Broadcast Enable */
 #define HID1_PS		(1<<16)		/* 750FX PLL selection */
 #define SPRN_HID2	0x3F8		/* Hardware Implementation Register 2 */
+#define SPRN_HID2_GEKKO	0x398		/* Gekko HID2 Register */
 #define SPRN_IABR	0x3F2	/* Instruction Address Breakpoint Register */
 #define SPRN_IABR2	0x3FA		/* 83xx */
 #define SPRN_IBCR	0x135		/* 83xx Insn Breakpoint Control Reg */
 #define SPRN_HID4	0x3F4		/* 970 HID4 */
+#define SPRN_HID4_GEKKO	0x3F3		/* Gekko HID4 */
 #define SPRN_HID5	0x3F6		/* 970 HID5 */
 #define SPRN_HID6	0x3F9	/* BE HID 6 */
 #define   HID6_LB	(0x0F<<12) /* Concurrent Large Page Modes */
@@ -426,6 +428,10 @@
 #define   SRR1_WAKEMT		0x00280000 /* mtctrl */
 #define   SRR1_WAKEDEC		0x00180000 /* Decrementer interrupt */
 #define   SRR1_WAKETHERM	0x00100000 /* Thermal management interrupt */
+#define   SRR1_PROGFPE		0x00100000 /* Floating Point Enabled */
+#define   SRR1_PROGPRIV		0x00040000 /* Privileged instruction */
+#define   SRR1_PROGTRAP		0x00020000 /* Trap */
+#define   SRR1_PROGADDR		0x00010000 /* SRR0 contains subsequent addr */
 #define SPRN_HSRR0	0x13A	/* Save/Restore Register 0 */
 #define SPRN_HSRR1	0x13B	/* Save/Restore Register 1 */
 
@@ -461,6 +467,14 @@
 #define SPRN_VRSAVE	0x100	/* Vector Register Save Register */
 #define SPRN_XER	0x001	/* Fixed Point Exception Register */
 
+#define SPRN_MMCR0_GEKKO 0x3B8 /* Gekko Monitor Mode Control Register 0 */
+#define SPRN_MMCR1_GEKKO 0x3BC /* Gekko Monitor Mode Control Register 1 */
+#define SPRN_PMC1_GEKKO  0x3B9 /* Gekko Performance Monitor Control 1 */
+#define SPRN_PMC2_GEKKO  0x3BA /* Gekko Performance Monitor Control 2 */
+#define SPRN_PMC3_GEKKO  0x3BD /* Gekko Performance Monitor Control 3 */
+#define SPRN_PMC4_GEKKO  0x3BE /* Gekko Performance Monitor Control 4 */
+#define SPRN_WPAR_GEKKO  0x399 /* Gekko Write Pipe Address Register */
+
 #define SPRN_SCOMC	0x114	/* SCOM Access Control */
 #define SPRN_SCOMD	0x115	/* SCOM Access DATA */
 
@@ -489,6 +503,8 @@
 #define SPRN_MMCR1	798
 #define SPRN_MMCRA	0x312
 #define   MMCRA_SDSYNC	0x80000000UL /* SDAR synced with SIAR */
+#define   MMCRA_SDAR_DCACHE_MISS 0x40000000UL
+#define   MMCRA_SDAR_ERAT_MISS   0x20000000UL
 #define   MMCRA_SIHV	0x10000000UL /* state of MSR HV when SIAR set */
 #define   MMCRA_SIPR	0x08000000UL /* state of MSR PR when SIAR set */
 #define   MMCRA_SLOT	0x07000000UL /* SLOT bits (37-39) */
@@ -811,6 +827,7 @@
 #define PVR_403GC	0x00200200
 #define PVR_403GCX	0x00201400
 #define PVR_405GP	0x40110000
+#define PVR_476		0x11a52000
 #define PVR_STB03XXX	0x40310000
 #define PVR_NP405H	0x41410000
 #define PVR_NP405L	0x41610000
@@ -847,6 +864,9 @@
 #define PVR_8245	0x80811014
 #define PVR_8260	PVR_8240
 
+/* 476 Simulator seems to currently have the PVR of the 602... */
+#define PVR_476_ISS	0x00052000
+
 /* 64-bit processors */
 /* XXX the prefix should be PVR_, we'll do a global sweep to fix it one day */
 #define PV_NORTHSTAR	0x0033
@@ -858,7 +878,6 @@
 #define PV_970		0x0039
 #define PV_POWER5	0x003A
 #define PV_POWER5p	0x003B
-#define PV_POWER7	0x003F
 #define PV_970FX	0x003C
 #define PV_630		0x0040
 #define PV_630p	0x0041

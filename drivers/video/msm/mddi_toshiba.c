@@ -1636,6 +1636,8 @@ static int mddi_toshiba_lcd_on(struct platform_device *pdev)
 	if (mfd->key != MFD_KEY)
 		return -EINVAL;
 
+	mddi_host_client_cnt_reset();
+
 	if (TM_GET_DID(mfd->panel.id) == TOSHIBA_VGA_PRIM)
 		mddi_toshiba_prim_init(mfd);
 	else
@@ -1651,11 +1653,19 @@ static int mddi_toshiba_lcd_on(struct platform_device *pdev)
 
 static int mddi_toshiba_lcd_off(struct platform_device *pdev)
 {
+	if (mddi_toshiba_vsync_handler != NULL) {
+		(*mddi_toshiba_vsync_handler)
+			    (mddi_toshiba_vsync_handler_arg);
+		mddi_toshiba_vsync_handler = NULL;
+		printk(KERN_INFO "%s: clean up vsyn_handler=%x\n", __func__,
+				(int)mddi_toshiba_vsync_handler);
+	}
+
 	mddi_toshiba_lcd_powerdown(platform_get_drvdata(pdev));
 	return 0;
 }
 
-static int __init mddi_toshiba_lcd_probe(struct platform_device *pdev)
+static int __devinit mddi_toshiba_lcd_probe(struct platform_device *pdev)
 {
 	if (pdev->id == 0) {
 		mddi_toshiba_pdata = pdev->dev.platform_data;

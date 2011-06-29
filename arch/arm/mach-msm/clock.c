@@ -1,7 +1,7 @@
 /* arch/arm/mach-msm/clock.c
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2007-2010, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2007-2011, Code Aurora Forum. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -19,83 +19,32 @@
 #include <linux/err.h>
 #include <linux/spinlock.h>
 #include <linux/pm_qos_params.h>
+#include <linux/clk.h>
+
+#include <asm/clkdev.h>
+
+#include <mach/socinfo.h>
 
 #include "clock.h"
-#include "socinfo.h"
 
 static DEFINE_MUTEX(clocks_mutex);
-static DEFINE_SPINLOCK(clocks_lock);
 static DEFINE_SPINLOCK(ebi1_vote_lock);
 static LIST_HEAD(clocks);
-struct clk *msm_clocks;
-unsigned msm_num_clocks;
 
-/*
- * Bitmap of enabled clocks, excluding ACPU which is always
- * enabled
- */
-static DECLARE_BITMAP(clock_map_enabled, NR_CLKS);
-static DEFINE_SPINLOCK(clock_map_lock);
 static struct notifier_block axi_freq_notifier_block;
 
 /*
  * Standard clock functions defined in include/linux/clk.h
  */
-struct clk *clk_get(struct device *dev, const char *id)
-{
-	struct clk *clk;
-
-	mutex_lock(&clocks_mutex);
-
-	list_for_each_entry(clk, &clocks, list)
-		if (!strcmp(id, clk->name) && clk->dev == dev)
-			goto found_it;
-
-	list_for_each_entry(clk, &clocks, list)
-		if (!strcmp(id, clk->name) && clk->dev == NULL)
-			goto found_it;
-
-	clk = ERR_PTR(-ENOENT);
-found_it:
-	mutex_unlock(&clocks_mutex);
-	return clk;
-}
-EXPORT_SYMBOL(clk_get);
-
-void clk_put(struct clk *clk)
-{
-}
-EXPORT_SYMBOL(clk_put);
-
 int clk_enable(struct clk *clk)
 {
-	unsigned long flags;
-	spin_lock_irqsave(&clocks_lock, flags);
-	clk->count++;
-	if (clk->count == 1) {
-		clk->ops->enable(clk->id);
-		spin_lock(&clock_map_lock);
-		clock_map_enabled[BIT_WORD(clk->id)] |= BIT_MASK(clk->id);
-		spin_unlock(&clock_map_lock);
-	}
-	spin_unlock_irqrestore(&clocks_lock, flags);
-	return 0;
+	return clk->ops->enable(clk->id);
 }
 EXPORT_SYMBOL(clk_enable);
 
 void clk_disable(struct clk *clk)
 {
-	unsigned long flags;
-	spin_lock_irqsave(&clocks_lock, flags);
-	BUG_ON(clk->count == 0);
-	clk->count--;
-	if (clk->count == 0) {
-		clk->ops->disable(clk->id);
-		spin_lock(&clock_map_lock);
-		clock_map_enabled[BIT_WORD(clk->id)] &= ~BIT_MASK(clk->id);
-		spin_unlock(&clock_map_lock);
-	}
-	spin_unlock_irqrestore(&clocks_lock, flags);
+	clk->ops->disable(clk->id);
 }
 EXPORT_SYMBOL(clk_disable);
 
@@ -145,6 +94,8 @@ EXPORT_SYMBOL(clk_set_max_rate);
 
 int clk_set_parent(struct clk *clk, struct clk *parent)
 {
+	if (clk->ops->set_parent)
+		return clk->ops->set_parent(clk->id, parent);
 	return -ENOSYS;
 }
 EXPORT_SYMBOL(clk_set_parent);
@@ -170,7 +121,6 @@ EXPORT_SYMBOL(clk_set_flags);
  */
 static unsigned long ebi1_min_rate[CLKVOTE_MAX];
 static struct clk *ebi1_clk;
-static struct clk *pbus_clk;
 
 /* Rate is in Hz to be consistent with the other clk APIs. */
 int ebi1_clk_set_min_rate(enum clkvote_client client, unsigned long rate)
@@ -215,91 +165,53 @@ static int axi_freq_notifier_handler(struct notifier_block *block,
 	if (min_freq != MSM_AXI_MAX_FREQ)
 		min_freq *= 1000;
 
-	/* On 7x30, ebi1_clk votes are dropped during power collapse, but
-	 * pbus_clk votes are not. Use pbus_clk to implicitly request ebi1
-	 * and AXI rates. */
-	if (cpu_is_msm7x30() || cpu_is_msm8x55())
-		return clk_set_min_rate(pbus_clk, min_freq/2);
-	else
+	switch (socinfo_get_msm_cpu()) {
+	case MSM_CPU_7X30:
+	case MSM_CPU_8X55:
+		/* On 7x30/8x55, ebi1_clk votes are dropped during power
+		 * collapse, but pbus_clk votes are not. Use pbus_clk to
+		 * implicitly request ebi1 and AXI rates. */
+		return clk_set_min_rate(ebi1_clk, min_freq);
+	case MSM_CPU_8X60:
+		/* The bus driver handles ebi1_clk requests on 8x60. */
+		return 0;
+	default:
+		/* Update pm_qos vote for ebi1_clk. */
 		return ebi1_clk_set_min_rate(CLKVOTE_PMQOS, min_freq);
-}
-
-/*
- * Find out whether any clock is enabled that needs the TCXO clock.
- *
- * On exit, the buffer 'reason' holds a bitmap of ids of all enabled
- * clocks found that require TCXO.
- *
- * reason: buffer to hold the bitmap; must be compatible with
- *         linux/bitmap.h
- * nbits: number of bits that the buffer can hold; 0 is ok
- *
- * Return value:
- *      0: does not require the TCXO clock
- *      1: requires the TCXO clock
- */
-int msm_clock_require_tcxo(unsigned long *reason, int nbits)
-{
-	unsigned long flags;
-	int ret;
-
-	spin_lock_irqsave(&clock_map_lock, flags);
-	ret = !bitmap_empty(clock_map_enabled, NR_CLKS);
-	if (nbits > 0)
-		bitmap_copy(reason, clock_map_enabled, min(nbits, NR_CLKS));
-	spin_unlock_irqrestore(&clock_map_lock, flags);
-
-	return ret;
-}
-
-/*
- * Find the clock matching the given id and copy its name to the
- * provided buffer.
- *
- * Return value:
- * -ENODEV: there is no clock matching the given id
- *       0: success
- */
-int msm_clock_get_name(uint32_t id, char *name, uint32_t size)
-{
-	struct clk *c_clk;
-	int ret = -ENODEV;
-
-	mutex_lock(&clocks_mutex);
-	list_for_each_entry(c_clk, &clocks, list) {
-		if (id == c_clk->id) {
-			strlcpy(name, c_clk->name, size);
-			ret = 0;
-			break;
-		}
 	}
-	mutex_unlock(&clocks_mutex);
-
-	return ret;
 }
 
-void __init msm_clock_init(struct clk *clock_tbl, unsigned num_clocks)
+
+void __init msm_clock_init(struct clk_lookup *clock_tbl, unsigned num_clocks)
 {
 	unsigned n;
+	struct clk *clk;
 
 	/* Do SoC-speficic clock init operations. */
 	msm_clk_soc_init();
 
-	spin_lock_init(&clocks_lock);
 	mutex_lock(&clocks_mutex);
-	msm_clocks = clock_tbl;
-	msm_num_clocks = num_clocks;
-	for (n = 0; n < msm_num_clocks; n++) {
-		msm_clk_soc_set_ops(&msm_clocks[n]);
-		list_add_tail(&msm_clocks[n].list, &clocks);
+	for (n = 0; n < num_clocks; n++) {
+		msm_clk_soc_set_ops(clock_tbl[n].clk);
+		clkdev_add(&clock_tbl[n]);
+		list_add_tail(&clock_tbl[n].clk->list, &clocks);
 	}
 	mutex_unlock(&clocks_mutex);
 
-	ebi1_clk = clk_get(NULL, "ebi1_clk");
-	BUG_ON(IS_ERR(ebi1_clk));
-	if (cpu_is_msm7x30() || cpu_is_msm8x55()) {
-		pbus_clk = clk_get(NULL, "pbus_clk");
-		BUG_ON(IS_ERR(pbus_clk));
+	for (n = 0; n < num_clocks; n++) {
+		clk = clock_tbl[n].clk;
+		if (clk->flags & CLKFLAG_VOTER) {
+			struct clk *agg_clk = clk_get(NULL, clk->aggregator);
+			BUG_ON(IS_ERR(agg_clk));
+
+			clk_set_parent(clk, agg_clk);
+		}
+	}
+
+	ebi1_clk = clk_get(NULL, "ebi1_pm_qos_clk");
+	if (!cpu_is_msm8x60()) {
+		BUG_ON(IS_ERR(ebi1_clk));
+		clk_enable(ebi1_clk);
 	}
 
 	axi_freq_notifier_block.notifier_call = axi_freq_notifier_handler;
@@ -312,24 +224,16 @@ void __init msm_clock_init(struct clk *clock_tbl, unsigned num_clocks)
  */
 static int __init clock_late_init(void)
 {
-	unsigned long flags;
 	struct clk *clk;
-	unsigned count = 0;
 
+	clock_debug_init(&clocks);
 	mutex_lock(&clocks_mutex);
 	list_for_each_entry(clk, &clocks, list) {
-		if (clk->flags & CLKFLAG_AUTO_OFF) {
-			spin_lock_irqsave(&clocks_lock, flags);
-			if (!clk->count) {
-				count++;
-				clk->ops->auto_off(clk->id);
-			}
-			spin_unlock_irqrestore(&clocks_lock, flags);
-		}
+		clock_debug_add(clk);
+		if (clk->flags & CLKFLAG_AUTO_OFF)
+			clk->ops->auto_off(clk->id);
 	}
 	mutex_unlock(&clocks_mutex);
-	pr_info("clock_late_init() disabled %d unused clocks\n", count);
 	return 0;
 }
-
 late_initcall(clock_late_init);

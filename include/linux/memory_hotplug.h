@@ -10,6 +10,9 @@ struct zone;
 struct pglist_data;
 struct mem_section;
 
+extern unsigned long movable_reserved_start, movable_reserved_size;
+extern unsigned long low_power_memory_start, low_power_memory_size;
+
 #ifdef CONFIG_MEMORY_HOTPLUG
 
 /*
@@ -69,7 +72,6 @@ extern void online_page(struct page *page);
 /* VM interface that may be used by firmware interface */
 extern int online_pages(unsigned long, unsigned long);
 extern void __offline_isolated_pages(unsigned long, unsigned long);
-extern int offline_pages(unsigned long, unsigned long, unsigned long);
 
 /* reasonably generic interface to expand the physical pages in a zone  */
 extern int __add_pages(int nid, struct zone *zone, unsigned long start_pfn,
@@ -203,6 +205,7 @@ static inline int is_mem_section_removable(unsigned long pfn,
 }
 #endif /* CONFIG_MEMORY_HOTREMOVE */
 
+extern int mem_online_node(int nid);
 extern int add_memory(int nid, u64 start, u64 size);
 extern int arch_add_memory(int nid, u64 start, u64 size);
 extern int remove_memory(u64 start, u64 size);
@@ -212,4 +215,14 @@ extern void sparse_remove_one_section(struct zone *zone, struct mem_section *ms)
 extern struct page *sparse_decode_mem_map(unsigned long coded_mem_map,
 					  unsigned long pnum);
 
+extern void reserve_hotplug_pages(unsigned long start_pfn,
+				unsigned long nr_pages);
+extern void unreserve_hotplug_pages(unsigned long start_pfn,
+				unsigned long nr_pages);
 #endif /* __LINUX_MEMORY_HOTPLUG_H */
+extern int physical_remove_memory(u64 start, u64 size);
+extern int arch_physical_remove_memory(u64 start, u64 size);
+extern int physical_low_power_memory(u64 start, u64 size);
+extern int arch_physical_low_power_memory(u64 start, u64 size);
+extern int physical_active_memory(u64 start, u64 size);
+extern int arch_physical_active_memory(u64 start, u64 size);

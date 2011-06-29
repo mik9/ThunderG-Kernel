@@ -35,7 +35,7 @@
 #include <mach/msm_otg.h>
 #include <mach/clk.h>
 #include <linux/wakelock.h>
-#include <linux/pm_qos_params.h>
+#include <linux/pm_runtime.h>
 
 #include <mach/msm72k_otg.h>
 
@@ -70,24 +70,18 @@ static inline struct usb_hcd *mhcd_to_hcd(struct msmusb_hcd *mhcd)
 
 static void msm_xusb_pm_qos_update(struct msmusb_hcd *mhcd, int vote)
 {
-	struct usb_hcd *hcd = mhcd_to_hcd(mhcd);
+	struct msm_usb_host_platform_data *pdata = mhcd->pdata;
 
-	if (PHY_TYPE(mhcd->pdata->phy_info) == USB_PHY_SERIAL_PMIC)
-		goto vote_for_axi;
-
-	if (!depends_on_axi_freq(mhcd->xceiv))
+	/* if otg driver is available, it would take
+	 * care of voting for appropriate pclk source
+	 */
+	if (mhcd->xceiv)
 		return;
 
-vote_for_axi:
-	if (vote) {
-		pm_qos_update_requirement(PM_QOS_SYSTEM_BUS_FREQ,
-				(char *)hcd->self.bus_name,
-				 MSM_AXI_MAX_FREQ);
-	} else {
-		pm_qos_update_requirement(PM_QOS_SYSTEM_BUS_FREQ,
-				(char *) hcd->self.bus_name,
-				PM_QOS_DEFAULT_VALUE);
-	}
+	if (vote)
+		clk_enable(pdata->ebi1_clk);
+	else
+		clk_disable(pdata->ebi1_clk);
 }
 
 static void msm_xusb_enable_clks(struct msmusb_hcd *mhcd)
@@ -271,12 +265,28 @@ static void usb_lpm_exit(struct usb_hcd *hcd)
 	spin_unlock_irqrestore(&mhcd->lock, flags);
 }
 
+static irqreturn_t ehci_msm_irq(struct usb_hcd *hcd)
+{
+	struct msmusb_hcd *mhcd = hcd_to_mhcd(hcd);
+	struct msm_otg *otg = container_of(mhcd->xceiv, struct msm_otg, otg);
+
+	/*
+	 * OTG scheduled a work to get Integrated PHY out of LPM,
+	 * WAIT till then */
+	if (PHY_TYPE(mhcd->pdata->phy_info) == USB_PHY_INTEGRATED)
+		if (atomic_read(&otg->in_lpm))
+			return IRQ_HANDLED;
+
+	return ehci_irq(hcd);
+}
+
 #ifdef CONFIG_PM
 
 static int ehci_msm_bus_suspend(struct usb_hcd *hcd)
 {
 	int ret;
 	struct msmusb_hcd *mhcd = hcd_to_mhcd(hcd);
+	struct device *dev = hcd->self.controller;
 
 	ret = ehci_bus_suspend(hcd);
 	if (ret) {
@@ -288,6 +298,8 @@ static int ehci_msm_bus_suspend(struct usb_hcd *hcd)
 	else
 		ret = usb_lpm_enter(hcd);
 
+	pm_runtime_put_noidle(dev);
+	pm_runtime_suspend(dev);
 	wake_unlock(&mhcd->wlock);
 	return ret;
 }
@@ -295,8 +307,11 @@ static int ehci_msm_bus_suspend(struct usb_hcd *hcd)
 static int ehci_msm_bus_resume(struct usb_hcd *hcd)
 {
 	struct msmusb_hcd *mhcd = hcd_to_mhcd(hcd);
+	struct device *dev = hcd->self.controller;
 
 	wake_lock(&mhcd->wlock);
+	pm_runtime_get_noresume(dev);
+	pm_runtime_resume(dev);
 
 	if (PHY_TYPE(mhcd->pdata->phy_info) == USB_PHY_INTEGRATED) {
 		otg_set_suspend(mhcd->xceiv, 0);
@@ -398,7 +413,7 @@ static struct hc_driver msm_hc_driver = {
 	/*
 	 * generic hardware linkage
 	 */
-	.irq 			= ehci_irq,
+	.irq 			= ehci_msm_irq,
 	.flags 			= HCD_USB2,
 
 	.reset 			= ehci_msm_reset,
@@ -437,14 +452,49 @@ static void msm_hsusb_request_host(void *handle, int request)
 	struct usb_hcd *hcd = mhcd_to_hcd(mhcd);
 	struct msm_usb_host_platform_data *pdata = mhcd->pdata;
 	struct msm_otg *otg = container_of(mhcd->xceiv, struct msm_otg, otg);
+	struct usb_device *udev = hcd->self.root_hub;
+	struct device *dev = hcd->self.controller;
 
 	switch (request) {
+#ifdef CONFIG_USB_OTG
+	case REQUEST_HNP_SUSPEND:
+		/* disable Root hub auto suspend. As hardware is configured
+		 * for peripheral mode, mark hardware is not available.
+		 */
+		if (PHY_TYPE(pdata->phy_info) == USB_PHY_INTEGRATED) {
+			pm_runtime_disable(&udev->dev);
+			/* Mark root hub as disconnected. This would
+			 * protect suspend/resume via sysfs.
+			 */
+			udev->state = USB_STATE_NOTATTACHED;
+			clear_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+			hcd->state = HC_STATE_HALT;
+			pm_runtime_put_noidle(dev);
+			pm_runtime_suspend(dev);
+		}
+		break;
+	case REQUEST_HNP_RESUME:
+		if (PHY_TYPE(pdata->phy_info) == USB_PHY_INTEGRATED) {
+			pm_runtime_get_noresume(dev);
+			pm_runtime_resume(dev);
+			disable_irq(hcd->irq);
+			ehci_msm_reset(hcd);
+			ehci_msm_run(hcd);
+			set_bit(HCD_FLAG_HW_ACCESSIBLE, &hcd->flags);
+			pm_runtime_enable(&udev->dev);
+			udev->state = USB_STATE_CONFIGURED;
+			enable_irq(hcd->irq);
+		}
+		break;
+#endif
 	case REQUEST_RESUME:
 		usb_hcd_resume_root_hub(hcd);
 		break;
 	case REQUEST_START:
 		if (mhcd->running)
 			break;
+		pm_runtime_get_noresume(dev);
+		pm_runtime_resume(dev);
 		wake_lock(&mhcd->wlock);
 		msm_xusb_pm_qos_update(mhcd, 1);
 		msm_xusb_enable_clks(mhcd);
@@ -479,10 +529,8 @@ static void msm_hsusb_request_host(void *handle, int request)
 		msm_xusb_disable_clks(mhcd);
 		wake_lock_timeout(&mhcd->wlock, HZ/2);
 		msm_xusb_pm_qos_update(mhcd, 0);
-		if (PHY_TYPE(pdata->phy_info) == USB_PHY_INTEGRATED) {
-			otg->reset(mhcd->xceiv);
-			otg_set_suspend(mhcd->xceiv, 1);
-		}
+		pm_runtime_put_noidle(dev);
+		pm_runtime_suspend(dev);
 		break;
 	}
 }
@@ -499,8 +547,12 @@ static void msm_hsusb_start_host(struct usb_bus *bus, int start)
 	struct usb_hcd *hcd = bus_to_hcd(bus);
 	struct msmusb_hcd *mhcd = hcd_to_mhcd(hcd);
 
-	mhcd->flags = start ? REQUEST_START : REQUEST_STOP;
-	schedule_work(&mhcd->otg_work);
+	mhcd->flags = start;
+	if (in_interrupt())
+		schedule_work(&mhcd->otg_work);
+	else
+		msm_hsusb_request_host((void *)mhcd, mhcd->flags);
+
 }
 
 static int msm_xusb_init_phy(struct msmusb_hcd *mhcd)
@@ -549,14 +601,26 @@ static int msm_xusb_rpc_close(struct msmusb_hcd *mhcd)
 	return retval;
 }
 
+#ifdef	CONFIG_USB_OTG
+static void ehci_msm_start_hnp(struct ehci_hcd *ehci)
+{
+	struct usb_hcd *hcd = ehci_to_hcd(ehci);
+	struct msmusb_hcd *mhcd = hcd_to_mhcd(hcd);
+
+	/* OTG driver handles HNP */
+	otg_start_hnp(mhcd->xceiv);
+}
+#else
+#define ehci_msm_start_hnp	NULL
+#endif
+
 static int msm_xusb_init_host(struct msmusb_hcd *mhcd)
 {
 	int ret = 0;
 	struct msm_otg *otg;
 	struct usb_hcd *hcd = mhcd_to_hcd(mhcd);
+	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 	struct msm_usb_host_platform_data *pdata = mhcd->pdata;
-	struct device *dev = container_of((void *)hcd, struct device,
-							platform_data);	
 
 	switch (PHY_TYPE(pdata->phy_info)) {
 	case USB_PHY_INTEGRATED:
@@ -576,6 +640,7 @@ static int msm_xusb_init_host(struct msmusb_hcd *mhcd)
 		otg = container_of(mhcd->xceiv, struct msm_otg, otg);
 		hcd->regs = otg->regs;
 		otg->start_host = msm_hsusb_start_host;
+		ehci->start_hnp = ehci_msm_start_hnp;
 
 		ret = otg_set_host(mhcd->xceiv, &hcd->self);
 		break;
@@ -585,13 +650,13 @@ static int msm_xusb_init_host(struct msmusb_hcd *mhcd)
 		if (!hcd->regs)
 			return -EFAULT;
 		/* get usb clocks */
-		mhcd->clk = clk_get(dev, "usb_hs2_clk");
+		mhcd->clk = clk_get(NULL, "usb_hs2_clk");
 		if (IS_ERR(mhcd->clk)) {
 			iounmap(hcd->regs);
 			return PTR_ERR(mhcd->clk);
 		}
 
-		mhcd->pclk = clk_get(dev, "usb_hs2_pclk");
+		mhcd->pclk = clk_get(NULL, "usb_hs2_pclk");
 		if (IS_ERR(mhcd->pclk)) {
 			iounmap(hcd->regs);
 			clk_put(mhcd->clk);
@@ -612,7 +677,7 @@ static int msm_xusb_init_host(struct msmusb_hcd *mhcd)
 	return ret;
 }
 
-static int __init ehci_msm_probe(struct platform_device *pdev)
+static int __devinit ehci_msm_probe(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd;
 	struct resource *res;
@@ -655,17 +720,21 @@ static int __init ehci_msm_probe(struct platform_device *pdev)
 	INIT_WORK(&mhcd->lpm_exit_work, usb_lpm_exit_w);
 
 	wake_lock_init(&mhcd->wlock, WAKE_LOCK_SUSPEND, dev_name(&pdev->dev));
-	pm_qos_add_requirement(PM_QOS_SYSTEM_BUS_FREQ, (char *)dev_name(&pdev->dev),
-					PM_QOS_DEFAULT_VALUE);
+	pdata->ebi1_clk = clk_get(NULL, "ebi1_usb_clk");
+	if (IS_ERR(pdata->ebi1_clk))
+		pdata->ebi1_clk = NULL;
+	else
+		clk_set_rate(pdata->ebi1_clk, INT_MAX);
 
 	retval = msm_xusb_init_host(mhcd);
 
 	if (retval < 0) {
 		usb_put_hcd(hcd);
 		wake_lock_destroy(&mhcd->wlock);
-		pm_qos_remove_requirement(PM_QOS_SYSTEM_BUS_FREQ,
-				(char *) dev_name(&pdev->dev));
+		clk_put(pdata->ebi1_clk);
 	}
+
+	pm_runtime_enable(&pdev->dev);
 
 	return retval;
 }
@@ -698,8 +767,10 @@ static int __exit ehci_msm_remove(struct platform_device *pdev)
 {
 	struct usb_hcd *hcd = platform_get_drvdata(pdev);
 	struct msmusb_hcd *mhcd = hcd_to_mhcd(hcd);
+	struct msm_usb_host_platform_data *pdata;
 	int retval = 0;
 
+	pdata = pdev->dev.platform_data;
 	device_init_wakeup(&pdev->dev, 0);
 
 	msm_hsusb_request_host((void *)mhcd, REQUEST_STOP);
@@ -708,13 +779,41 @@ static int __exit ehci_msm_remove(struct platform_device *pdev)
 	retval = msm_xusb_rpc_close(mhcd);
 
 	wake_lock_destroy(&mhcd->wlock);
-	pm_qos_remove_requirement(PM_QOS_SYSTEM_BUS_FREQ, (char *) dev_name(&pdev->dev));
+	clk_put(pdata->ebi1_clk);
+
+	pm_runtime_disable(&pdev->dev);
+	pm_runtime_set_suspended(&pdev->dev);
 
 	return retval;
 }
 
+static int ehci_msm_runtime_suspend(struct device *dev)
+{
+	dev_dbg(dev, "pm_runtime: suspending...\n");
+	return 0;
+}
+
+static int ehci_msm_runtime_resume(struct device *dev)
+{
+	dev_dbg(dev, "pm_runtime: resuming...\n");
+	return 0;
+}
+
+static int ehci_msm_runtime_idle(struct device *dev)
+{
+	dev_dbg(dev, "pm_runtime: idling...\n");
+	return 0;
+}
+
+static const struct dev_pm_ops ehci_msm_dev_pm_ops = {
+	.runtime_suspend = ehci_msm_runtime_suspend,
+	.runtime_resume = ehci_msm_runtime_resume,
+	.runtime_idle = ehci_msm_runtime_idle
+};
+
 static struct platform_driver ehci_msm_driver = {
 	.probe	= ehci_msm_probe,
 	.remove	= __exit_p(ehci_msm_remove),
-	.driver	= {.name = "msm_hsusb_host"},
+	.driver	= {.name = "msm_hsusb_host",
+		    .pm = &ehci_msm_dev_pm_ops, },
 };

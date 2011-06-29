@@ -62,6 +62,7 @@ static struct sms_board sms_boards[] = {
 	[SMS1XXX_BOARD_HAUPPAUGE_WINDHAM] = {
 		.name	= "Hauppauge WinTV MiniStick",
 		.type	= SMS_NOVA_B0,
+		.fw[DEVICE_MODE_ISDBT_BDA] = "sms1xxx-hcw-55xxx-isdbt-02.fw",
 		.fw[DEVICE_MODE_DVBT_BDA] = "sms1xxx-hcw-55xxx-dvbt-02.fw",
 		.board_cfg.leds_power = 26,
 		.board_cfg.led0 = 27,
@@ -97,7 +98,7 @@ static struct sms_board sms_boards[] = {
 	},
 };
 
-struct sms_board *sms_get_board(int id)
+struct sms_board *sms_get_board(unsigned id)
 {
 	BUG_ON(id >= ARRAY_SIZE(sms_boards));
 
@@ -294,6 +295,8 @@ int sms_board_load_modules(int id)
 	case SMS1XXX_BOARD_HAUPPAUGE_OKEMO_A:
 	case SMS1XXX_BOARD_HAUPPAUGE_OKEMO_B:
 	case SMS1XXX_BOARD_HAUPPAUGE_WINDHAM:
+	case SMS1XXX_BOARD_HAUPPAUGE_TIGER_MINICARD:
+	case SMS1XXX_BOARD_HAUPPAUGE_TIGER_MINICARD_R2:
 		request_module("smsdvb");
 		break;
 	default:

@@ -23,7 +23,7 @@
  */
 #define NR_UNIX98_PTY_DEFAULT	4096      /* Default maximum for Unix98 ptys */
 #define NR_UNIX98_PTY_MAX	(1 << MINORBITS) /* Absolute limit */
-#define NR_LDISCS		20
+#define NR_LDISCS		30
 
 /* line disciplines */
 #define N_TTY		0
@@ -46,8 +46,9 @@
 #define N_GIGASET_M101	16	/* Siemens Gigaset M101 serial DECT adapter */
 #define N_SLCAN		17	/* Serial / USB serial CAN Adaptors */
 #define N_PPS		18	/* Pulse per Second */
-
 #define N_V253		19	/* Codec control over voice modem */
+#define N_CAIF		20      /* CAIF protocol for talking to modems */
+#define N_GSM0710	21	/* GSM 0710 Mux */
 
 /*
  * This character is the same as _POSIX_VDISABLE: it cannot be used as
@@ -201,9 +202,17 @@ struct tty_port_operations {
 	/* Control the DTR line */
 	void (*dtr_rts)(struct tty_port *port, int raise);
 	/* Called when the last close completes or a hangup finishes
-	   IFF the port was initialized. Do not use to free resources */
+	   IFF the port was initialized. Do not use to free resources. Called
+	   under the port mutex to serialize against activate/shutdowns */
 	void (*shutdown)(struct tty_port *port);
 	void (*drop)(struct tty_port *port);
+	/* Called under the port mutex from tty_port_open, serialized using
+	   the port mutex */
+        /* FIXME: long term getting the tty argument *out* of this would be
+           good for consoles */
+	int (*activate)(struct tty_port *port, struct tty_struct *tty);
+	/* Called on the final put of a port */
+	void (*destruct)(struct tty_port *port);
 };
 	
 struct tty_port {
@@ -216,13 +225,16 @@ struct tty_port {
 	wait_queue_head_t	close_wait;	/* Close waiters */
 	wait_queue_head_t	delta_msr_wait;	/* Modem status change */
 	unsigned long		flags;		/* TTY flags ASY_*/
+	unsigned char		console:1;	/* port is a console */
 	struct mutex		mutex;		/* Locking */
+	struct mutex		buf_mutex;	/* Buffer alloc lock */
 	unsigned char		*xmit_buf;	/* Optional buffer */
 	unsigned int		close_delay;	/* Close port delay */
 	unsigned int		closing_wait;	/* Delay for output */
 	int			drain_delay;	/* Set to zero if no pure time
 						   based drain is needed else
 						   set to size of fifo */
+	struct kref		kref;		/* Ref counter */
 };
 
 /*
@@ -351,8 +363,6 @@ extern void tty_write_flush(struct tty_struct *);
 
 extern struct ktermios tty_std_termios;
 
-extern int kmsg_redirect;
-
 extern void console_init(void);
 extern int vcs_init(void);
 
@@ -450,7 +460,7 @@ extern void initialize_tty_struct(struct tty_struct *tty,
 		struct tty_driver *driver, int idx);
 extern struct tty_struct *tty_init_dev(struct tty_driver *driver, int idx,
 								int first_ok);
-extern void tty_release_dev(struct file *filp);
+extern int tty_release(struct inode *inode, struct file *filp);
 extern int tty_init_termios(struct tty_struct *tty);
 
 extern struct tty_struct *tty_pair_get_tty(struct tty_struct *tty);
@@ -465,6 +475,15 @@ extern int tty_write_lock(struct tty_struct *tty, int ndelay);
 extern void tty_port_init(struct tty_port *port);
 extern int tty_port_alloc_xmit_buf(struct tty_port *port);
 extern void tty_port_free_xmit_buf(struct tty_port *port);
+extern void tty_port_put(struct tty_port *port);
+
+static inline struct tty_port *tty_port_get(struct tty_port *port)
+{
+	if (port)
+		kref_get(&port->kref);
+	return port;
+}
+
 extern struct tty_struct *tty_port_tty_get(struct tty_port *port);
 extern void tty_port_tty_set(struct tty_port *port, struct tty_struct *tty);
 extern int tty_port_carrier_raised(struct tty_port *port);
@@ -478,7 +497,9 @@ extern int tty_port_close_start(struct tty_port *port,
 extern void tty_port_close_end(struct tty_port *port, struct tty_struct *tty);
 extern void tty_port_close(struct tty_port *port,
 				struct tty_struct *tty, struct file *filp);
-extern inline int tty_port_users(struct tty_port *port)
+extern int tty_port_open(struct tty_port *port,
+				struct tty_struct *tty, struct file *filp);
+static inline int tty_port_users(struct tty_port *port)
 {
 	return port->count + port->blocked_open;
 }
@@ -496,6 +517,7 @@ extern void tty_ldisc_enable(struct tty_struct *tty);
 
 /* n_tty.c */
 extern struct tty_ldisc_ops tty_ldisc_N_TTY;
+extern void n_tty_inherit_ops(struct tty_ldisc_ops *ops);
 
 /* tty_audit.c */
 #ifdef CONFIG_AUDIT
@@ -529,6 +551,9 @@ static inline void tty_audit_push_task(struct task_struct *tsk,
 {
 }
 #endif
+
+/* tty_io.c */
+extern int __init tty_init(void);
 
 /* tty_ioctl.c */
 extern int n_tty_ioctl_helper(struct tty_struct *tty, struct file *file,

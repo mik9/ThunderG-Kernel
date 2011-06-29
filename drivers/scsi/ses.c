@@ -21,6 +21,7 @@
 **-----------------------------------------------------------------------------
 */
 
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/enclosure.h>
@@ -389,9 +390,9 @@ static void ses_enclosure_data_process(struct enclosure_device *edev,
 		len = (desc_ptr[2] << 8) + desc_ptr[3];
 		/* skip past overall descriptor */
 		desc_ptr += len + 4;
+		if (ses_dev->page10)
+			addl_desc_ptr = ses_dev->page10 + 8;
 	}
-	if (ses_dev->page10)
-		addl_desc_ptr = ses_dev->page10 + 8;
 	type_ptr = ses_dev->page1 + 12 + ses_dev->page1[11];
 	components = 0;
 	for (i = 0; i < types; i++, type_ptr += 4) {
@@ -448,13 +449,17 @@ static void ses_match_to_enclosure(struct enclosure_device *edev,
 		.addr = 0,
 	};
 
-	buf = scsi_get_vpd_page(sdev, 0x83);
-	if (!buf)
-		return;
+	buf = kmalloc(INIT_ALLOC_SIZE, GFP_KERNEL);
+	if (!buf || scsi_get_vpd_page(sdev, 0x83, buf, INIT_ALLOC_SIZE))
+		goto free;
 
 	ses_enclosure_data_process(edev, to_scsi_device(edev->edev.parent), 0);
 
 	vpd_len = ((buf[2] << 8) | buf[3]) + 4;
+	kfree(buf);
+	buf = kmalloc(vpd_len, GFP_KERNEL);
+	if (!buf ||scsi_get_vpd_page(sdev, 0x83, buf, vpd_len))
+		goto free;
 
 	desc = buf + 4;
 	while (desc < buf + vpd_len) {

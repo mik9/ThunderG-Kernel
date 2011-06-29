@@ -23,13 +23,38 @@
 
 static struct msm_gemini_hw_pingpong fe_pingpong_buf;
 static struct msm_gemini_hw_pingpong we_pingpong_buf;
+static int we_pingpong_index;
+static int reset_done_ack;
+static spinlock_t reset_lock;
+static wait_queue_head_t reset_wait;
 
 int msm_gemini_core_reset(uint8_t op_mode, void *base, int size)
 {
+	unsigned long flags;
+	int rc = 0;
+	int tm = 500; /*500ms*/
 	memset(&fe_pingpong_buf, 0, sizeof(fe_pingpong_buf));
 	fe_pingpong_buf.is_fe = 1;
+	we_pingpong_index = 0;
 	memset(&we_pingpong_buf, 0, sizeof(we_pingpong_buf));
+	spin_lock_irqsave(&reset_lock, flags);
+	reset_done_ack = 0;
 	msm_gemini_hw_reset(base, size);
+	spin_unlock_irqrestore(&reset_lock, flags);
+	rc = wait_event_interruptible_timeout(
+			reset_wait,
+			reset_done_ack,
+			msecs_to_jiffies(tm));
+
+	if (!reset_done_ack) {
+		GMN_DBG("%s: reset ACK failed %d", __func__, rc);
+		return -EBUSY;
+	}
+
+	GMN_DBG("%s: reset_done_ack rc %d", __func__, rc);
+	spin_lock_irqsave(&reset_lock, flags);
+	reset_done_ack = 0;
+	spin_unlock_irqrestore(&reset_lock, flags);
 
 	if (op_mode == MSM_GEMINI_MODE_REALTIME_ENCODE) {
 		/* Nothing needed for fe buffer cfg, config we only */
@@ -42,6 +67,22 @@ int msm_gemini_core_reset(uint8_t op_mode, void *base, int size)
 	/* @todo wait for reset done irq */
 
 	return 0;
+}
+
+void msm_gemini_core_release(void)
+{
+	int i = 0;
+	for (i = 0; i < 2; i++) {
+		if (we_pingpong_buf.buf_status[i]) {
+			msm_gemini_platform_p2v(we_pingpong_buf.buf[i].file);
+		}
+	}
+}
+
+void msm_gemini_core_init(void)
+{
+	init_waitqueue_head(&reset_wait);
+	spin_lock_init(&reset_lock);
 }
 
 int msm_gemini_core_fe_start(void)
@@ -71,6 +112,8 @@ int msm_gemini_core_we_buf_update(struct msm_gemini_core_buf *buf)
 	GMN_DBG("%s:%d] 0x%08x 0x%08x %d\n", __func__, __LINE__,
 		(int) buf->y_buffer_addr, (int) buf->cbcr_buffer_addr,
 		buf->y_len);
+	we_pingpong_buf.buf_status[we_pingpong_index] = 0;
+	we_pingpong_index = (we_pingpong_index + 1)%2;
 	rc = msm_gemini_hw_pingpong_update(&we_pingpong_buf, buf);
 	return 0;
 }
@@ -114,17 +157,31 @@ static int (*msm_gemini_irq_handler) (int, void *, void *);
 irqreturn_t msm_gemini_core_irq(int irq_num, void *context)
 {
 	void *data = NULL;
-
+	unsigned long flags;
 	int gemini_irq_status;
 
 	GMN_DBG("%s:%d] irq_num = %d\n", __func__, __LINE__, irq_num);
 
+	spin_lock_irqsave(&reset_lock, flags);
+	reset_done_ack = 1;
+	spin_unlock_irqrestore(&reset_lock, flags);
 	gemini_irq_status = msm_gemini_hw_irq_get_status();
 
 	GMN_DBG("%s:%d] gemini_irq_status = %0x\n", __func__, __LINE__,
 		gemini_irq_status);
 
-	msm_gemini_hw_irq_clear();
+	/*For reset and framedone IRQs, clear all bits*/
+	if (gemini_irq_status & 0x400) {
+		wake_up(&reset_wait);
+		msm_gemini_hw_irq_clear(HWIO_JPEG_IRQ_CLEAR_RMSK,
+			JPEG_IRQ_CLEAR_ALL);
+	} else if (gemini_irq_status & 0x1) {
+		msm_gemini_hw_irq_clear(HWIO_JPEG_IRQ_CLEAR_RMSK,
+			JPEG_IRQ_CLEAR_ALL);
+	} else {
+		msm_gemini_hw_irq_clear(HWIO_JPEG_IRQ_CLEAR_RMSK,
+			gemini_irq_status);
+	}
 
 	if (msm_gemini_hw_irq_is_frame_done(gemini_irq_status)) {
 		data = msm_gemini_core_framedone_irq(gemini_irq_status,

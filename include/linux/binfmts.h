@@ -73,6 +73,15 @@ extern struct page *get_arg_page(struct linux_binprm *bprm, unsigned long pos,
 
 #define BINPRM_MAX_RECURSION 4
 
+/* Function parameter for binfmt->coredump */
+struct coredump_params {
+	long signr;
+	struct pt_regs *regs;
+	struct file *file;
+	unsigned long limit;
+	unsigned long mm_flags;
+};
+
 /*
  * This structure defines the functions that are used to load the binary formats that
  * linux accepts.
@@ -82,7 +91,7 @@ struct linux_binfmt {
 	struct module *module;
 	int (*load_binary)(struct linux_binprm *, struct  pt_regs * regs);
 	int (*load_shlib)(struct file *);
-	int (*core_dump)(long signr, struct pt_regs *regs, struct file *file, unsigned long limit);
+	int (*core_dump)(struct coredump_params *cprm);
 	unsigned long min_coredump;	/* minimal dump size */
 	int hasvdso;
 };

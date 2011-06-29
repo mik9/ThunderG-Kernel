@@ -36,6 +36,7 @@
 #include <linux/rfkill.h>
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
+#include <linux/slab.h>
 
 #include <acpi/acpi_drivers.h>
 
@@ -90,14 +91,11 @@ struct acer_quirks {
  */
 #define AMW0_GUID1		"67C3371D-95A3-4C37-BB61-DD47B491DAAB"
 #define AMW0_GUID2		"431F16ED-0C2B-444C-B267-27DEB140CF9C"
-#define WMID_GUID1		"6AF4F258-B401-42FD-BE91-3D4AC2D7C0D3"
+#define WMID_GUID1		"6AF4F258-B401-42fd-BE91-3D4AC2D7C0D3"
 #define WMID_GUID2		"95764E09-FB56-4e83-B31A-37761F60994A"
 
 MODULE_ALIAS("wmi:67C3371D-95A3-4C37-BB61-DD47B491DAAB");
 MODULE_ALIAS("wmi:6AF4F258-B401-42fd-BE91-3D4AC2D7C0D3");
-
-/* Temporary workaround until the WMI sysfs interface goes in */
-MODULE_ALIAS("dmi:*:*Acer*:*:");
 
 /*
  * Interface capability flags
@@ -925,9 +923,13 @@ static struct backlight_ops acer_bl_ops = {
 
 static int __devinit acer_backlight_init(struct device *dev)
 {
+	struct backlight_properties props;
 	struct backlight_device *bd;
 
-	bd = backlight_device_register("acer-wmi", dev, NULL, &acer_bl_ops);
+	memset(&props, 0, sizeof(struct backlight_properties));
+	props.max_brightness = max_brightness;
+	bd = backlight_device_register("acer-wmi", dev, NULL, &acer_bl_ops,
+				       &props);
 	if (IS_ERR(bd)) {
 		printk(ACER_ERR "Could not register Acer backlight device\n");
 		acer_backlight_device = NULL;
@@ -937,8 +939,7 @@ static int __devinit acer_backlight_init(struct device *dev)
 	acer_backlight_device = bd;
 
 	bd->props.power = FB_BLANK_UNBLANK;
-	bd->props.brightness = max_brightness;
-	bd->props.max_brightness = max_brightness;
+	bd->props.brightness = read_brightness(bd);
 	backlight_update_status(bd);
 	return 0;
 }
@@ -1065,7 +1066,7 @@ static ssize_t set_bool_threeg(struct device *dev,
 			return -EINVAL;
 	return count;
 }
-static DEVICE_ATTR(threeg, S_IRUGO | S_IWUSR, show_bool_threeg,
+static DEVICE_ATTR(threeg, S_IWUGO | S_IRUGO | S_IWUSR, show_bool_threeg,
 	set_bool_threeg);
 
 static ssize_t show_interface(struct device *dev, struct device_attribute *attr,

@@ -26,6 +26,7 @@
 #include <linux/pwm.h>
 #include <linux/mfd/pmic8058.h>
 #include <linux/pmic8058-pwm.h>
+#include <linux/slab.h>
 
 #define	PM8058_LPG_BANKS		8
 #define	PM8058_PWM_CHANNELS		PM8058_LPG_BANKS	/* MAX=8 */
@@ -373,7 +374,7 @@ static int pm8058_pwm_configure(struct pwm_device *pwm,
 			 struct pw8058_pwm_config *pwm_conf)
 {
 	int	i, rc, len;
-	u8	reg;
+	u8	reg, ramp_enabled = 0;
 
 	reg = (pwm_conf->pwm_size > 6) ? PM8058_PWM_SIZE_9_BIT : 0;
 	pwm->pwm_ctl[5] = reg;
@@ -386,7 +387,7 @@ static int pm8058_pwm_configure(struct pwm_device *pwm,
 	pwm->pwm_ctl[4] = reg;
 
 	if (pwm_conf->bypass_lut) {
-		pwm->pwm_ctl[0] = 0;
+		pwm->pwm_ctl[0] &= PM8058_PWM_PWM_START; /* keep enabled */
 		pwm->pwm_ctl[1] = PM8058_PWM_BYPASS_LUT;
 		pwm->pwm_ctl[2] = 0;
 
@@ -409,7 +410,10 @@ static int pm8058_pwm_configure(struct pwm_device *pwm,
 			if (duty_msec[i] >= pwm_conf->lut_duty_ms)
 				break;
 		}
-		pwm->pwm_ctl[0] = (i << PM8058_PWM_1KHZ_COUNT_SHIFT) &
+
+		ramp_enabled = pwm->pwm_ctl[0] & PM8058_PWM_RAMP_GEN_START;
+		pwm->pwm_ctl[0] &= PM8058_PWM_PWM_START; /* keep enabled */
+		pwm->pwm_ctl[0] |= (i << PM8058_PWM_1KHZ_COUNT_SHIFT) &
 					PM8058_PWM_1KHZ_COUNT_MASK;
 		pwm->pwm_ctl[1] = pwm_conf->lut_hi_index &
 					PM8058_PWM_HIGH_INDEX_MASK;
@@ -468,6 +472,12 @@ static int pm8058_pwm_configure(struct pwm_device *pwm,
 			       __func__, rc, i);
 			break;
 		}
+	}
+
+	if (ramp_enabled) {
+		pwm->pwm_ctl[0] |= ramp_enabled;
+		pm8058_write(pwm->chip->pm_chip, SSBI_REG_ADDR_LPG_CTL(0),
+			     &pwm->pwm_ctl[0], 1);
 	}
 
 	return rc;
@@ -757,7 +767,10 @@ EXPORT_SYMBOL(pm8058_pwm_lut_enable);
 #define SSBI_REG_ADDR_LED_BASE		0x131
 #define SSBI_REG_ADDR_LED(n)		(SSBI_REG_ADDR_LED_BASE + (n))
 #define SSBI_REG_ADDR_FLASH_BASE	0x48
-#define SSBI_REG_ADDR_FLASH(n)		(SSBI_REG_ADDR_FLASH_BASE + (n))
+#define SSBI_REG_ADDR_FLASH_DRV_1	0xFB
+#define SSBI_REG_ADDR_FLASH(n)		(((n) < 2 ? \
+					    SSBI_REG_ADDR_FLASH_BASE + (n) : \
+					    SSBI_REG_ADDR_FLASH_DRV_1))
 
 #define PM8058_LED_CURRENT_SHIFT	3
 #define PM8058_LED_MODE_MASK		0x07
@@ -787,6 +800,7 @@ int pm8058_pwm_config_led(struct pwm_device *pwm, int id,
 
 	case PM_PWM_LED_KPD:
 	case PM_PWM_LED_FLASH:
+	case PM_PWM_LED_FLASH1:
 		switch (mode) {
 		case PM_PWM_CONF_PWM1:
 		case PM_PWM_CONF_PWM2:

@@ -35,6 +35,7 @@
  * better performance by compiling with -msoft-float!
  */
 #include <linux/sched.h>
+#include <linux/module.h>
 #include <linux/debugfs.h>
 
 #include <asm/inst.h>
@@ -68,7 +69,9 @@ static int fpux_emu(struct pt_regs *,
 
 /* Further private data for which no space exists in mips_fpu_struct */
 
-struct mips_fpu_emulator_stats fpuemustats;
+#ifdef CONFIG_DEBUG_FS
+DEFINE_PER_CPU(struct mips_fpu_emulator_stats, fpuemustats);
+#endif
 
 /* Control registers */
 
@@ -212,7 +215,7 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 	unsigned int cond;
 
 	if (get_user(ir, (mips_instruction __user *) xcp->cp0_epc)) {
-		fpuemustats.errors++;
+		MIPS_FPU_EMU_INC_STATS(errors);
 		return SIGBUS;
 	}
 
@@ -243,7 +246,7 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 			return SIGILL;
 		}
 		if (get_user(ir, (mips_instruction __user *) emulpc)) {
-			fpuemustats.errors++;
+			MIPS_FPU_EMU_INC_STATS(errors);
 			return SIGBUS;
 		}
 		/* __compute_return_epc() will have updated cp0_epc */
@@ -256,16 +259,16 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 	}
 
       emul:
-	fpuemustats.emulated++;
+	MIPS_FPU_EMU_INC_STATS(emulated);
 	switch (MIPSInst_OPCODE(ir)) {
 	case ldc1_op:{
 		u64 __user *va = (u64 __user *) (xcp->regs[MIPSInst_RS(ir)] +
 			MIPSInst_SIMM(ir));
 		u64 val;
 
-		fpuemustats.loads++;
+		MIPS_FPU_EMU_INC_STATS(loads);
 		if (get_user(val, va)) {
-			fpuemustats.errors++;
+			MIPS_FPU_EMU_INC_STATS(errors);
 			return SIGBUS;
 		}
 		DITOREG(val, MIPSInst_RT(ir));
@@ -277,10 +280,10 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 			MIPSInst_SIMM(ir));
 		u64 val;
 
-		fpuemustats.stores++;
+		MIPS_FPU_EMU_INC_STATS(stores);
 		DIFROMREG(val, MIPSInst_RT(ir));
 		if (put_user(val, va)) {
-			fpuemustats.errors++;
+			MIPS_FPU_EMU_INC_STATS(errors);
 			return SIGBUS;
 		}
 		break;
@@ -291,9 +294,9 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 			MIPSInst_SIMM(ir));
 		u32 val;
 
-		fpuemustats.loads++;
+		MIPS_FPU_EMU_INC_STATS(loads);
 		if (get_user(val, va)) {
-			fpuemustats.errors++;
+			MIPS_FPU_EMU_INC_STATS(errors);
 			return SIGBUS;
 		}
 		SITOREG(val, MIPSInst_RT(ir));
@@ -305,10 +308,10 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 			MIPSInst_SIMM(ir));
 		u32 val;
 
-		fpuemustats.stores++;
+		MIPS_FPU_EMU_INC_STATS(stores);
 		SIFROMREG(val, MIPSInst_RT(ir));
 		if (put_user(val, va)) {
-			fpuemustats.errors++;
+			MIPS_FPU_EMU_INC_STATS(errors);
 			return SIGBUS;
 		}
 		break;
@@ -351,7 +354,8 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 
 			if (MIPSInst_RD(ir) == FPCREG_CSR) {
 				value = ctx->fcr31;
-				value = (value & ~0x3) | mips_rm[value & 0x3];
+				value = (value & ~FPU_CSR_RM) |
+					mips_rm[modeindex(value)];
 #ifdef CSRTRACE
 				printk("%p gpr[%d]<-csr=%08x\n",
 					(void *) (xcp->cp0_epc),
@@ -436,7 +440,7 @@ static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx)
 
 				if (get_user(ir,
 				    (mips_instruction __user *) xcp->cp0_epc)) {
-					fpuemustats.errors++;
+					MIPS_FPU_EMU_INC_STATS(errors);
 					return SIGBUS;
 				}
 
@@ -602,7 +606,7 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 {
 	unsigned rcsr = 0;	/* resulting csr */
 
-	fpuemustats.cp1xops++;
+	MIPS_FPU_EMU_INC_STATS(cp1xops);
 
 	switch (MIPSInst_FMA_FFMT(ir)) {
 	case s_fmt:{		/* 0 */
@@ -617,9 +621,9 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			va = (void __user *) (xcp->regs[MIPSInst_FR(ir)] +
 				xcp->regs[MIPSInst_FT(ir)]);
 
-			fpuemustats.loads++;
+			MIPS_FPU_EMU_INC_STATS(loads);
 			if (get_user(val, va)) {
-				fpuemustats.errors++;
+				MIPS_FPU_EMU_INC_STATS(errors);
 				return SIGBUS;
 			}
 			SITOREG(val, MIPSInst_FD(ir));
@@ -629,11 +633,11 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			va = (void __user *) (xcp->regs[MIPSInst_FR(ir)] +
 				xcp->regs[MIPSInst_FT(ir)]);
 
-			fpuemustats.stores++;
+			MIPS_FPU_EMU_INC_STATS(stores);
 
 			SIFROMREG(val, MIPSInst_FS(ir));
 			if (put_user(val, va)) {
-				fpuemustats.errors++;
+				MIPS_FPU_EMU_INC_STATS(errors);
 				return SIGBUS;
 			}
 			break;
@@ -694,9 +698,9 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			va = (void __user *) (xcp->regs[MIPSInst_FR(ir)] +
 				xcp->regs[MIPSInst_FT(ir)]);
 
-			fpuemustats.loads++;
+			MIPS_FPU_EMU_INC_STATS(loads);
 			if (get_user(val, va)) {
-				fpuemustats.errors++;
+				MIPS_FPU_EMU_INC_STATS(errors);
 				return SIGBUS;
 			}
 			DITOREG(val, MIPSInst_FD(ir));
@@ -706,10 +710,10 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			va = (void __user *) (xcp->regs[MIPSInst_FR(ir)] +
 				xcp->regs[MIPSInst_FT(ir)]);
 
-			fpuemustats.stores++;
+			MIPS_FPU_EMU_INC_STATS(stores);
 			DIFROMREG(val, MIPSInst_FS(ir));
 			if (put_user(val, va)) {
-				fpuemustats.errors++;
+				MIPS_FPU_EMU_INC_STATS(errors);
 				return SIGBUS;
 			}
 			break;
@@ -776,7 +780,7 @@ static int fpu_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 #endif
 	} rv;			/* resulting value */
 
-	fpuemustats.cp1ops++;
+	MIPS_FPU_EMU_INC_STATS(cp1ops);
 	switch (rfmt = (MIPSInst_FFMT(ir) & 0xf)) {
 	case s_fmt:{		/* 0 */
 		union {
@@ -904,7 +908,7 @@ static int fpu_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			ieee754sp fs;
 
 			SPFROMREG(fs, MIPSInst_FS(ir));
-			ieee754_csr.rm = ieee_rm[MIPSInst_FUNC(ir) & 0x3];
+			ieee754_csr.rm = ieee_rm[modeindex(MIPSInst_FUNC(ir))];
 			rv.w = ieee754sp_tint(fs);
 			ieee754_csr.rm = oldrm;
 			rfmt = w_fmt;
@@ -930,7 +934,7 @@ static int fpu_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			ieee754sp fs;
 
 			SPFROMREG(fs, MIPSInst_FS(ir));
-			ieee754_csr.rm = ieee_rm[MIPSInst_FUNC(ir) & 0x3];
+			ieee754_csr.rm = ieee_rm[modeindex(MIPSInst_FUNC(ir))];
 			rv.l = ieee754sp_tlong(fs);
 			ieee754_csr.rm = oldrm;
 			rfmt = l_fmt;
@@ -1078,7 +1082,7 @@ static int fpu_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			ieee754dp fs;
 
 			DPFROMREG(fs, MIPSInst_FS(ir));
-			ieee754_csr.rm = ieee_rm[MIPSInst_FUNC(ir) & 0x3];
+			ieee754_csr.rm = ieee_rm[modeindex(MIPSInst_FUNC(ir))];
 			rv.w = ieee754dp_tint(fs);
 			ieee754_csr.rm = oldrm;
 			rfmt = w_fmt;
@@ -1104,7 +1108,7 @@ static int fpu_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			ieee754dp fs;
 
 			DPFROMREG(fs, MIPSInst_FS(ir));
-			ieee754_csr.rm = ieee_rm[MIPSInst_FUNC(ir) & 0x3];
+			ieee754_csr.rm = ieee_rm[modeindex(MIPSInst_FUNC(ir))];
 			rv.l = ieee754dp_tlong(fs);
 			ieee754_csr.rm = oldrm;
 			rfmt = l_fmt;
@@ -1247,7 +1251,7 @@ int fpu_emulator_cop1Handler(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 		prevepc = xcp->cp0_epc;
 
 		if (get_user(insn, (mips_instruction __user *) xcp->cp0_epc)) {
-			fpuemustats.errors++;
+			MIPS_FPU_EMU_INC_STATS(errors);
 			return SIGBUS;
 		}
 		if (insn == 0)
@@ -1283,33 +1287,50 @@ int fpu_emulator_cop1Handler(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 }
 
 #ifdef CONFIG_DEBUG_FS
+
+static int fpuemu_stat_get(void *data, u64 *val)
+{
+	int cpu;
+	unsigned long sum = 0;
+	for_each_online_cpu(cpu) {
+		struct mips_fpu_emulator_stats *ps;
+		local_t *pv;
+		ps = &per_cpu(fpuemustats, cpu);
+		pv = (void *)ps + (unsigned long)data;
+		sum += local_read(pv);
+	}
+	*val = sum;
+	return 0;
+}
+DEFINE_SIMPLE_ATTRIBUTE(fops_fpuemu_stat, fpuemu_stat_get, NULL, "%llu\n");
+
 extern struct dentry *mips_debugfs_dir;
 static int __init debugfs_fpuemu(void)
 {
 	struct dentry *d, *dir;
-	int i;
-	static struct {
-		const char *name;
-		unsigned int *v;
-	} vars[] __initdata = {
-		{ "emulated", &fpuemustats.emulated },
-		{ "loads",    &fpuemustats.loads },
-		{ "stores",   &fpuemustats.stores },
-		{ "cp1ops",   &fpuemustats.cp1ops },
-		{ "cp1xops",  &fpuemustats.cp1xops },
-		{ "errors",   &fpuemustats.errors },
-	};
 
 	if (!mips_debugfs_dir)
 		return -ENODEV;
 	dir = debugfs_create_dir("fpuemustats", mips_debugfs_dir);
 	if (!dir)
 		return -ENOMEM;
-	for (i = 0; i < ARRAY_SIZE(vars); i++) {
-		d = debugfs_create_u32(vars[i].name, S_IRUGO, dir, vars[i].v);
-		if (!d)
-			return -ENOMEM;
-	}
+
+#define FPU_STAT_CREATE(M)						\
+	do {								\
+		d = debugfs_create_file(#M , S_IRUGO, dir,		\
+			(void *)offsetof(struct mips_fpu_emulator_stats, M), \
+			&fops_fpuemu_stat);				\
+		if (!d)							\
+			return -ENOMEM;					\
+	} while (0)
+
+	FPU_STAT_CREATE(emulated);
+	FPU_STAT_CREATE(loads);
+	FPU_STAT_CREATE(stores);
+	FPU_STAT_CREATE(cp1ops);
+	FPU_STAT_CREATE(cp1xops);
+	FPU_STAT_CREATE(errors);
+
 	return 0;
 }
 __initcall(debugfs_fpuemu);

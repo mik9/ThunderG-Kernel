@@ -36,10 +36,8 @@ static void read_framebuffer(byte* pBuf)
 
   phMscd_Filp = filp_open("/dev/graphics/fb0", O_RDONLY |O_LARGEFILE, 0);
 
-  if( !phMscd_Filp) {
+  if( !phMscd_Filp)
 		printk("open fail screen capture \n" );
-		return;
-  	}
 
   phMscd_Filp->f_op->read(phMscd_Filp, pBuf, LCD_BUFFER_SIZE, &phMscd_Filp->f_pos);
   filp_close(phMscd_Filp,NULL);
@@ -88,10 +86,6 @@ PACK (void *)LGF_ScreenShot (
         case SEQ_START:
           rsp_len = sizeof(diag_lcd_get_buf_req_type);
           rsp_ptr = (diag_screen_shot_type *)diagpkt_alloc(DIAG_LGF_SCREEN_SHOT_F, rsp_len - SCREEN_SHOT_PACK_LEN);
-
-		  if (!rsp_ptr)
-		  	return 0;
-		  	
           rsp_ptr->lcd_buf.seq_flow = SEQ_START;
           //printk(KERN_ERR "[screen shot] start\n");
 

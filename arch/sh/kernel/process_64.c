@@ -21,6 +21,7 @@
 #include <linux/fs.h>
 #include <linux/ptrace.h>
 #include <linux/reboot.h>
+#include <linux/slab.h>
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/io.h>
@@ -32,30 +33,7 @@
 
 struct task_struct *last_task_used_math = NULL;
 
-void machine_restart(char * __unused)
-{
-	extern void phys_stext(void);
-
-	phys_stext();
-}
-
-void machine_halt(void)
-{
-	for (;;);
-}
-
-void machine_power_off(void)
-{
-	__asm__ __volatile__ (
-		"sleep\n\t"
-		"synci\n\t"
-		"nop;nop;nop;nop\n\t"
-	);
-
-	panic("Unexpected wakeup!\n");
-}
-
-void show_regs(struct pt_regs * regs)
+void show_regs(struct pt_regs *regs)
 {
 	unsigned long long ah, al, bh, bl, ch, cl;
 
@@ -335,6 +313,7 @@ int kernel_thread(int (*fn)(void *), void * arg, unsigned long flags)
 	return do_fork(flags | CLONE_VM | CLONE_UNTRACED, 0,
 		      &regs, 0, NULL, NULL);
 }
+EXPORT_SYMBOL(kernel_thread);
 
 /*
  * Free current thread data structures etc..
@@ -403,13 +382,13 @@ int dump_fpu(struct pt_regs *regs, elf_fpregset_t *fpu)
 	if (fpvalid) {
 		if (current == last_task_used_math) {
 			enable_fpu();
-			save_fpu(tsk, regs);
+			save_fpu(tsk);
 			disable_fpu();
 			last_task_used_math = 0;
 			regs->sr |= SR_FD;
 		}
 
-		memcpy(fpu, &tsk->thread.fpu.hard, sizeof(*fpu));
+		memcpy(fpu, &tsk->thread.xstate->hardfpu, sizeof(*fpu));
 	}
 
 	return fpvalid;
@@ -417,6 +396,7 @@ int dump_fpu(struct pt_regs *regs, elf_fpregset_t *fpu)
 	return 0; /* Task didn't use the fpu at all. */
 #endif
 }
+EXPORT_SYMBOL(dump_fpu);
 
 asmlinkage void ret_from_fork(void);
 
@@ -429,7 +409,7 @@ int copy_thread(unsigned long clone_flags, unsigned long usp,
 #ifdef CONFIG_SH_FPU
 	if(last_task_used_math == current) {
 		enable_fpu();
-		save_fpu(current, regs);
+		save_fpu(current);
 		disable_fpu();
 		last_task_used_math = NULL;
 		regs->sr |= SR_FD;
@@ -524,13 +504,6 @@ asmlinkage int sys_execve(char *ufilename, char **uargv,
 out:
 	return error;
 }
-
-/*
- * These bracket the sleeping functions..
- */
-extern void interruptible_sleep_on(wait_queue_head_t *q);
-
-#define mid_sched	((unsigned long) interruptible_sleep_on)
 
 #ifdef CONFIG_FRAME_POINTER
 static int in_sh64_switch_to(unsigned long pc)

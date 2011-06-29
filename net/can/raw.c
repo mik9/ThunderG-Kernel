@@ -45,6 +45,7 @@
 #include <linux/init.h>
 #include <linux/uio.h>
 #include <linux/net.h>
+#include <linux/slab.h>
 #include <linux/netdevice.h>
 #include <linux/socket.h>
 #include <linux/if_arp.h>
@@ -280,12 +281,7 @@ static int raw_init(struct sock *sk)
 static int raw_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
-	struct raw_sock *ro;
-
-	if (!sk)
-		return 0;
-
-	ro = raw_sk(sk);
+	struct raw_sock *ro = raw_sk(sk);
 
 	unregister_netdevice_notifier(&ro->notifier);
 
@@ -429,8 +425,6 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 
 	if (level != SOL_CAN_RAW)
 		return -EINVAL;
-	if (optlen < 0)
-		return -EINVAL;
 
 	switch (optname) {
 
@@ -451,7 +445,7 @@ static int raw_setsockopt(struct socket *sock, int level, int optname,
 				return -EFAULT;
 			}
 		} else if (count == 1) {
-			if (copy_from_user(&sfilter, optval, optlen))
+			if (copy_from_user(&sfilter, optval, sizeof(sfilter)))
 				return -EFAULT;
 		}
 
@@ -661,6 +655,10 @@ static int raw_sendmsg(struct kiocb *iocb, struct socket *sock,
 	err = sock_tx_timestamp(msg, sk, skb_tx(skb));
 	if (err < 0)
 		goto free_skb;
+
+	/* to be able to check the received tx sock reference in raw_rcv() */
+	skb_tx(skb)->prevent_sk_orphan = 1;
+
 	skb->dev = dev;
 	skb->sk  = sk;
 
@@ -707,7 +705,7 @@ static int raw_recvmsg(struct kiocb *iocb, struct socket *sock,
 		return err;
 	}
 
-	sock_recv_timestamp(msg, sk, skb);
+	sock_recv_ts_and_drops(msg, sk, skb);
 
 	if (msg->msg_name) {
 		msg->msg_namelen = sizeof(struct sockaddr_can);
@@ -749,7 +747,6 @@ static struct proto raw_proto __read_mostly = {
 static struct can_proto raw_can_proto __read_mostly = {
 	.type       = SOCK_RAW,
 	.protocol   = CAN_RAW,
-	.capability = -1,
 	.ops        = &raw_ops,
 	.prot       = &raw_proto,
 };

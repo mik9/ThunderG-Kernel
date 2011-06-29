@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -44,6 +44,17 @@ enum {
 	ACDB_MBADRC_BLOCK		= 343
 };
 
+/* Structure to query for acdb parameter */
+struct acdb_get_block {
+	u32	acdb_id;
+	u32	sample_rate_id;		/* Actual sample rate value */
+	u32	interface_id;		/* Interface id's */
+	u32	algorithm_block_id;	/* Algorithm block id */
+	u32	total_bytes;		/* Length in bytes used by buffer for
+						configuration */
+	u32	*buf_ptr;		/* Address for storing configuration
+						data */
+};
 
 struct acdb_agc_block {
 	u16	enable_status;
@@ -123,4 +134,60 @@ struct acdb_mbadrc_block {
 	struct mbadrc_parameter		parameters;
 };
 
+struct  acdb_calib_gain_rx {
+	u16 audppcalgain;
+	u16 reserved;
+};
+
+struct acdb_calib_gain_tx {
+	u16 audprecalgain;
+	u16 reserved;
+};
+
+struct acdb_pbe_block {
+	s16 realbassmix;
+	s16 basscolorcontrol;
+	u16 mainchaindelay;
+	u16 xoverfltorder;
+	u16 bandpassfltorder;
+	s16 adrcdelay;
+	u16 downsamplelevel;
+	u16 comprmstav;
+	s16 expthreshold;
+	u16 expslope;
+	u16 compthreshold;
+	u16 compslope;
+	u16 cpmpattack_lsw;
+	u16 compattack_msw;
+	u16 comprelease_lsw;
+	u16 comprelease_msw;
+	u16 compmakeupgain;
+	s16 baselimthreshold;
+	s16 highlimthreshold;
+	s16 basslimmakeupgain;
+	s16 highlimmakeupgain;
+	s16 limbassgrc;
+	s16 limhighgrc;
+	s16 limdelay;
+	u16 filter_coeffs[90];
+};
+
+struct acdb_rmc_block  {
+	s16 rmc_enable;
+	u16 rmc_ipw_length_ms;
+	u16 rmc_detect_start_threshdb;
+	u16 rmc_peak_length_ms;
+	s16 rmc_init_pulse_threshdb;
+	u16 rmc_init_pulse_length_ms;
+	u16 rmc_total_int_length_ms;
+	u16 rmc_rampupdn_length_ms;
+	u16 rmc_delay_length_ms;
+	u16 reserved00;
+	u16 reserved01;
+	s16 reserved02;
+	s16 reserved03;
+	s16 reserved04;
+};
+
+s32 acdb_get_calibration_data(struct acdb_get_block *get_block);
 #endif

@@ -113,6 +113,14 @@
 #define VFE_IRQ_STATUS0_STATS_CS      0x20000  /* bit 17 */
 #define VFE_IRQ_STATUS0_STATS_IHIST   0x40000  /* bit 18 */
 
+#define VFE_IRQ_STATUS0_SYNC_TIMER0   0x2000000  /* bit 25 */
+#define VFE_IRQ_STATUS0_SYNC_TIMER1   0x4000000  /* bit 26 */
+#define VFE_IRQ_STATUS0_SYNC_TIMER2   0x8000000  /* bit 27 */
+#define VFE_IRQ_STATUS0_ASYNC_TIMER0  0x10000000  /* bit 28 */
+#define VFE_IRQ_STATUS0_ASYNC_TIMER1  0x20000000  /* bit 29 */
+#define VFE_IRQ_STATUS0_ASYNC_TIMER2  0x40000000  /* bit 30 */
+#define VFE_IRQ_STATUS0_ASYNC_TIMER3  0x80000000  /* bit 31 */
+
 /* imask for while waiting for stop ack,  driver has already
  * requested stop, waiting for reset irq, and async timer irq.
  * For irq_status_0, bit 28-31 are for async timer. For
@@ -145,6 +153,7 @@
 #define IHIST_ENABLE_MASK 0x00008000   /* bit 15 */
 #define RS_ENABLE_MASK 0x00000100      /* bit 8  */
 #define CS_ENABLE_MASK 0x00000200      /* bit 9  */
+#define RS_CS_ENABLE_MASK 0x00000300   /* bit 8,9  */
 
 
 #define VFE_REG_UPDATE_TRIGGER           1
@@ -283,6 +292,8 @@ enum  VFE_STATE {
 #define V31_DUMMY_10              103
 #define V31_SYNC_TIMER_SETTING    104
 #define V31_ASYNC_TIMER_SETTING   105
+#define V31_LIVESHOT              106
+
 #define V31_CAMIF_OFF             0x000001E4
 #define V31_CAMIF_LEN             32
 
@@ -327,6 +338,14 @@ enum  VFE_STATE {
 #define V31_CHROMA_EN_OFF 0x000003C4
 #define V31_CHROMA_EN_LEN 36
 
+#define V31_SYNC_TIMER_OFF      0x0000020C
+#define V31_SYNC_TIMER_POLARITY_OFF 0x00000234
+#define V31_TIMER_SELECT_OFF        0x0000025C
+#define V31_SYNC_TIMER_LEN 28
+
+#define V31_ASYNC_TIMER_OFF 0x00000238
+#define V31_ASYNC_TIMER_LEN 28
+
 #define V31_BLACK_LEVEL_OFF 0x00000264
 #define V31_BLACK_LEVEL_LEN 16
 
@@ -344,6 +363,9 @@ enum  VFE_STATE {
 
 #define V31_LA_OFF 0x000003C0
 #define V31_LA_LEN 4
+
+#define V31_SCE_OFF 0x00000418
+#define V31_SCE_LEN 136
 
 #define V31_CHROMA_SUP_OFF 0x000003E8
 #define V31_CHROMA_SUP_LEN 12
@@ -708,25 +730,6 @@ struct vfe_cmd_bus_pm_start {
 	uint8_t output1CbcrWrPmEnable;
 };
 
-struct vfe_cmd_sync_timer_setting {
-	uint8_t  whichSyncTimer;
-	uint8_t  operation;
-	uint8_t  polarity;
-	uint16_t repeatCount;
-	uint16_t hsyncCount;
-	uint32_t pclkCount;
-	uint32_t outputDuration;
-};
-
-struct vfe_cmd_async_timer_setting {
-	uint8_t  whichAsyncTimer;
-	uint8_t  operation;
-	uint8_t  polarity;
-	uint16_t repeatCount;
-	uint16_t inactiveCount;
-	uint32_t activeCount;
-};
-
 struct  vfe_frame_skip_counts {
 	uint32_t  totalFrameCount;
 	uint32_t  output1Count;
@@ -1030,6 +1033,9 @@ struct vfe31_ctrl_type {
 	uint32_t stats_comp;
 	uint8_t vstate;
 	uint32_t vfe_capture_count;
+	uint32_t sync_timer_repeat_count;
+	uint32_t sync_timer_state;
+	uint32_t sync_timer_number;
 
 	uint32_t vfeFrameId;
 	uint32_t output1Pattern;

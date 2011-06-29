@@ -7,6 +7,7 @@
 
 #include <linux/ioctl.h>
 
+#define AKM8973_I2C_NAME "akm8973"
 /* Compass device dependent definition */
 #define AKECS_MODE_MEASURE		0x00	/* Starts measurement. */
 #define AKECS_MODE_E2P_READ		0x02	/* E2P access mode (read). */
@@ -59,16 +60,19 @@
 #define ECS_IOCTL_GET_CLOSE_STATUS      _IOR(AKMIO, 0x0E, int)
 //#define ECS_IOCTL_GET_CALI_DATA         _IOR(AKMIO, 0x0F, char[MAX_CALI_SIZE])
 #define ECS_IOCTL_GET_DELAY             _IOR(AKMIO, 0x30, short)
+#define ECS_IOCTL_GET_PROJECT_NAME      _IOR(AKMIO, 0x0D, char[64])
+#define ECS_IOCTL_GET_MATRIX            _IOR(AKMIO, 0x0E, short [4][3][3])
+
 
 /* IOCTLs for APPs */
-//#define ECS_IOCTL_APP_SET_MODE		_IOW(AKMIO, 0x10, short)
+#define ECS_IOCTL_APP_SET_MODE		_IOW(AKMIO, 0x10, short)
 #define ECS_IOCTL_APP_SET_MFLAG			_IOW(AKMIO, 0x11, short)
 #define ECS_IOCTL_APP_GET_MFLAG			_IOW(AKMIO, 0x12, short)
 #define ECS_IOCTL_APP_SET_AFLAG			_IOW(AKMIO, 0x13, short)
 #define ECS_IOCTL_APP_GET_AFLAG			_IOR(AKMIO, 0x14, short)
 #define ECS_IOCTL_APP_SET_TFLAG			_IOR(AKMIO, 0x15, short)
 #define ECS_IOCTL_APP_GET_TFLAG			_IOR(AKMIO, 0x16, short)
-//#define ECS_IOCTL_APP_RESET_PEDOMETER   _IO(AKMIO, 0x17)
+#define ECS_IOCTL_APP_RESET_PEDOMETER   _IO(AKMIO, 0x17)
 #define ECS_IOCTL_APP_SET_DELAY			_IOW(AKMIO, 0x18, short)
 #define ECS_IOCTL_APP_GET_DELAY			ECS_IOCTL_GET_DELAY
 #define ECS_IOCTL_APP_SET_MVFLAG		_IOW(AKMIO, 0x19, short)	/* Set raw magnetic vector flag */
@@ -87,6 +91,13 @@
 
 #define AKMD2_TO_ACCEL_IOCTL_READ_XYZ	_IOWR(AKMIO, 0x31, int)
 #define AKMD2_TO_ACCEL_IOCTL_ACCEL_INIT	_IOWR(AKMIO, 0x32, int)
+
+struct akm8973_platform_data {
+	short layouts[4][3][3];
+	char project_name[64];
+	int reset;
+	int intr;
+};
 #endif	/* AKM8973_H */
 
 

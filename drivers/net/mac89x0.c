@@ -88,7 +88,6 @@ static char *version =
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/in.h>
-#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/nubus.h>
 #include <linux/errno.h>
@@ -98,6 +97,7 @@ static char *version =
 #include <linux/skbuff.h>
 #include <linux/delay.h>
 #include <linux/bitops.h>
+#include <linux/gfp.h>
 
 #include <asm/system.h>
 #include <asm/io.h>
@@ -222,8 +222,8 @@ struct net_device * __init mac89x0_probe(int unit)
 		int card_present;
 
 		local_irq_save(flags);
-		card_present = hwreg_present((void*) ioaddr+4)
-		  && hwreg_present((void*) ioaddr + DATA_PORT);
+		card_present = (hwreg_present((void*) ioaddr+4) &&
+				hwreg_present((void*) ioaddr + DATA_PORT));
 		local_irq_restore(flags);
 
 		if (!card_present)
@@ -337,7 +337,7 @@ net_open(struct net_device *dev)
 	writereg(dev, PP_BusCTL, readreg(dev, PP_BusCTL) & ~ENABLE_IRQ);
 
 	/* Grab the interrupt */
-	if (request_irq(dev->irq, &net_interrupt, 0, "cs89x0", dev))
+	if (request_irq(dev->irq, net_interrupt, 0, "cs89x0", dev))
 		return -EAGAIN;
 
 	/* Set up the IRQ - Apparently magic */
@@ -408,7 +408,6 @@ net_send_packet(struct sk_buff *skb, struct net_device *dev)
 				  skb->len+1);
 
 	local_irq_restore(flags);
-	dev->trans_start = jiffies;
 	dev_kfree_skb (skb);
 
 	return NETDEV_TX_OK;
@@ -568,9 +567,7 @@ static void set_multicast_list(struct net_device *dev)
 	if(dev->flags&IFF_PROMISC)
 	{
 		lp->rx_mode = RX_ALL_ACCEPT;
-	}
-	else if((dev->flags&IFF_ALLMULTI)||dev->mc_list)
-	{
+	} else if ((dev->flags & IFF_ALLMULTI) || !netdev_mc_empty(dev)) {
 		/* The multicast-accept list is initialized to accept-all, and we
 		   rely on higher-level filtering for now. */
 		lp->rx_mode = RX_MULTCAST_ACCEPT;

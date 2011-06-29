@@ -36,6 +36,7 @@ Status: in development
 #include <linux/delay.h>
 #include <linux/ioport.h>
 #include <linux/sched.h>
+#include <linux/slab.h>
 
 #include <asm/termios.h>
 #include <asm/ioctls.h>
@@ -125,14 +126,9 @@ struct serial_data {
 
 static long tty_ioctl(struct file *f, unsigned op, unsigned long param)
 {
-#ifdef HAVE_UNLOCKED_IOCTL
-	if (f->f_op->unlocked_ioctl) {
+	if (f->f_op->unlocked_ioctl)
 		return f->f_op->unlocked_ioctl(f, op, param);
-	}
-#endif
-	if (f->f_op->ioctl) {
-		return f->f_op->ioctl(f->f_dentry->d_inode, f, op, param);
-	}
+
 	return -ENOSYS;
 }
 
@@ -402,15 +398,15 @@ static void serial_2002_open(struct comedi_device *dev)
 	char port[20];
 
 	sprintf(port, "/dev/ttyS%d", devpriv->port);
-	devpriv->tty = filp_open(port, 0, O_RDWR);
+	devpriv->tty = filp_open(port, O_RDWR, 0);
 	if (IS_ERR(devpriv->tty)) {
 		printk("serial_2002: file open error = %ld\n",
 		       PTR_ERR(devpriv->tty));
 	} else {
 		struct config_t {
 
-			int kind;
-			int bits;
+			short int kind;
+			short int bits;
 			int min;
 			int max;
 		};

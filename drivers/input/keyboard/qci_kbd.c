@@ -1,6 +1,7 @@
 /* Quanta I2C Keyboard Driver
  *
  * Copyright (C) 2009 Quanta Computer Inc.
+ * Copyright (c) 2010, Code Aurora Forum. All rights reserved.
  * Author: Hsin Wu <hsin.wu@quantatw.com>
  * Author: Austin Lai <austin.lai@quantatw.com>
  *
@@ -35,10 +36,18 @@
 #include <linux/gpio.h>
 #include <linux/delay.h>
 
+#include <linux/input/qci_kbd.h>
+
 /* Keyboard special scancode */
 #define RC_KEY_FN          0x70
 #define RC_KEY_BREAK       0x80
-#define KEY_ACK_FA      0xFA
+#define KEY_ACK_FA         0xFA
+#define SCAN_EMUL0         0xE0
+#define SCAN_EMUL1         0xE1
+#define SCAN_PAUSE1        0x1D
+#define SCAN_PAUSE2        0x45
+#define SCAN_LIDSW_OPEN    0x70
+#define SCAN_LIDSW_CLOSE   0x71
 
 /* Keyboard keycodes */
 #define NOKEY           KEY_RESERVED
@@ -51,6 +60,7 @@
 #define KEYBOARD_NAME                "Quanta Keyboard"
 #define KEYBOARD_DEVICE             "/i2c/input0"
 #define KEYBOARD_CMD_ENABLE             0xF4
+#define KEYBOARD_CMD_SET_LED            0xED
 
 /*-----------------------------------------------------------------------------
  * Keyboard scancode to linux keycode translation table
@@ -314,6 +324,18 @@ static const unsigned char on2_keycode[256] = {
 	[254] = NOKEY,
 	[255] = NOKEY,
 };
+
+static const u8 emul0_map[128] = {
+	  0,   0,   0,  0,  0,  0,  0,   0,   0,   0,  0,   0,  0,   0,  0,   0,
+	  0,   0,   0,  0,  0,  0,  0,   0,   0,   0,  0,   0, 96,  97,  0,   0,
+	113,   0,   0,  0,  0,  0,  0,   0,   0,   0,  0,   0,  0,   0, 114,  0,
+	115,   0,   0,  0,  0, 98,  0,  99, 100,   0,  0,   0,  0,   0,  0,   0,
+	  0,   0,   0,  0,  0,  0,  0, 102, 103, 104,  0, 105,  0, 106,  0, 107,
+	108, 109, 110, 111, 0,  0,  0,   0,   0,   0,  0, 139,  0, 150,  0,   0,
+	  0,   0,   0,  0,  0,  0,  0,   0,   0,   0,  0,   0,  0,   0,  0,   0,
+	  0,   0,   0,  0,  0,  0,  0,   0,   0,   0,  0,   0,  0,   0,  0,   0,
+};
+
 /*-----------------------------------------------------------------------------
  * Global variables
  *---------------------------------------------------------------------------*/
@@ -325,21 +347,39 @@ struct i2ckbd_drv_data {
 	struct i2c_client *ki2c_client;
 	struct work_struct work;
 	struct input_dev *qcikbd_dev;
+	struct mutex kb_mutex;
 	unsigned int qcikbd_gpio; /* GPIO used for interrupt */
 	unsigned int qcikbd_irq;
 	unsigned int key_down;
 	unsigned int escape;
 	unsigned int pause_seq;
 	unsigned int fn;
+	unsigned char led_status;
+	bool standard_scancodes;
+	bool kb_leds;
+	bool event_led;
+	bool emul0;
+	bool emul1;
+	bool pause1;
 };
 #ifdef CONFIG_PM
 static int qcikbd_suspend(struct device *dev)
 {
+	struct i2ckbd_drv_data *context = input_get_drvdata(g_qci_keyboard_dev);
+
+	enable_irq_wake(context->qcikbd_irq);
 	return 0;
 }
 
 static int qcikbd_resume(struct device *dev)
 {
+	struct i2ckbd_drv_data *context = input_get_drvdata(g_qci_keyboard_dev);
+	struct i2c_client *ikbdclient = context->ki2c_client;
+
+	disable_irq_wake(context->qcikbd_irq);
+
+	/* consume any keypress generated while suspended */
+	i2c_smbus_read_byte(ikbdclient);
 	return 0;
 }
 #endif
@@ -377,6 +417,19 @@ static struct i2c_driver i2ckbd_driver = {
  * Driver functions
  *---------------------------------------------------------------------------*/
 
+#ifdef CONFIG_KEYBOARD_QCIKBD_LID
+static void process_lid(struct input_dev *ikbdev, unsigned char scancode)
+{
+	if (scancode == SCAN_LIDSW_OPEN)
+		input_report_switch(ikbdev, SW_LID, 0);
+	else if (scancode == SCAN_LIDSW_CLOSE)
+		input_report_switch(ikbdev, SW_LID, 1);
+	else
+		return;
+	input_sync(ikbdev);
+}
+#endif
+
 static irqreturn_t qcikbd_interrupt(int irq, void *dev_id)
 {
 	struct i2ckbd_drv_data *ikbd_drv_data = dev_id;
@@ -387,6 +440,7 @@ static irqreturn_t qcikbd_interrupt(int irq, void *dev_id)
 static void qcikbd_work_handler(struct work_struct *_work)
 {
 	unsigned char scancode;
+	unsigned char scancode_only;
 	unsigned int  keycode;
 
 	struct i2ckbd_drv_data *ikbd_drv_data =
@@ -395,11 +449,80 @@ static void qcikbd_work_handler(struct work_struct *_work)
 	struct i2c_client *ikbdclient = ikbd_drv_data->ki2c_client;
 	struct input_dev *ikbdev = ikbd_drv_data->qcikbd_dev;
 
+	mutex_lock(&ikbd_drv_data->kb_mutex);
+
+	if ((ikbd_drv_data->kb_leds) && (ikbd_drv_data->event_led)) {
+		i2c_smbus_write_byte(ikbdclient, KEYBOARD_CMD_SET_LED);
+		i2c_smbus_write_byte(ikbdclient, ikbd_drv_data->led_status);
+		ikbd_drv_data->event_led = 0;
+		goto work_exit;
+	}
+
 	scancode = i2c_smbus_read_byte(ikbdclient);
 
-	if (scancode == KEY_ACK_FA) {
-		return;
-	} else if (scancode == RC_KEY_FN) {
+	if (scancode == KEY_ACK_FA)
+		goto work_exit;
+
+	if (ikbd_drv_data->standard_scancodes) {
+		/* pause key is E1 1D 45 */
+		if (scancode == SCAN_EMUL1) {
+			ikbd_drv_data->emul1 = 1;
+			goto work_exit;
+		}
+		if (ikbd_drv_data->emul1) {
+			ikbd_drv_data->emul1 = 0;
+			if ((scancode & 0x7f) == SCAN_PAUSE1)
+				ikbd_drv_data->pause1 = 1;
+			goto work_exit;
+		}
+		if (ikbd_drv_data->pause1) {
+			ikbd_drv_data->pause1 = 0;
+			if ((scancode & 0x7f) == SCAN_PAUSE2) {
+				input_report_key(ikbdev, KEY_PAUSE,
+						 !(scancode & 0x80));
+				input_sync(ikbdev);
+			}
+			goto work_exit;
+		}
+
+		if (scancode == SCAN_EMUL0) {
+			ikbd_drv_data->emul0 = 1;
+			goto work_exit;
+		}
+		if (ikbd_drv_data->emul0) {
+			ikbd_drv_data->emul0 = 0;
+			scancode_only = scancode & 0x7f;
+#ifdef CONFIG_KEYBOARD_QCIKBD_LID
+			if ((scancode_only == SCAN_LIDSW_OPEN) ||
+			    (scancode_only == SCAN_LIDSW_CLOSE)) {
+				process_lid(ikbdev, scancode);
+				goto work_exit;
+			}
+#endif
+			keycode = emul0_map[scancode_only];
+			if (!keycode) {
+				dev_err(&ikbdev->dev,
+					"Unrecognized scancode %02x %02x\n",
+					SCAN_EMUL0, scancode);
+				goto work_exit;
+			}
+		} else {
+			keycode = scancode & 0x7f;
+		}
+		/* MS bit of scancode indicates direction of keypress */
+		ikbd_drv_data->key_down = !(scancode & 0x80);
+		if (keycode) {
+			input_event(ikbdev, EV_MSC, MSC_SCAN, scancode);
+			input_report_key(ikbdev, keycode,
+					 ikbd_drv_data->key_down);
+			input_sync(ikbdev);
+		}
+		goto work_exit;
+	}
+
+	mutex_unlock(&ikbd_drv_data->kb_mutex);
+
+	if (scancode == RC_KEY_FN) {
 		ikbd_drv_data->fn = 0x80;     /* select keycode table  > 0x7F */
 	} else {
 		ikbd_drv_data->key_down = 1;
@@ -416,8 +539,30 @@ static void qcikbd_work_handler(struct work_struct *_work)
 			input_sync(ikbdev);
 		}
 	}
+	return;
+
+work_exit:
+	mutex_unlock(&ikbd_drv_data->kb_mutex);
 }
 
+static int qcikbd_input_event(struct input_dev *dev, unsigned int type,
+			      unsigned int code, int value)
+{
+	struct i2ckbd_drv_data *ikbd_drv_data = input_get_drvdata(dev);
+	struct input_dev *ikbdev = ikbd_drv_data->qcikbd_dev;
+
+	if (type != EV_LED)
+		return -EINVAL;
+
+	ikbd_drv_data->led_status =
+		(test_bit(LED_SCROLLL, ikbdev->led) ? 1 : 0) |
+		(test_bit(LED_NUML, ikbdev->led) ? 2 : 0) |
+		(test_bit(LED_CAPSL, ikbdev->led) ? 4 : 0);
+	ikbd_drv_data->event_led = 1;
+
+	schedule_work(&ikbd_drv_data->work);
+	return 0;
+}
 
 static int qcikbd_open(struct input_dev *dev)
 {
@@ -435,6 +580,13 @@ static int __devinit qcikbd_probe(struct i2c_client *client,
 	int err;
 	int i;
 	struct i2ckbd_drv_data *context;
+	struct qci_kbd_platform_data *pdata = client->dev.platform_data;
+
+	if (!pdata) {
+		pr_err("[KBD] platform data not supplied\n");
+		return -EINVAL;
+	}
+
 	context = kzalloc(sizeof(struct i2ckbd_drv_data), GFP_KERNEL);
 	if (!context)
 		return -ENOMEM;
@@ -444,6 +596,7 @@ static int __devinit qcikbd_probe(struct i2c_client *client,
 	client->driver = &i2ckbd_driver;
 
 	INIT_WORK(&context->work, qcikbd_work_handler);
+	mutex_init(&context->kb_mutex);
 
 	err = gpio_request(context->qcikbd_gpio, "qci-kbd");
 	if (err) {
@@ -462,6 +615,8 @@ static int __devinit qcikbd_probe(struct i2c_client *client,
 		goto request_irq_fail;
 	}
 
+	context->standard_scancodes = pdata->standard_scancodes;
+	context->kb_leds = pdata->kb_leds;
 	context->qcikbd_dev = input_allocate_device();
 	if (!context->qcikbd_dev) {
 		pr_err("[KBD]allocting memory err\n");
@@ -477,7 +632,10 @@ static int __devinit qcikbd_probe(struct i2c_client *client,
 	context->qcikbd_dev->id.version = 0x0004;
 	context->qcikbd_dev->open       = qcikbd_open;
 	set_bit(EV_KEY, context->qcikbd_dev->evbit);
-	set_bit(EV_REP, context->qcikbd_dev->evbit);
+	__set_bit(MSC_SCAN, context->qcikbd_dev->mscbit);
+
+	if (pdata->repeat)
+		set_bit(EV_REP, context->qcikbd_dev->evbit);
 
 	/* Enable all supported keys */
 	for (i = 1; i < ARRAY_SIZE(on2_keycode) ; i++)
@@ -489,6 +647,19 @@ static int __devinit qcikbd_probe(struct i2c_client *client,
 	set_bit(KEY_VOLUMEDOWN, context->qcikbd_dev->keybit);
 	set_bit(KEY_ZOOMIN, context->qcikbd_dev->keybit);
 	set_bit(KEY_ZOOMOUT, context->qcikbd_dev->keybit);
+
+#ifdef CONFIG_KEYBOARD_QCIKBD_LID
+	set_bit(EV_SW, context->qcikbd_dev->evbit);
+	set_bit(SW_LID, context->qcikbd_dev->swbit);
+#endif
+
+	if (context->kb_leds) {
+		context->qcikbd_dev->event = qcikbd_input_event;
+		__set_bit(EV_LED, context->qcikbd_dev->evbit);
+		__set_bit(LED_NUML, context->qcikbd_dev->ledbit);
+		__set_bit(LED_CAPSL, context->qcikbd_dev->ledbit);
+		__set_bit(LED_SCROLLL, context->qcikbd_dev->ledbit);
+	}
 
 	input_set_drvdata(context->qcikbd_dev, context);
 	err = input_register_device(context->qcikbd_dev);

@@ -13,6 +13,8 @@
 
 #include "qeth_core.h"
 
+#define QETH_SNIFF_AVAIL	0x0008
+
 struct qeth_ipaddr {
 	struct list_head entry;
 	enum qeth_ip_types type;
@@ -60,5 +62,7 @@ void qeth_l3_del_vipa(struct qeth_card *, enum qeth_prot_versions, const u8 *);
 int qeth_l3_add_rxip(struct qeth_card *, enum qeth_prot_versions, const u8 *);
 void qeth_l3_del_rxip(struct qeth_card *card, enum qeth_prot_versions,
 			const u8 *);
+int qeth_l3_set_large_send(struct qeth_card *, enum qeth_large_send_types);
+int qeth_l3_set_rx_csum(struct qeth_card *, enum qeth_checksum_types);
 
 #endif /* __QETH_L3_H__ */

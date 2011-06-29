@@ -28,6 +28,7 @@
 #include <linux/poll.h>
 #include <linux/device.h>
 #include <linux/major.h>
+#include <linux/slab.h>
 #include <linux/hid.h>
 #include <linux/mutex.h>
 #include <linux/sched.h>
@@ -109,38 +110,50 @@ static ssize_t hidraw_write(struct file *file, const char __user *buffer, size_t
 	__u8 *buf;
 	int ret = 0;
 
-	if (!hidraw_table[minor])
-		return -ENODEV;
+	mutex_lock(&minors_lock);
+
+	if (!hidraw_table[minor]) {
+		ret = -ENODEV;
+		goto out;
+	}
 
 	dev = hidraw_table[minor]->hid;
 
-	if (!dev->hid_output_raw_report)
-		return -ENODEV;
+	if (!dev->hid_output_raw_report) {
+		ret = -ENODEV;
+		goto out;
+	}
 
 	if (count > HID_MAX_BUFFER_SIZE) {
 		printk(KERN_WARNING "hidraw: pid %d passed too large report\n",
 				task_pid_nr(current));
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
 	if (count < 2) {
 		printk(KERN_WARNING "hidraw: pid %d passed too short report\n",
 				task_pid_nr(current));
-		return -EINVAL;
-	}
-
-	buf = kmalloc(count * sizeof(__u8), GFP_KERNEL);
-	if (!buf)
-		return -ENOMEM;
-
-	if (copy_from_user(buf, buffer, count)) {
-		ret = -EFAULT;
+		ret = -EINVAL;
 		goto out;
 	}
 
-	ret = dev->hid_output_raw_report(dev, buf, count);
-out:
+	buf = kmalloc(count * sizeof(__u8), GFP_KERNEL);
+	if (!buf) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	if (copy_from_user(buf, buffer, count)) {
+		ret = -EFAULT;
+		goto out_free;
+	}
+
+	ret = dev->hid_output_raw_report(dev, buf, count, HID_OUTPUT_REPORT);
+out_free:
 	kfree(buf);
+out:
+	mutex_unlock(&minors_lock);
 	return ret;
 }
 
@@ -168,11 +181,8 @@ static int hidraw_open(struct inode *inode, struct file *file)
 		goto out;
 	}
 
-	lock_kernel();
 	mutex_lock(&minors_lock);
 	if (!hidraw_table[minor]) {
-		printk(KERN_EMERG "hidraw device with minor %d doesn't exist\n",
-				minor);
 		kfree(list);
 		err = -ENODEV;
 		goto out_unlock;
@@ -200,7 +210,6 @@ static int hidraw_open(struct inode *inode, struct file *file)
 
 out_unlock:
 	mutex_unlock(&minors_lock);
-	unlock_kernel();
 out:
 	return err;
 
@@ -211,15 +220,9 @@ static int hidraw_release(struct inode * inode, struct file * file)
 	unsigned int minor = iminor(inode);
 	struct hidraw *dev;
 	struct hidraw_list *list = file->private_data;
-	int ret;
 
-	mutex_lock(&minors_lock);
-	if (!hidraw_table[minor]) {
-		printk(KERN_EMERG "hidraw device with minor %d doesn't exist\n",
-				minor);
-		ret = -ENODEV;
-		goto unlock;
-	}
+	if (!hidraw_table[minor])
+		return -ENODEV;
 
 	list_del(&list->node);
 	dev = hidraw_table[minor];
@@ -232,12 +235,10 @@ static int hidraw_release(struct inode * inode, struct file * file)
 			kfree(list->hidraw);
 		}
 	}
-	kfree(list);
-	ret = 0;
-unlock:
-	mutex_unlock(&minors_lock);
 
-	return ret;
+	kfree(list);
+
+	return 0;
 }
 
 static long hidraw_ioctl(struct file *file, unsigned int cmd,
@@ -249,7 +250,7 @@ static long hidraw_ioctl(struct file *file, unsigned int cmd,
 	struct hidraw *dev;
 	void __user *user_arg = (void __user*) arg;
 
-	lock_kernel();
+	mutex_lock(&minors_lock);
 	dev = hidraw_table[minor];
 	if (!dev) {
 		ret = -ENODEV;
@@ -324,12 +325,12 @@ static long hidraw_ioctl(struct file *file, unsigned int cmd,
 						-EFAULT : len;
 					break;
 				}
-                }
+		}
 
 		ret = -ENOTTY;
 	}
 out:
-	unlock_kernel();
+	mutex_unlock(&minors_lock);
 	return ret;
 }
 

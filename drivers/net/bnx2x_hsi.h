@@ -1,11 +1,25 @@
 /* bnx2x_hsi.h: Broadcom Everest network driver.
  *
- * Copyright (c) 2007-2009 Broadcom Corporation
+ * Copyright (c) 2007-2010 Broadcom Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation.
  */
+
+struct license_key {
+	u32 reserved[6];
+
+#if defined(__BIG_ENDIAN)
+	u16 max_iscsi_init_conn;
+	u16 max_iscsi_trgt_conn;
+#elif defined(__LITTLE_ENDIAN)
+	u16 max_iscsi_trgt_conn;
+	u16 max_iscsi_init_conn;
+#endif
+
+	u32 reserved_a[6];
+};
 
 
 #define PORT_0				0
@@ -250,6 +264,7 @@ struct port_hw_cfg {			    /* port 0: 0x12c  port 1: 0x2bc */
 #define PORT_HW_CFG_XGXS_EXT_PHY_TYPE_SFX7101	    0x00000800
 #define PORT_HW_CFG_XGXS_EXT_PHY_TYPE_BCM8727	    0x00000900
 #define PORT_HW_CFG_XGXS_EXT_PHY_TYPE_BCM8727_NOC   0x00000a00
+#define PORT_HW_CFG_XGXS_EXT_PHY_TYPE_BCM84823	    0x00000b00
 #define PORT_HW_CFG_XGXS_EXT_PHY_TYPE_FAILURE	    0x0000fd00
 #define PORT_HW_CFG_XGXS_EXT_PHY_TYPE_NOT_CONN	    0x0000ff00
 
@@ -668,7 +683,7 @@ struct drv_func_mb {
 #define DRV_MSG_CODE_GET_MANUF_KEY			0x82000000
 #define DRV_MSG_CODE_LOAD_L2B_PRAM			0x90000000
 	/*
-	 * The optic module verification commands requris bootcode
+	 * The optic module verification commands require bootcode
 	 * v5.0.6 or later
 	 */
 #define DRV_MSG_CODE_VRFY_OPT_MDL			0xa0000000
@@ -881,7 +896,7 @@ struct shmem_region {			       /*   SharedMem Offset (size) */
 
 	struct shm_dev_info	dev_info;		 /* 0x8     (0x438) */
 
-	u8			reserved[52*PORT_MAX];
+	struct license_key	drv_lic_key[PORT_MAX];	/* 0x440 (52*2=0x68) */
 
 	/* FW information (for internal FW use) */
 	u32			fw_info_fio_offset;    /* 0x4a8       (0x4) */
@@ -1245,8 +1260,8 @@ struct host_func_stats {
 
 
 #define BCM_5710_FW_MAJOR_VERSION			5
-#define BCM_5710_FW_MINOR_VERSION			0
-#define BCM_5710_FW_REVISION_VERSION			21
+#define BCM_5710_FW_MINOR_VERSION			2
+#define BCM_5710_FW_REVISION_VERSION			13
 #define BCM_5710_FW_ENGINEERING_VERSION 		0
 #define BCM_5710_FW_COMPILE_FLAGS			1
 
@@ -2418,8 +2433,10 @@ struct common_ramrod_eth_rx_cqe {
 	u8 ramrod_type;
 #define COMMON_RAMROD_ETH_RX_CQE_TYPE (0x1<<0)
 #define COMMON_RAMROD_ETH_RX_CQE_TYPE_SHIFT 0
-#define COMMON_RAMROD_ETH_RX_CQE_RESERVED0 (0x7F<<1)
-#define COMMON_RAMROD_ETH_RX_CQE_RESERVED0_SHIFT 1
+#define COMMON_RAMROD_ETH_RX_CQE_ERROR (0x1<<1)
+#define COMMON_RAMROD_ETH_RX_CQE_ERROR_SHIFT 1
+#define COMMON_RAMROD_ETH_RX_CQE_RESERVED0 (0x3F<<2)
+#define COMMON_RAMROD_ETH_RX_CQE_RESERVED0_SHIFT 2
 	u8 conn_type;
 	__le16 reserved1;
 	__le32 conn_and_cmd_data;

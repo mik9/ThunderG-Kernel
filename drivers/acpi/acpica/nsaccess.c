@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2008, Intel Corp.
+ * Copyright (C) 2000 - 2010, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -165,7 +165,7 @@ acpi_status acpi_ns_root_initialize(void)
 
 				obj_desc->method.method_flags =
 				    AML_METHOD_INTERNAL_ONLY;
-				obj_desc->method.implementation =
+				obj_desc->method.extra.implementation =
 				    acpi_ut_osi_implementation;
 #endif
 				break;
@@ -222,7 +222,7 @@ acpi_status acpi_ns_root_initialize(void)
 			default:
 
 				ACPI_ERROR((AE_INFO,
-					    "Unsupported initial type value %X",
+					    "Unsupported initial type value 0x%X",
 					    init_val->type));
 				acpi_ut_remove_reference(obj_desc);
 				obj_desc = NULL;

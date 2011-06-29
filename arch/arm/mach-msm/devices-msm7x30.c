@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2008 Google, Inc.
- * Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2008-2011, Code Aurora Forum. All rights reserved.
  *
  * This software is licensed under the terms of the GNU General Public
  * License version 2, as published by the Free Software Foundation, and
@@ -15,15 +15,19 @@
 
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
-
+#include <linux/msm_rotator.h>
 #include <linux/dma-mapping.h>
+#include <asm/clkdev.h>
 #include <mach/irqs.h>
 #include <mach/msm_iomap.h>
 #include <mach/dma.h>
 #include <mach/board.h>
+#include <asm/clkdev.h>
 
 #include "devices.h"
 #include "clock-7x30.h"
+#include "clock-pcom.h"
+#include "clock-voter.h"
 #include "gpio_hw.h"
 
 #include <asm/mach/flash.h>
@@ -33,8 +37,42 @@
 #ifdef CONFIG_PMIC8058
 #include <linux/mfd/pmic8058.h>
 #endif
+#include <mach/usbdiag.h>
+#include <mach/rpc_hsusb.h>
 
-#include "msm7200a-gpio.h"
+/* EBI THERMAL DRIVER */
+static struct resource msm_ebi0_thermal_resources[] = {
+	{
+		.start  = 0xA8600000,
+		.end    = 0xA86005FF,
+		.name   = "physbase",
+		.flags  = IORESOURCE_MEM
+	}
+};
+
+struct platform_device msm_ebi0_thermal = {
+	.name           = "msm_popmem-tm",
+	.id             = 0,
+	.num_resources  = 1,
+	.resource       = msm_ebi0_thermal_resources
+};
+
+static struct resource msm_ebi1_thermal_resources[] = {
+	{
+		.start  = 0xA8700000,
+		.end    = 0xA87005FF,
+		.name   = "physbase",
+		.flags  = IORESOURCE_MEM
+	}
+};
+
+struct platform_device msm_ebi1_thermal = {
+	.name           = "msm_popmem-tm",
+	.id             = 1,
+	.num_resources  = 1,
+	.resource       = msm_ebi1_thermal_resources
+};
+
 
 static struct resource resources_uart1[] = {
 	{
@@ -419,6 +457,21 @@ int msm_add_host(unsigned int host, struct msm_usb_host_platform_data *plat)
 	return platform_device_register(pdev);
 }
 
+#ifdef CONFIG_USB_ANDROID_DIAG
+struct usb_diag_platform_data usb_diag_pdata = {
+	.ch_name = DIAG_LEGACY,
+	.update_pid_and_serial_num = usb_diag_update_pid_and_serial_num,
+};
+
+struct platform_device usb_diag_device = {
+	.name	= "usb_diag",
+	.id	= -1,
+	.dev	= {
+		.platform_data = &usb_diag_pdata,
+	},
+};
+#endif
+
 #define MSM_NAND_PHYS		0xA0200000
 #define MSM_NANDC01_PHYS	0xA0240000
 #define MSM_NANDC10_PHYS	0xA0280000
@@ -667,7 +720,7 @@ static struct resource msm_vidc_720p_resources[] = {
 };
 
 struct platform_device msm_device_vidc_720p = {
-	.name = "msm_vidc_720p",
+	.name = "msm_vidc",
 	.id = 0,
 	.num_resources = ARRAY_SIZE(msm_vidc_720p_resources),
 	.resource = msm_vidc_720p_resources,
@@ -742,6 +795,17 @@ static struct resource msm_tvenc_resources[] = {
 	}
 };
 
+#ifdef CONFIG_FB_MSM_TVOUT
+static struct resource tvout_device_resources[] = {
+	{
+		.name  = "tvout_device_irq",
+		.start = INT_TV_ENC,
+		.end   = INT_TV_ENC,
+		.flags = IORESOURCE_IRQ,
+	},
+};
+#endif
+
 static struct platform_device msm_mdp_device = {
 	.name   = "mdp",
 	.id     = 0,
@@ -786,6 +850,15 @@ static struct platform_device msm_tvenc_device = {
 	.num_resources  = ARRAY_SIZE(msm_tvenc_resources),
 	.resource       = msm_tvenc_resources,
 };
+
+#ifdef CONFIG_FB_MSM_TVOUT
+static struct platform_device tvout_msm_device = {
+	.name = "tvout_device",
+	.id = 0,
+	.num_resources = ARRAY_SIZE(tvout_device_resources),
+	.resource = tvout_device_resources,
+};
+#endif
 
 /* TSIF begin */
 #if defined(CONFIG_TSIF) || defined(CONFIG_TSIF_MODULE)
@@ -844,11 +917,38 @@ static struct resource resources_msm_rotator[] = {
 	},
 };
 
+static struct msm_rot_clocks rotator_clocks[] = {
+	{
+		.clk_name = "rotator_clk",
+		.clk_type = ROTATOR_AXI_CLK,
+		.clk_rate = 0,
+	},
+	{
+		.clk_name = "rotator_pclk",
+		.clk_type = ROTATOR_PCLK,
+		.clk_rate = 0,
+	},
+	{
+		.clk_name = "rotator_imem_clk",
+		.clk_type = ROTATOR_IMEM_CLK,
+		.clk_rate = 0,
+	},
+};
+
+static struct msm_rotator_platform_data rotator_pdata = {
+	.number_of_clocks = ARRAY_SIZE(rotator_clocks),
+	.hardware_version_number = 0x1000303,
+	.rotator_clks = rotator_clocks,
+};
+
 struct platform_device msm_rotator_device = {
 	.name		= "msm_rotator",
 	.id		= 0,
 	.num_resources  = ARRAY_SIZE(resources_msm_rotator),
 	.resource       = resources_msm_rotator,
+	.dev = {
+		.platform_data = &rotator_pdata,
+	},
 };
 #endif
 
@@ -881,6 +981,10 @@ void __init msm_fb_register_device(char *name, void *data)
 		msm_register_device(&msm_lcdc_device, data);
 	else if (!strncmp(name, "dtv", 3))
 		msm_register_device(&msm_dtv_device, data);
+#ifdef CONFIG_FB_MSM_TVOUT
+	else if (!strncmp(name, "tvout_device", 12))
+		msm_register_device(&tvout_msm_device, data);
+#endif
 	else
 		printk(KERN_ERR "%s: unknown device! %s\n", __func__, name);
 }
@@ -899,30 +1003,51 @@ void __init msm_camera_register_device(void *res, uint32_t num,
 	msm_register_device(&msm_camera_device, data);
 }
 
-struct clk msm_clocks_7x30[] = {
+struct clk_lookup msm_clocks_7x30[] = {
 	CLK_PCOM("adsp_clk",	ADSP_CLK,	NULL, 0),
 	CLK_PCOM("codec_ssbi_clk",	CODEC_SSBI_CLK,	NULL, 0),
 	CLK_PCOM("ebi1_clk",	EBI1_CLK,	NULL, CLK_MIN),
 	CLK_PCOM("ecodec_clk",	ECODEC_CLK,	NULL, 0),
 	CLK_PCOM("gp_clk",	GP_CLK,		NULL, 0),
-	CLK_PCOM("uart_clk",	UART3_CLK,	&msm_device_uart3.dev, OFF),
+	CLK_PCOM("uart_clk",	UART3_CLK,	"msm_serial.2", OFF),
 	CLK_PCOM("usb_phy_clk",	USB_PHY_CLK,	NULL, 0),
 	CLK_PCOM("vdc_clk",	VDC_CLK,	NULL, OFF | CLK_MIN),
-	CLK_PCOM("pbus_clk",	PBUS_CLK,	NULL, CLK_MIN),
+	{
+		.con_id = "pbus_clk",
+		.clk = &(struct clk){
+			.id = P_PBUS_CLK,
+			.remote_id = P_PBUS_CLK,
+			.ops = &clk_ops_pcom_div2,
+			.flags = CLK_MIN,
+			.dbg_name = "pbus_clk",
+		}
+	},
+
+	CLK_VOTER("ebi1_dtv_clk",	EBI_DTV_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_kgsl_clk",	EBI_KGSL_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_lcdc_clk",	EBI_LCDC_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_mddi_clk",	EBI_MDDI_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_tv_clk",	EBI_TV_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_usb_clk",	EBI_USB_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_vcd_clk",	EBI_VCD_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_vfe_clk",	EBI_VFE_CLK,	"pbus_clk", NULL, 0),
+	CLK_VOTER("ebi1_pm_qos_clk",	EBI_PM_QOS_CLK,	"pbus_clk", NULL, 0),
 
 	CLK_7X30("adm_clk",	ADM_CLK,	NULL, 0),
+	CLK_7X30L("adm_pclk",   ADM_P_CLK,       NULL, 0),
 	CLK_7X30("cam_m_clk",	CAM_M_CLK,	NULL, 0),
 	CLK_7X30("camif_pad_pclk",	CAMIF_PAD_P_CLK,	NULL, OFF),
-	CLK_7X30("emdh_clk",	EMDH_CLK,	NULL, OFF | CLK_MINMAX),
-	CLK_7X30("emdh_pclk",	EMDH_P_CLK,	NULL, OFF),
+	CLK_7X30("ce_clk",	CE_CLK,		NULL, 0),
+	CLK_7X30("emdh_clk",	EMDH_CLK,	"msm_mddi.1", OFF | CLK_MINMAX),
+	CLK_7X30("emdh_pclk",	EMDH_P_CLK,	"msm_mddi.1", OFF),
 	CLK_7X30("grp_2d_clk",	GRP_2D_CLK,	NULL, 0),
 	CLK_7X30("grp_2d_pclk",	GRP_2D_P_CLK,	NULL, 0),
 	CLK_7X30("grp_clk",	GRP_3D_CLK,	NULL, 0),
 	CLK_7X30("grp_pclk",	GRP_3D_P_CLK,	NULL, 0),
 	CLK_7X30S("grp_src_clk", GRP_3D_SRC_CLK, GRP_3D_CLK,	NULL, 0),
 	CLK_7X30("hdmi_clk",	HDMI_CLK,	NULL, 0),
-	CLK_7X30("i2c_clk",	I2C_CLK,	&msm_device_i2c.dev, 0),
-	CLK_7X30("i2c_clk",	I2C_2_CLK,	&msm_device_i2c_2.dev, 0),
+	CLK_7X30("i2c_clk",	I2C_CLK,	"msm_i2c.0", 0),
+	CLK_7X30("i2c_clk",	I2C_2_CLK,	"msm_i2c.2", 0),
 	CLK_7X30("imem_clk",	IMEM_CLK,	NULL, OFF),
 	CLK_7X30("jpeg_clk",	JPEG_CLK,	NULL, OFF),
 	CLK_7X30("jpeg_pclk",	JPEG_P_CLK,	NULL, OFF),
@@ -946,19 +1071,19 @@ struct clk msm_clocks_7x30[] = {
 	CLK_7X30("mi2s_codec_tx_s_clk",	MI2S_CODEC_TX_S_CLK,  NULL, 0),
 	CLK_7X30("mi2s_m_clk",		MI2S_M_CLK,  		NULL, 0),
 	CLK_7X30("mi2s_s_clk",		MI2S_S_CLK,  		NULL, 0),
-	CLK_7X30("qup_clk",	QUP_I2C_CLK,	&qup_device_i2c.dev, 0),
+	CLK_7X30("qup_clk",	QUP_I2C_CLK,	"qup_i2c.4", 0),
 	CLK_7X30("rotator_clk",	AXI_ROTATOR_CLK,		NULL, 0),
 	CLK_7X30("rotator_imem_clk",	ROTATOR_IMEM_CLK,	NULL, OFF),
 	CLK_7X30("rotator_pclk",	ROTATOR_P_CLK,		NULL, OFF),
 	CLK_7X30("sdac_clk",	SDAC_CLK,	NULL, OFF),
-	CLK_7X30("sdc_clk",	SDC1_CLK,	&msm_device_sdc1.dev, OFF),
-	CLK_7X30("sdc_pclk",	SDC1_P_CLK,	&msm_device_sdc1.dev, OFF),
-	CLK_7X30("sdc_clk",	SDC2_CLK,	&msm_device_sdc2.dev, OFF),
-	CLK_7X30("sdc_pclk",	SDC2_P_CLK,	&msm_device_sdc2.dev, OFF),
-	CLK_7X30("sdc_clk",	SDC3_CLK,	&msm_device_sdc3.dev, OFF),
-	CLK_7X30("sdc_pclk",	SDC3_P_CLK,	&msm_device_sdc3.dev, OFF),
-	CLK_7X30("sdc_clk",	SDC4_CLK,	&msm_device_sdc4.dev, OFF),
-	CLK_7X30("sdc_pclk",	SDC4_P_CLK,	&msm_device_sdc4.dev, OFF),
+	CLK_7X30("sdc_clk",	SDC1_CLK,	"msm_sdcc.1", OFF),
+	CLK_7X30("sdc_pclk",	SDC1_P_CLK,	"msm_sdcc.1", OFF),
+	CLK_7X30("sdc_clk",	SDC2_CLK,	"msm_sdcc.2", OFF),
+	CLK_7X30("sdc_pclk",	SDC2_P_CLK,	"msm_sdcc.2", OFF),
+	CLK_7X30("sdc_clk",	SDC3_CLK,	"msm_sdcc.3", OFF),
+	CLK_7X30("sdc_pclk",	SDC3_P_CLK,	"msm_sdcc.3", OFF),
+	CLK_7X30("sdc_clk",	SDC4_CLK,	"msm_sdcc.4", OFF),
+	CLK_7X30("sdc_pclk",	SDC4_P_CLK,	"msm_sdcc.4", OFF),
 	CLK_7X30("spi_clk",	SPI_CLK,	NULL, 0),
 	CLK_7X30("spi_pclk",	SPI_P_CLK,	NULL, 0),
 	CLK_7X30("tsif_ref_clk", TSIF_REF_CLK,	NULL, 0),
@@ -966,10 +1091,12 @@ struct clk msm_clocks_7x30[] = {
 	CLK_7X30("tv_dac_clk",	TV_DAC_CLK,	NULL, 0),
 	CLK_7X30("tv_enc_clk",	TV_ENC_CLK,	NULL, 0),
 	CLK_7X30S("tv_src_clk",	TV_CLK, 	TV_ENC_CLK,	NULL, 0),
-	CLK_7X30("uart_clk",	UART1_CLK,	&msm_device_uart1.dev, OFF),
-	CLK_7X30("uart_clk",	UART2_CLK,	&msm_device_uart2.dev, 0),
-	CLK_7X30("uartdm_clk",	UART1DM_CLK,	&msm_device_uart_dm1.dev, OFF),
-	CLK_7X30("uartdm_clk",	UART2DM_CLK,	&msm_device_uart_dm2.dev, 0),
+	CLK_7X30("uart_clk",	UART1_CLK,	"msm_serial.0", OFF),
+	CLK_7X30("uart_clk",	UART2_CLK,	"msm_serial.1", 0),
+	CLK_7X30("uartdm_clk",	UART1DM_CLK,	"msm_serial_hs.0", OFF),
+	CLK_7X30L("uartdm_pclk", UART1DM_P_CLK,	"msm_serial_hs.0", 0),
+	CLK_7X30("uartdm_clk",	UART2DM_CLK,	"msm_serial_hs.1", 0),
+	CLK_7X30L("uartdm_pclk", UART2DM_P_CLK,	"msm_serial_hs.1", 0),
 	CLK_7X30("usb_hs_clk",		USB_HS_CLK,		NULL, OFF),
 	CLK_7X30("usb_hs_pclk",		USB_HS_P_CLK,		NULL, OFF),
 	CLK_7X30("usb_hs_core_clk",	USB_HS_CORE_CLK,	NULL, OFF),
@@ -992,28 +1119,3 @@ struct clk msm_clocks_7x30[] = {
 };
 
 unsigned msm_num_clocks_7x30 = ARRAY_SIZE(msm_clocks_7x30);
-
-#ifdef CONFIG_GPIOLIB
-static struct msm7200a_gpio_platform_data gpio_platform_data[] = {
-	MSM7200A_GPIO_PLATFORM_DATA(0,   0,  15, INT_GPIO_GROUP1),
-	MSM7200A_GPIO_PLATFORM_DATA(1,  16,  43, INT_GPIO_GROUP2),
-	MSM7200A_GPIO_PLATFORM_DATA(2,  44,  67, INT_GPIO_GROUP1),
-	MSM7200A_GPIO_PLATFORM_DATA(3,  68,  94, INT_GPIO_GROUP1),
-	MSM7200A_GPIO_PLATFORM_DATA(4,  95, 106, INT_GPIO_GROUP1),
-	MSM7200A_GPIO_PLATFORM_DATA(5, 107, 133, INT_GPIO_GROUP1),
-	MSM7200A_GPIO_PLATFORM_DATA(6, 134, 150, INT_GPIO_GROUP1),
-	MSM7200A_GPIO_PLATFORM_DATA(7, 151, 181, INT_GPIO_GROUP1),
-};
-
-struct platform_device msm_gpio_devices[] = {
-	MSM7200A_GPIO_DEVICE(0, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(1, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(2, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(3, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(4, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(5, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(6, gpio_platform_data),
-	MSM7200A_GPIO_DEVICE(7, gpio_platform_data),
-};
-#endif
-

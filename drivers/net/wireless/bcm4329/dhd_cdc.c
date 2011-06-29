@@ -21,7 +21,7 @@
  * software in any way with any other Broadcom software provided under a license
  * other than the GPL, without Broadcom's express prior written consent.
  *
- * $Id: dhd_cdc.c,v 1.22.4.2.4.7.2.34 2010/01/21 22:08:34 Exp $
+ * $Id: dhd_cdc.c,v 1.22.4.2.4.7.2.41 2010/06/23 19:58:18 Exp $
  *
  * BDC is like CDC, except it includes a header for data packets to convey
  * packet priority over the bus, and flags (e.g. to indicate checksum status
@@ -41,10 +41,6 @@
 #include <dhd_bus.h>
 #include <dhd_dbg.h>
 
-#ifdef SET_RANDOM_MAC_SOFTAP
-#include <linux/random.h>
-#include <linux/jiffies.h>
-#endif
 
 /* Packet alignment for most efficient SDIO (can change based on platform) */
 #ifndef DHD_SDALIGN
@@ -214,7 +210,7 @@ dhdcdc_set_ioctl(dhd_pub_t *dhd, int ifidx, uint cmd, void *buf, uint len)
 	msg->len = htol32(len);
 	msg->flags = (++prot->reqid << CDCF_IOC_ID_SHIFT) | CDCF_IOC_SET;
 	CDC_SET_IF_IDX(msg, ifidx);
-	msg->flags |= htol32(msg->flags);
+	msg->flags = htol32(msg->flags);
 
 	if (buf)
 		memcpy(prot->buf, buf, len);
@@ -326,23 +322,12 @@ dhd_prot_dump(dhd_pub_t *dhdp, struct bcmstrbuf *strbuf)
 	bcm_bprintf(strbuf, "Protocol CDC: reqid %d\n", dhdp->prot->reqid);
 }
 
-#ifdef APSTA_PINGTEST
-extern struct ether_addr guest_eas[MAX_GUEST];
-#endif
 
 void
 dhd_prot_hdrpush(dhd_pub_t *dhd, int ifidx, void *pktbuf)
 {
 #ifdef BDC
 	struct bdc_header *h;
-#ifdef APSTA_PINGTEST
-	struct	ether_header *eh;
-	int i;
-#ifdef DHD_DEBUG
-	char eabuf1[ETHER_ADDR_STR_LEN];
-	char eabuf2[ETHER_ADDR_STR_LEN];
-#endif /* DHD_DEBUG */
-#endif /* APSTA_PINGTEST */
 #endif /* BDC */
 
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
@@ -350,9 +335,6 @@ dhd_prot_hdrpush(dhd_pub_t *dhd, int ifidx, void *pktbuf)
 #ifdef BDC
 	/* Push BDC header used to convey priority for buses that don't */
 
-#ifdef APSTA_PINGTEST
-	eh = (struct ether_header *)PKTDATA(dhd->osh, pktbuf);
-#endif
 
 	PKTPUSH(dhd->osh, pktbuf, BDC_HEADER_LEN);
 
@@ -365,19 +347,6 @@ dhd_prot_hdrpush(dhd_pub_t *dhd, int ifidx, void *pktbuf)
 
 	h->priority = (PKTPRIO(pktbuf) & BDC_PRIORITY_MASK);
 	h->flags2 = 0;
-#ifdef APSTA_PINGTEST
-	for (i = 0; i < MAX_GUEST; ++i) {
-		if (!ETHER_ISNULLADDR(eh->ether_dhost) &&
-		    bcmp(eh->ether_dhost, guest_eas[i].octet, ETHER_ADDR_LEN) == 0) {
-			DHD_TRACE(("send on if 1; sa %s, da %s\n",
-			       bcm_ether_ntoa((struct ether_addr *)(eh->ether_shost), eabuf1),
-			       bcm_ether_ntoa((struct ether_addr *)(eh->ether_dhost), eabuf2)));
-			/* assume all guest STAs are on interface 1 */
-			h->flags2 = 1;
-			break;
-		}
-	}
-#endif /* APSTA_PINGTEST */
 	h->rssi = 0;
 #endif /* BDC */
 	BDC_SET_IF_IDX(h, ifidx);
@@ -630,9 +599,7 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 	uint32					pattern_size;
 	char buf[256];
 	uint filter_mode = 1;
-#ifdef SET_RANDOM_MAC_SOFTAP
-	uint rand_mac;
-#endif
+
 	dhd_os_proto_block(dhd);
 	/* Get the device MAC address */
 	strcpy(iovbuf, "cur_etheraddr");
@@ -641,31 +608,7 @@ dhd_preinit_ioctls(dhd_pub_t *dhd)
 		dhd_os_proto_unblock(dhd);
 		return BCME_NOTUP;
 	}
-
 	memcpy(dhd->mac.octet, iovbuf, ETHER_ADDR_LEN);
-
-#ifdef SET_RANDOM_MAC_SOFTAP
-	if (strstr(fw_path, "apsta") != NULL) {
-		srandom32((uint)jiffies);
-		rand_mac = random32();
-		iovbuf[0] |= 0x02;		/* locally administered bit */
-		iovbuf[3] = (unsigned char)rand_mac;
-		iovbuf[4] = (unsigned char)(rand_mac >> 8);
-		iovbuf[5] = (unsigned char)(rand_mac >> 16);
-
-		printk("Broadcom Dongle Host Driver mac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-			 iovbuf[0], iovbuf[1], iovbuf[2], iovbuf[3], iovbuf[4], iovbuf[5]);
-
-		bcm_mkiovar("cur_etheraddr", (void *)iovbuf, ETHER_ADDR_LEN, buf, sizeof(buf));
-		ret = dhdcdc_set_ioctl(dhd, 0, WLC_SET_VAR, buf, sizeof(buf));
-		if (ret < 0) {
-			DHD_ERROR(("%s: can't set MAC address , error=%d\n", __FUNCTION__, ret));
-		}
-		else {
-			memcpy(dhd->mac.octet, iovbuf, ETHER_ADDR_LEN);
-		}
-	}
-#endif /* SET_RANDOM_MAC_SOFTAP */
 
 	/* Set Country code */
 	if (dhd->country_code[0] != 0) {

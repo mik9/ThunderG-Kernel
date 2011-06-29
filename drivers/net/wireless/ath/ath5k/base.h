@@ -36,7 +36,7 @@
  */
 
 /*
- * Defintions for the Atheros Wireless LAN controller driver.
+ * Definitions for the Atheros Wireless LAN controller driver.
  */
 #ifndef _DEV_ATH_ATHVAR_H
 #define _DEV_ATH_ATHVAR_H
@@ -50,6 +50,7 @@
 
 #include "ath5k.h"
 #include "debug.h"
+#include "ani.h"
 
 #include "../regd.h"
 #include "../ath.h"
@@ -105,6 +106,38 @@ struct ath5k_rfkill {
 	struct tasklet_struct toggleq;
 };
 
+/* statistics */
+struct ath5k_statistics {
+	/* antenna use */
+	unsigned int antenna_rx[5];	/* frames count per antenna RX */
+	unsigned int antenna_tx[5];	/* frames count per antenna TX */
+
+	/* frame errors */
+	unsigned int rx_all_count;	/* all RX frames, including errors */
+	unsigned int tx_all_count;	/* all TX frames, including errors */
+	unsigned int rxerr_crc;
+	unsigned int rxerr_phy;
+	unsigned int rxerr_phy_code[32];
+	unsigned int rxerr_fifo;
+	unsigned int rxerr_decrypt;
+	unsigned int rxerr_mic;
+	unsigned int rxerr_proc;
+	unsigned int rxerr_jumbo;
+	unsigned int txerr_retry;
+	unsigned int txerr_fifo;
+	unsigned int txerr_filt;
+
+	/* MIB counters */
+	unsigned int ack_fail;
+	unsigned int rts_fail;
+	unsigned int rts_ok;
+	unsigned int fcs_error;
+	unsigned int beacons;
+
+	unsigned int mib_intr;
+	unsigned int rxorn_intr;
+};
+
 #if CHAN_DEBUG
 #define ATH_CHAN_MAX	(26+26+26+200+200)
 #else
@@ -115,11 +148,8 @@ struct ath5k_rfkill {
  * associated with an instance of a device */
 struct ath5k_softc {
 	struct pci_dev		*pdev;		/* for dma mapping */
-	struct ath_common	common;
 	void __iomem		*iobase;	/* address of the device */
 	struct mutex		lock;		/* dev-level lock */
-	struct ieee80211_tx_queue_stats tx_stats[AR5K_NUM_TX_QUEUES];
-	struct ieee80211_low_level_stats ll_stats;
 	struct ieee80211_hw	*hw;		/* IEEE 802.11 common */
 	struct ieee80211_supported_band sbands[IEEE80211_NUM_BANDS];
 	struct ieee80211_channel channels[ATH_CHAN_MAX];
@@ -153,8 +183,6 @@ struct ath5k_softc {
 	struct ieee80211_vif *vif;
 
 	enum ath5k_int		imask;		/* interrupt mask copy */
-
-	DECLARE_BITMAP(keymap, AR5K_KEYCACHE_SIZE); /* key use bit map */
 
 	u8			bssidmask[ETH_ALEN];
 
@@ -193,24 +221,18 @@ struct ath5k_softc {
 	struct ath5k_txq	*cabq;		/* content after beacon */
 
 	int 			power_level;	/* Requested tx power in dbm */
-	bool			assoc;		/* assocate state */
+	bool			assoc;		/* associate state */
 	bool			enable_beacon;	/* true if beacons are on */
+
+	struct ath5k_statistics	stats;
+
+	struct ath5k_ani_state	ani_state;
+	struct tasklet_struct	ani_tasklet;	/* ANI calibration */
 };
 
 #define ath5k_hw_hasbssidmask(_ah) \
 	(ath5k_hw_get_capability(_ah, AR5K_CAP_BSSIDMASK, 0, NULL) == 0)
 #define ath5k_hw_hasveol(_ah) \
 	(ath5k_hw_get_capability(_ah, AR5K_CAP_VEOL, 0, NULL) == 0)
-
-static inline struct ath_common *ath5k_hw_common(struct ath5k_hw *ah)
-{
-	return &ah->ah_sc->common;
-}
-
-static inline struct ath_regulatory *ath5k_hw_regulatory(struct ath5k_hw *ah)
-{
-	return &(ath5k_hw_common(ah)->regulatory);
-
-}
 
 #endif

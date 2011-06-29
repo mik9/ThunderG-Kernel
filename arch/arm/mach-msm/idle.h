@@ -34,4 +34,10 @@ int msm_arch_idle(void);
 int msm_pm_collapse(void);
 void msm_pm_collapse_exit(void);
 
+#ifdef CONFIG_CPU_V7
+void msm_pm_boot_entry(void);
+void msm_pm_write_boot_vector(unsigned int cpu, unsigned long address);
+extern unsigned long msm_pm_pc_pgd;
+#endif
+
 #endif

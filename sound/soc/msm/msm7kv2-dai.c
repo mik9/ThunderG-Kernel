@@ -2,7 +2,7 @@
  *
  * Copyright (C) 2008 Google, Inc.
  * Copyright (C) 2008 HTC Corporation
- * Copyright (c) 2008-2009, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
  *
  * Derived from msm-pcm.c and msm7201.c.
  *
@@ -30,13 +30,13 @@
 #include <sound/initval.h>
 #include <sound/soc.h>
 #include "msm7kv2-pcm.h"
+#include <linux/slab.h>
 
 struct snd_soc_dai msm_dais[] = {
 {
 	.name = "CODEC_DAI",
 	.playback = {
 		.stream_name = "Playback",
-		.channels_min = USE_CHANNELS_MIN,
 		.channels_max = USE_CHANNELS_MAX,
 		.rates = USE_RATE,
 		.rate_min = USE_RATE_MIN,
@@ -45,7 +45,6 @@ struct snd_soc_dai msm_dais[] = {
 	},
 	.capture = {
 		.stream_name = "Capture",
-		.channels_min = USE_CHANNELS_MIN,
 		.channels_max = USE_CHANNELS_MAX,
 		.rate_min = USE_RATE_MIN,
 		.rates = USE_RATE,
@@ -101,16 +100,8 @@ int msm_pcm_probe(struct platform_device *devptr)
 		goto __nopcm;
 	}
 
-	ret = snd_soc_init_card(socdev);
-	if (ret < 0) {
-		printk(KERN_ERR "msm_soc: failed to register card\n");
-		goto __nodev;
-	}
-
 	return 0;
 
-__nodev:
-	snd_soc_free_pcms(socdev);
 __nopcm:
 	kfree(codec);
 	return ret;

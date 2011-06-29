@@ -26,8 +26,6 @@
 # define B43_DEBUG	0
 #endif
 
-#define B43_RX_MAX_SSI			60
-
 /* MMIO offsets */
 #define B43_MMIO_DMA0_REASON		0x20
 #define B43_MMIO_DMA0_IRQ_MASK		0x24
@@ -106,6 +104,7 @@
 #define B43_MMIO_MACFILTER_CONTROL	0x420
 #define B43_MMIO_MACFILTER_DATA		0x422
 #define B43_MMIO_RCMTA_COUNT		0x43C
+#define B43_MMIO_PSM_PHY_HDR		0x492
 #define B43_MMIO_RADIO_HWENABLED_LO	0x49A
 #define B43_MMIO_GPIO_CONTROL		0x49C
 #define B43_MMIO_GPIO_MASK		0x49E
@@ -256,6 +255,14 @@ enum {
 #define B43_SHM_SH_MAXBFRAMES		0x0080	/* Maximum number of frames in a burst */
 #define B43_SHM_SH_SPUWKUP		0x0094	/* pre-wakeup for synth PU in us */
 #define B43_SHM_SH_PRETBTT		0x0096	/* pre-TBTT in us */
+/* SHM_SHARED tx iq workarounds */
+#define B43_SHM_SH_NPHY_TXIQW0		0x0700
+#define B43_SHM_SH_NPHY_TXIQW1		0x0702
+#define B43_SHM_SH_NPHY_TXIQW2		0x0704
+#define B43_SHM_SH_NPHY_TXIQW3		0x0706
+/* SHM_SHARED tx pwr ctrl */
+#define B43_SHM_SH_NPHY_TXPWR_INDX0	0x0708
+#define B43_SHM_SH_NPHY_TXPWR_INDX1	0x070E
 
 /* SHM_SCRATCH offsets */
 #define B43_SHM_SC_MINCONT		0x0003	/* Minimum contention window */

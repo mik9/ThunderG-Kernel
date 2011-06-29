@@ -25,6 +25,7 @@
 #include <linux/slab.h>
 #include <linux/namei.h>
 #include <linux/mount.h>
+#include <linux/file.h>
 #include "cifsfs.h"
 #include "cifspdu.h"
 #include "cifsglob.h"
@@ -73,7 +74,7 @@ cifs_bp_rename_retry:
 		namelen += (1 + temp->d_name.len);
 		temp = temp->d_parent;
 		if (temp == NULL) {
-			cERROR(1, ("corrupt dentry"));
+			cERROR(1, "corrupt dentry");
 			return NULL;
 		}
 	}
@@ -90,19 +91,18 @@ cifs_bp_rename_retry:
 			full_path[namelen] = dirsep;
 			strncpy(full_path + namelen + 1, temp->d_name.name,
 				temp->d_name.len);
-			cFYI(0, ("name: %s", full_path + namelen));
+			cFYI(0, "name: %s", full_path + namelen);
 		}
 		temp = temp->d_parent;
 		if (temp == NULL) {
-			cERROR(1, ("corrupt dentry"));
+			cERROR(1, "corrupt dentry");
 			kfree(full_path);
 			return NULL;
 		}
 	}
 	if (namelen != pplen + dfsplen) {
-		cERROR(1,
-		       ("did not end path lookup where expected namelen is %d",
-			namelen));
+		cERROR(1, "did not end path lookup where expected namelen is %d",
+			namelen);
 		/* presumably this is only possible if racing with a rename
 		of one of the parent directories  (we can not lock the dentries
 		above us to prevent this, but retrying should be harmless) */
@@ -130,11 +130,17 @@ cifs_bp_rename_retry:
 	return full_path;
 }
 
+/*
+ * When called with struct file pointer set to NULL, there is no way we could
+ * update file->private_data, but getting it stuck on openFileList provides a
+ * way to access it from cifs_fill_filedata and thereby set file->private_data
+ * from cifs_open.
+ */
 struct cifsFileInfo *
 cifs_new_fileinfo(struct inode *newinode, __u16 fileHandle,
-		  struct file *file, struct vfsmount *mnt, unsigned int oflags)
+		  struct file *file, struct vfsmount *mnt, unsigned int oflags,
+		  __u32 oplock)
 {
-	int oplock = 0;
 	struct cifsFileInfo *pCifsFile;
 	struct cifsInodeInfo *pCifsInode;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(mnt->mnt_sb);
@@ -142,9 +148,6 @@ cifs_new_fileinfo(struct inode *newinode, __u16 fileHandle,
 	pCifsFile = kzalloc(sizeof(struct cifsFileInfo), GFP_KERNEL);
 	if (pCifsFile == NULL)
 		return pCifsFile;
-
-	if (oplockEnabled)
-		oplock = REQ_OPLOCK;
 
 	pCifsFile->netfid = fileHandle;
 	pCifsFile->pid = current->tgid;
@@ -173,18 +176,19 @@ cifs_new_fileinfo(struct inode *newinode, __u16 fileHandle,
 		if ((oplock & 0xF) == OPLOCK_EXCLUSIVE) {
 			pCifsInode->clientCanCacheAll = true;
 			pCifsInode->clientCanCacheRead = true;
-			cFYI(1, ("Exclusive Oplock inode %p", newinode));
+			cFYI(1, "Exclusive Oplock inode %p", newinode);
 		} else if ((oplock & 0xF) == OPLOCK_READ)
 				pCifsInode->clientCanCacheRead = true;
 	}
 	write_unlock(&GlobalSMBSeslock);
 
+	file->private_data = pCifsFile;
+
 	return pCifsFile;
 }
 
 int cifs_posix_open(char *full_path, struct inode **pinode,
-			struct vfsmount *mnt, struct super_block *sb,
-			int mode, int oflags,
+			struct super_block *sb, int mode, int oflags,
 			__u32 *poplock, __u16 *pnetfid, int xid)
 {
 	int rc;
@@ -193,7 +197,7 @@ int cifs_posix_open(char *full_path, struct inode **pinode,
 	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
 	struct cifs_fattr fattr;
 
-	cFYI(1, ("posix open %s", full_path));
+	cFYI(1, "posix open %s", full_path);
 
 	presp_data = kzalloc(sizeof(FILE_UNIX_BASIC_INFO), GFP_KERNEL);
 	if (presp_data == NULL)
@@ -215,7 +219,8 @@ int cifs_posix_open(char *full_path, struct inode **pinode,
 		posix_flags |= SMB_O_EXCL;
 	if (oflags & O_TRUNC)
 		posix_flags |= SMB_O_TRUNC;
-	if (oflags & O_SYNC)
+	/* be safe and imply O_SYNC for O_DSYNC */
+	if (oflags & O_DSYNC)
 		posix_flags |= SMB_O_SYNC;
 	if (oflags & O_DIRECTORY)
 		posix_flags |= SMB_O_DIRECTORY;
@@ -242,6 +247,7 @@ int cifs_posix_open(char *full_path, struct inode **pinode,
 
 	/* get new inode and set it up */
 	if (*pinode == NULL) {
+		cifs_fill_uniqueid(sb, &fattr);
 		*pinode = cifs_iget(sb, &fattr);
 		if (!*pinode) {
 			rc = -ENOMEM;
@@ -250,9 +256,6 @@ int cifs_posix_open(char *full_path, struct inode **pinode,
 	} else {
 		cifs_fattr_to_inode(*pinode, &fattr);
 	}
-
-	if (mnt)
-		cifs_new_fileinfo(*pinode, *pnetfid, NULL, mnt, oflags);
 
 posix_open_ret:
 	kfree(presp_data);
@@ -281,7 +284,6 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 	int create_options = CREATE_NOT_DIR;
 	__u32 oplock = 0;
 	int oflags;
-	bool posix_create = false;
 	/*
 	 * BB below access is probably too much for mknod to request
 	 *    but we have to do query and setpathinfo so requesting
@@ -322,7 +324,6 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 	    (CIFS_UNIX_POSIX_PATH_OPS_CAP &
 			le64_to_cpu(tcon->fsUnixInfo.Capability))) {
 		rc = cifs_posix_open(full_path, &newinode,
-			nd ? nd->path.mnt : NULL,
 			inode->i_sb, mode, oflags, &oplock, &fileHandle, xid);
 		/* EIO could indicate that (posix open) operation is not
 		   supported, despite what server claimed in capability
@@ -330,7 +331,6 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 		   handled in posix open */
 
 		if (rc == 0) {
-			posix_create = true;
 			if (newinode == NULL) /* query inode info */
 				goto cifs_create_get_file_info;
 			else /* success, no need to query */
@@ -360,7 +360,7 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 		else if ((oflags & O_CREAT) == O_CREAT)
 			disposition = FILE_OPEN_IF;
 		else
-			cFYI(1, ("Create flag not set in create function"));
+			cFYI(1, "Create flag not set in create function");
 	}
 
 	/* BB add processing to set equivalent of mode - e.g. via CreateX with
@@ -396,7 +396,7 @@ cifs_create(struct inode *inode, struct dentry *direntry, int mode,
 			cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SPECIAL_CHR);
 	}
 	if (rc) {
-		cFYI(1, ("cifs_create returned 0x%x", rc));
+		cFYI(1, "cifs_create returned 0x%x", rc);
 		goto cifs_create_out;
 	}
 
@@ -459,16 +459,30 @@ cifs_create_set_dentry:
 	if (rc == 0)
 		setup_cifs_dentry(tcon, direntry, newinode);
 	else
-		cFYI(1, ("Create worked, get_inode_info failed rc = %d", rc));
+		cFYI(1, "Create worked, get_inode_info failed rc = %d", rc);
 
-	/* nfsd case - nfs srv does not set nd */
-	if ((nd == NULL) || (!(nd->flags & LOOKUP_OPEN))) {
-		/* mknod case - do not leave file open */
+	if (newinode && nd && (nd->flags & LOOKUP_OPEN)) {
+		struct cifsFileInfo *pfile_info;
+		struct file *filp;
+
+		filp = lookup_instantiate_filp(nd, direntry, generic_file_open);
+		if (IS_ERR(filp)) {
+			rc = PTR_ERR(filp);
+			CIFSSMBClose(xid, tcon, fileHandle);
+			goto cifs_create_out;
+		}
+
+		pfile_info = cifs_new_fileinfo(newinode, fileHandle, filp,
+					       nd->path.mnt, oflags, oplock);
+		if (pfile_info == NULL) {
+			fput(filp);
+			CIFSSMBClose(xid, tcon, fileHandle);
+			rc = -ENOMEM;
+		}
+	} else {
 		CIFSSMBClose(xid, tcon, fileHandle);
-	} else if (!(posix_create) && (newinode)) {
-			cifs_new_fileinfo(newinode, fileHandle, NULL,
-						nd->path.mnt, oflags);
 	}
+
 cifs_create_out:
 	kfree(buf);
 	kfree(full_path);
@@ -533,7 +547,7 @@ int cifs_mknod(struct inode *inode, struct dentry *direntry, int mode,
 			u16 fileHandle;
 			FILE_ALL_INFO *buf;
 
-			cFYI(1, ("sfu compat create special file"));
+			cFYI(1, "sfu compat create special file");
 
 			buf = kmalloc(sizeof(FILE_ALL_INFO), GFP_KERNEL);
 			if (buf == NULL) {
@@ -612,14 +626,15 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	bool posix_open = false;
 	struct cifs_sb_info *cifs_sb;
 	struct cifsTconInfo *pTcon;
+	struct cifsFileInfo *cfile;
 	struct inode *newInode = NULL;
 	char *full_path = NULL;
 	struct file *filp;
 
 	xid = GetXid();
 
-	cFYI(1, ("parent inode = 0x%p name is: %s and dentry = 0x%p",
-	      parent_dir_inode, direntry->d_name.name, direntry));
+	cFYI(1, "parent inode = 0x%p name is: %s and dentry = 0x%p",
+	      parent_dir_inode, direntry->d_name.name, direntry);
 
 	/* check whether path exists */
 
@@ -634,7 +649,7 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 		int i;
 		for (i = 0; i < direntry->d_name.len; i++)
 			if (direntry->d_name.name[i] == '\\') {
-				cFYI(1, ("Invalid file name"));
+				cFYI(1, "Invalid file name");
 				FreeXid(xid);
 				return ERR_PTR(-EINVAL);
 			}
@@ -659,11 +674,11 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	}
 
 	if (direntry->d_inode != NULL) {
-		cFYI(1, ("non-NULL inode in lookup"));
+		cFYI(1, "non-NULL inode in lookup");
 	} else {
-		cFYI(1, ("NULL inode in lookup"));
+		cFYI(1, "NULL inode in lookup");
 	}
-	cFYI(1, ("Full path: %s inode = 0x%p", full_path, direntry->d_inode));
+	cFYI(1, "Full path: %s inode = 0x%p", full_path, direntry->d_inode);
 
 	/* Posix open is only called (at lookup time) for file create now.
 	 * For opens (rather than creates), because we do not know if it
@@ -679,7 +694,7 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 		if (nd && !(nd->flags & (LOOKUP_PARENT | LOOKUP_DIRECTORY)) &&
 		     (nd->flags & LOOKUP_OPEN) && !pTcon->broken_posix_open &&
 		     (nd->intent.open.flags & O_CREAT)) {
-			rc = cifs_posix_open(full_path, &newInode, nd->path.mnt,
+			rc = cifs_posix_open(full_path, &newInode,
 					parent_dir_inode->i_sb,
 					nd->intent.open.create_mode,
 					nd->intent.open.flags, &oplock,
@@ -709,8 +724,26 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 		else
 			direntry->d_op = &cifs_dentry_ops;
 		d_add(direntry, newInode);
-		if (posix_open)
-			filp = lookup_instantiate_filp(nd, direntry, NULL);
+		if (posix_open) {
+			filp = lookup_instantiate_filp(nd, direntry,
+						       generic_file_open);
+			if (IS_ERR(filp)) {
+				rc = PTR_ERR(filp);
+				CIFSSMBClose(xid, pTcon, fileHandle);
+				goto lookup_out;
+			}
+
+			cfile = cifs_new_fileinfo(newInode, fileHandle, filp,
+						  nd->path.mnt,
+						  nd->intent.open.flags,
+						  oplock);
+			if (cfile == NULL) {
+				fput(filp);
+				CIFSSMBClose(xid, pTcon, fileHandle);
+				rc = -ENOMEM;
+				goto lookup_out;
+			}
+		}
 		/* since paths are not looked up by component - the parent
 		   directories are presumed to be good here */
 		renew_parental_timestamps(direntry);
@@ -726,11 +759,12 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	/*	if it was once a directory (but how can we tell?) we could do
 		shrink_dcache_parent(direntry); */
 	} else if (rc != -EACCES) {
-		cERROR(1, ("Unexpected lookup error %d", rc));
+		cERROR(1, "Unexpected lookup error %d", rc);
 		/* We special case check for Access Denied - since that
 		is a common return code */
 	}
 
+lookup_out:
 	kfree(full_path);
 	FreeXid(xid);
 	return ERR_PTR(rc);
@@ -742,11 +776,11 @@ cifs_d_revalidate(struct dentry *direntry, struct nameidata *nd)
 	int isValid = 1;
 
 	if (direntry->d_inode) {
-		if (cifs_revalidate(direntry))
+		if (cifs_revalidate_dentry(direntry))
 			return 0;
 	} else {
-		cFYI(1, ("neg dentry 0x%p name = %s",
-			 direntry, direntry->d_name.name));
+		cFYI(1, "neg dentry 0x%p name = %s",
+			 direntry, direntry->d_name.name);
 		if (time_after(jiffies, direntry->d_time + HZ) ||
 			!lookupCacheEnabled) {
 			d_drop(direntry);
@@ -761,7 +795,7 @@ cifs_d_revalidate(struct dentry *direntry, struct nameidata *nd)
 {
 	int rc = 0;
 
-	cFYI(1, ("In cifs d_delete, name = %s", direntry->d_name.name));
+	cFYI(1, "In cifs d_delete, name = %s", direntry->d_name.name);
 
 	return rc;
 }     */

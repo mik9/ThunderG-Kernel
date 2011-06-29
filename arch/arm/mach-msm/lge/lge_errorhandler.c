@@ -178,7 +178,7 @@ static long errhandler_ioctl(struct file *file, unsigned int cmd, unsigned long 
 {
 	int rv = 0;
 	int ret;
-
+	
 	if (hidden_reset_enable)
 		return 0;
 
@@ -248,7 +248,7 @@ static struct miscdevice errhandler_device = {
 	.fops = &errhandler_fops,
 };
 
-static struct platform_driver errhandler_driver = {
+static struct platform_driver errhandler_driver __refdata = {
 	.probe = lge_error_handler_probe,
 	.remove = __devexit_p(lge_error_handler_remove),
 	.driver = {

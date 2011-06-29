@@ -14,7 +14,7 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "ath9k.h"
+#include "hw.h"
 
 static inline u16 ath9k_hw_fbin2freq(u8 fbin, bool is2GHz)
 {
@@ -36,8 +36,6 @@ void ath9k_hw_analog_shift_rmw(struct ath_hw *ah, u32 reg, u32 mask,
 
 	if (ah->config.analog_shiftreg)
 		udelay(100);
-
-	return;
 }
 
 int16_t ath9k_hw_interpolate(u16 target, u16 srcLeft, u16 srcRight,
@@ -83,11 +81,9 @@ bool ath9k_hw_get_lower_upper_index(u8 target, u8 *pList, u16 listSize,
 	return false;
 }
 
-bool ath9k_hw_nvram_read(struct ath_hw *ah, u32 off, u16 *data)
+bool ath9k_hw_nvram_read(struct ath_common *common, u32 off, u16 *data)
 {
-	struct ath_softc *sc = ah->ah_sc;
-
-	return sc->bus_ops->eeprom_read(ah, off, data);
+	return common->bus_ops->eeprom_read(common, off, data);
 }
 
 void ath9k_hw_fill_vpd_table(u8 pwrMin, u8 pwrMax, u8 *pPwrList,
@@ -258,14 +254,13 @@ int ath9k_hw_eeprom_init(struct ath_hw *ah)
 {
 	int status;
 
-	if (AR_SREV_9287(ah)) {
-		ah->eep_map = EEP_MAP_AR9287;
-		ah->eep_ops = &eep_AR9287_ops;
+	if (AR_SREV_9300_20_OR_LATER(ah))
+		ah->eep_ops = &eep_ar9300_ops;
+	else if (AR_SREV_9287(ah)) {
+		ah->eep_ops = &eep_ar9287_ops;
 	} else if (AR_SREV_9285(ah) || AR_SREV_9271(ah)) {
-		ah->eep_map = EEP_MAP_4KBITS;
 		ah->eep_ops = &eep_4k_ops;
 	} else {
-		ah->eep_map = EEP_MAP_DEFAULT;
 		ah->eep_ops = &eep_def_ops;
 	}
 

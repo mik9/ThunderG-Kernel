@@ -259,7 +259,7 @@ static struct dma_debug_entry *hash_bucket_find(struct hash_bucket *bucket,
 		 * times. Without a hardware IOMMU this results in the
 		 * same device addresses being put into the dma-debug
 		 * hash multiple times too. This can result in false
-		 * positives being reported. Therfore we implement a
+		 * positives being reported. Therefore we implement a
 		 * best-fit algorithm here which returns the entry from
 		 * the hash which fits best to the reference value
 		 * instead of the first-fit.
@@ -570,7 +570,7 @@ static ssize_t filter_write(struct file *file, const char __user *userbuf,
 	 * Now parse out the first token and use it as the name for the
 	 * driver to filter for.
 	 */
-	for (i = 0; i < NAME_MAX_LEN; ++i) {
+	for (i = 0; i < NAME_MAX_LEN - 1; ++i) {
 		current_driver_name[i] = buf[i];
 		if (isspace(buf[i]) || buf[i] == ' ' || buf[i] == 0)
 			break;
@@ -587,7 +587,7 @@ out_unlock:
 	return count;
 }
 
-const struct file_operations filter_fops = {
+static const struct file_operations filter_fops = {
 	.read  = filter_read,
 	.write = filter_write,
 };

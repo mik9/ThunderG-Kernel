@@ -31,7 +31,7 @@
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/wait.h>
-
+#include <linux/slab.h>
 #include <linux/io.h>
 #include <mach/msm_iomap.h>
 #include <mach/clk.h>
@@ -429,7 +429,7 @@ int msm_adsp_write(struct msm_adsp_module *module, unsigned dsp_queue_addr,
 								cmd_size);
 		if (rc == -EAGAIN)
 			udelay(50);
-	} while (rc == -EAGAIN && retries++ < 100);
+	} while (rc == -EAGAIN && retries++ < 300);
 	if (retries > 20)
 		MM_INFO("%s command took %d attempts: rc %d\n",
 			module->name, retries, rc);

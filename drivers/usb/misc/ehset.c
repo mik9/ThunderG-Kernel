@@ -21,8 +21,9 @@
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/usb.h>
-
-#include "../core/hub.h"
+#include <linux/slab.h>
+#include <linux/usb/ch11.h>
+#include <linux/usb/hcd.h>
 
 #define TEST_SE0_NAK			0x0101
 #define TEST_J				0x0102

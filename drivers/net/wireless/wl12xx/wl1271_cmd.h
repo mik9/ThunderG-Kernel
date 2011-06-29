@@ -29,27 +29,35 @@
 
 struct acx_header;
 
-int wl1271_cmd_send(struct wl1271 *wl, u16 type, void *buf, size_t buf_len);
-int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type, u8 dtim_interval,
-		    u16 beacon_interval, u8 wait);
+int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len,
+		    size_t res_len);
+int wl1271_cmd_general_parms(struct wl1271 *wl);
+int wl1271_cmd_radio_parms(struct wl1271 *wl);
+int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type);
 int wl1271_cmd_test(struct wl1271 *wl, void *buf, size_t buf_len, u8 answer);
 int wl1271_cmd_interrogate(struct wl1271 *wl, u16 id, void *buf, size_t len);
 int wl1271_cmd_configure(struct wl1271 *wl, u16 id, void *buf, size_t len);
-int wl1271_cmd_data_path(struct wl1271 *wl, u8 channel, bool enable);
-int wl1271_cmd_ps_mode(struct wl1271 *wl, u8 ps_mode);
+int wl1271_cmd_data_path(struct wl1271 *wl, bool enable);
+int wl1271_cmd_ps_mode(struct wl1271 *wl, u8 ps_mode, bool send);
 int wl1271_cmd_read_memory(struct wl1271 *wl, u32 addr, void *answer,
 			   size_t len);
-int wl1271_cmd_scan(struct wl1271 *wl, u8 *ssid, size_t len,
-		    u8 active_scan, u8 high_prio, u8 num_channels,
-		    u8 probe_requests);
+int wl1271_cmd_scan(struct wl1271 *wl, const u8 *ssid, size_t ssid_len,
+		    const u8 *ie, size_t ie_len, u8 active_scan,
+		    u8 high_prio, u8 band, u8 probe_requests);
 int wl1271_cmd_template_set(struct wl1271 *wl, u16 template_id,
-			    void *buf, size_t buf_len);
+			    void *buf, size_t buf_len, int index, u32 rates);
 int wl1271_cmd_build_null_data(struct wl1271 *wl);
 int wl1271_cmd_build_ps_poll(struct wl1271 *wl, u16 aid);
-int wl1271_cmd_build_probe_req(struct wl1271 *wl, u8 *ssid, size_t ssid_len);
+int wl1271_cmd_build_probe_req(struct wl1271 *wl,
+			       const u8 *ssid, size_t ssid_len,
+			       const u8 *ie, size_t ie_len, u8 band);
+int wl1271_build_qos_null_data(struct wl1271 *wl);
+int wl1271_cmd_build_klv_null_data(struct wl1271 *wl);
 int wl1271_cmd_set_default_wep_key(struct wl1271 *wl, u8 id);
 int wl1271_cmd_set_key(struct wl1271 *wl, u16 action, u8 id, u8 key_type,
-		       u8 key_size, const u8 *key, const u8 *addr);
+		       u8 key_size, const u8 *key, const u8 *addr,
+		       u32 tx_seq_32, u16 tx_seq_16);
+int wl1271_cmd_disconnect(struct wl1271 *wl);
 
 enum wl1271_commands {
 	CMD_INTERROGATE     = 1,    /*use this to read information elements*/
@@ -94,6 +102,11 @@ enum wl1271_commands {
 
 #define MAX_CMD_PARAMS 572
 
+enum {
+	CMD_TEMPL_KLV_IDX_NULL_DATA = 0,
+	CMD_TEMPL_KLV_IDX_MAX = 4
+};
+
 enum cmd_templ {
 	CMD_TEMPL_NULL_DATA = 0,
 	CMD_TEMPL_BEACON,
@@ -116,10 +129,11 @@ enum cmd_templ {
 /* unit ms */
 #define WL1271_COMMAND_TIMEOUT     2000
 #define WL1271_CMD_TEMPL_MAX_SIZE  252
+#define WL1271_EVENT_TIMEOUT       750
 
 struct wl1271_cmd_header {
-	u16 id;
-	u16 status;
+	__le16 id;
+	__le16 status;
 	/* payload */
 	u8 data[0];
 } __attribute__ ((packed));
@@ -172,17 +186,17 @@ struct cmd_read_write_memory {
 	struct wl1271_cmd_header header;
 
 	/* The address of the memory to read from or write to.*/
-	u32 addr;
+	__le32 addr;
 
 	/* The amount of data in bytes to read from or write to the WiLink
 	 * device.*/
-	u32 size;
+	__le32 size;
 
 	/* The actual value read from or written to the Wilink. The source
 	   of this field is the Host in WRITE command or the Wilink in READ
 	   command. */
 	u8 value[MAX_READ_SIZE];
-};
+} __attribute__ ((packed));
 
 #define CMDMBOX_HEADER_LEN 4
 #define CMDMBOX_INFO_ELEM_HEADER_LEN 4
@@ -196,22 +210,23 @@ enum {
 
 #define WL1271_JOIN_CMD_CTRL_TX_FLUSH     0x80 /* Firmware flushes all Tx */
 #define WL1271_JOIN_CMD_TX_SESSION_OFFSET 1
+#define WL1271_JOIN_CMD_BSS_TYPE_5GHZ 0x10
 
 struct wl1271_cmd_join {
 	struct wl1271_cmd_header header;
 
-	u32 bssid_lsb;
-	u16 bssid_msb;
-	u16 beacon_interval; /* in TBTTs */
-	u32 rx_config_options;
-	u32 rx_filter_options;
+	__le32 bssid_lsb;
+	__le16 bssid_msb;
+	__le16 beacon_interval; /* in TBTTs */
+	__le32 rx_config_options;
+	__le32 rx_filter_options;
 
 	/*
 	 * The target uses this field to determine the rate at
 	 * which to transmit control frame responses (such as
 	 * ACK or CTS frames).
 	 */
-	u32 basic_rate_set;
+	__le32 basic_rate_set;
 	u8 dtim_interval;
 	/*
 	 * bits 0-2: This bitwise field specifies the type
@@ -237,13 +252,15 @@ struct cmd_enabledisable_path {
 	u8 padding[3];
 } __attribute__ ((packed));
 
+#define WL1271_RATE_AUTOMATIC  0
+
 struct wl1271_cmd_template_set {
 	struct wl1271_cmd_header header;
 
-	u16 len;
+	__le16 len;
 	u8 template_type;
 	u8 index;  /* relevant only for KLV_TEMPLATE type */
-	u32 enabled_rates;
+	__le32 enabled_rates;
 	u8 short_retry_limit;
 	u8 long_retry_limit;
 	u8 aflags;
@@ -280,17 +297,12 @@ struct wl1271_cmd_ps_params {
 	  * to power save mode.
 	  */
 	u8 hang_over_period;
-	u32 null_data_rate;
+	__le32 null_data_rate;
 } __attribute__ ((packed));
 
 /* HW encryption keys */
 #define NUM_ACCESS_CATEGORIES_COPY 4
 #define MAX_KEY_SIZE 32
-
-/* When set, disable HW encryption */
-#define DF_ENCRYPTION_DISABLE      0x01
-/* When set, disable HW decryption */
-#define DF_SNIFF_MODE_ENABLE       0x80
 
 enum wl1271_cmd_key_action {
 	KEY_ADD_OR_REPLACE = 1,
@@ -316,9 +328,9 @@ struct wl1271_cmd_set_keys {
 	u8 addr[ETH_ALEN];
 
 	/* key_action_e */
-	u16 key_action;
+	__le16 key_action;
 
-	u16 reserved_1;
+	__le16 reserved_1;
 
 	/* key size in bytes */
 	u8 key_size;
@@ -334,8 +346,8 @@ struct wl1271_cmd_set_keys {
 	u8 id;
 	u8 reserved_2[6];
 	u8 key[MAX_KEY_SIZE];
-	u16 ac_seq_num16[NUM_ACCESS_CATEGORIES_COPY];
-	u32 ac_seq_num32[NUM_ACCESS_CATEGORIES_COPY];
+	__le16 ac_seq_num16[NUM_ACCESS_CATEGORIES_COPY];
+	__le32 ac_seq_num32[NUM_ACCESS_CATEGORIES_COPY];
 } __attribute__ ((packed));
 
 
@@ -347,19 +359,22 @@ struct wl1271_cmd_set_keys {
 #define WL1271_SCAN_OPT_PRIORITY_HIGH  4
 #define WL1271_SCAN_CHAN_MIN_DURATION  30000  /* TU */
 #define WL1271_SCAN_CHAN_MAX_DURATION  60000  /* TU */
+#define WL1271_SCAN_BAND_2_4_GHZ 0
+#define WL1271_SCAN_BAND_5_GHZ 1
+#define WL1271_SCAN_BAND_DUAL 2
 
 struct basic_scan_params {
-	u32 rx_config_options;
-	u32 rx_filter_options;
+	__le32 rx_config_options;
+	__le32 rx_filter_options;
 	/* Scan option flags (WL1271_SCAN_OPT_*) */
-	u16 scan_options;
+	__le16 scan_options;
 	/* Number of scan channels in the list (maximum 30) */
 	u8 num_channels;
 	/* This field indicates the number of probe requests to send
 	   per channel for an active scan */
 	u8 num_probe_requests;
 	/* Rate bit field for sending the probes */
-	u32 tx_rate;
+	__le32 tx_rate;
 	u8 tid_trigger;
 	u8 ssid_len;
 	/* in order to align */
@@ -374,10 +389,10 @@ struct basic_scan_params {
 
 struct basic_scan_channel_params {
 	/* Duration in TU to wait for frames on a channel for active scan */
-	u32 min_duration;
-	u32 max_duration;
-	u32 bssid_lsb;
-	u16 bssid_msb;
+	__le32 min_duration;
+	__le32 max_duration;
+	__le32 bssid_lsb;
+	__le16 bssid_msb;
 	u8 early_termination;
 	u8 tx_power_att;
 	u8 channel;
@@ -397,13 +412,13 @@ struct wl1271_cmd_scan {
 struct wl1271_cmd_trigger_scan_to {
 	struct wl1271_cmd_header header;
 
-	u32 timeout;
-};
+	__le32 timeout;
+} __attribute__ ((packed));
 
 struct wl1271_cmd_test_header {
 	u8 id;
 	u8 padding[3];
-};
+} __attribute__ ((packed));
 
 enum wl1271_channel_tune_bands {
 	WL1271_CHANNEL_TUNE_BAND_2_4,
@@ -416,6 +431,33 @@ enum wl1271_channel_tune_bands {
 #define TEST_CMD_P2G_CAL                   0x02
 #define TEST_CMD_CHANNEL_TUNE              0x0d
 #define TEST_CMD_UPDATE_PD_REFERENCE_POINT 0x1d
+#define TEST_CMD_INI_FILE_RADIO_PARAM      0x19
+#define TEST_CMD_INI_FILE_GENERAL_PARAM    0x1E
+
+struct wl1271_general_parms_cmd {
+	struct wl1271_cmd_header header;
+
+	struct wl1271_cmd_test_header test;
+
+	u8 params[WL1271_NVS_GENERAL_PARAMS_SIZE];
+	s8 reserved[23];
+} __attribute__ ((packed));
+
+#define WL1271_STAT_RADIO_PARAMS_5_SIZE    29
+#define WL1271_DYN_RADIO_PARAMS_5_SIZE    104
+
+struct wl1271_radio_parms_cmd {
+	struct wl1271_cmd_header header;
+
+	struct wl1271_cmd_test_header test;
+
+	u8 stat_radio_params[WL1271_NVS_STAT_RADIO_PARAMS_SIZE];
+	u8 stat_radio_params_5[WL1271_STAT_RADIO_PARAMS_5_SIZE];
+
+	u8 dyn_radio_params[WL1271_NVS_DYN_RADIO_PARAMS_SIZE];
+	u8 reserved;
+	u8 dyn_radio_params_5[WL1271_DYN_RADIO_PARAMS_5_SIZE];
+} __attribute__ ((packed));
 
 struct wl1271_cmd_cal_channel_tune {
 	struct wl1271_cmd_header header;
@@ -425,7 +467,7 @@ struct wl1271_cmd_cal_channel_tune {
 	u8 band;
 	u8 channel;
 
-	u16 radio_status;
+	__le16 radio_status;
 } __attribute__ ((packed));
 
 struct wl1271_cmd_cal_update_ref_point {
@@ -433,8 +475,8 @@ struct wl1271_cmd_cal_update_ref_point {
 
 	struct wl1271_cmd_test_header test;
 
-	s32 ref_power;
-	s32 ref_detector;
+	__le32 ref_power;
+	__le32 ref_detector;
 	u8  sub_band;
 	u8  padding[3];
 } __attribute__ ((packed));
@@ -449,16 +491,44 @@ struct wl1271_cmd_cal_p2g {
 
 	struct wl1271_cmd_test_header test;
 
-	u16 len;
+	__le16 len;
 	u8  buf[MAX_TLV_LENGTH];
 	u8  type;
 	u8  padding;
 
-	s16 radio_status;
+	__le16 radio_status;
 	u8  nvs_version[MAX_NVS_VERSION_LENGTH];
 
 	u8  sub_band_mask;
 	u8  padding2;
+} __attribute__ ((packed));
+
+
+/*
+ * There are three types of disconnections:
+ *
+ * DISCONNECT_IMMEDIATE: the fw doesn't send any frames
+ * DISCONNECT_DEAUTH:    the fw generates a DEAUTH request with the reason
+ *                       we have passed
+ * DISCONNECT_DISASSOC:  the fw generates a DESASSOC request with the reason
+ *                       we have passed
+ */
+enum wl1271_disconnect_type {
+	DISCONNECT_IMMEDIATE,
+	DISCONNECT_DEAUTH,
+	DISCONNECT_DISASSOC
+};
+
+struct wl1271_cmd_disconnect {
+	struct wl1271_cmd_header header;
+
+	__le32 rx_config_options;
+	__le32 rx_filter_options;
+
+	__le16 reason;
+	u8  type;
+
+	u8  padding;
 } __attribute__ ((packed));
 
 #endif /* __WL1271_CMD_H__ */

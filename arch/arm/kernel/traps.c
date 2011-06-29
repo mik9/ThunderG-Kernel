@@ -12,15 +12,17 @@
  *  'linux/arch/arm/lib/traps.S'.  Mostly a debugging aid, but will probably
  *  kill the offending process.
  */
-#include <linux/module.h>
 #include <linux/signal.h>
-#include <linux/spinlock.h>
 #include <linux/personality.h>
 #include <linux/kallsyms.h>
-#include <linux/delay.h>
-#include <linux/hardirq.h>
-#include <linux/init.h>
+#include <linux/spinlock.h>
 #include <linux/uaccess.h>
+#include <linux/hardirq.h>
+#include <linux/kdebug.h>
+#include <linux/module.h>
+#include <linux/kexec.h>
+#include <linux/delay.h>
+#include <linux/init.h>
 
 #include <asm/atomic.h>
 #include <asm/cacheflush.h>
@@ -62,7 +64,10 @@ void dump_backtrace_entry(unsigned long where, unsigned long from, unsigned long
  // LGE_CHANGE_S [bluerti@lge.com]
 	if (lge_error_analyzing == 1){
 	  char * temp;
-	  sprintf(crash_buf[lge_error_fb_cnt], "[<%08lx>] " ); temp = crash_buf[lge_error_fb_cnt]; temp+=13; sprint_symbol(temp, where);		
+	  sprintf(crash_buf[lge_error_fb_cnt], "[<  >] " ); 
+	  temp = crash_buf[lge_error_fb_cnt]; 
+	  temp+=13; 
+	  sprint_symbol(temp, where);		
 	  lge_error_fb_cnt++;
 	} else {	// Normal case 
 	sprint_symbol(sym1, where);
@@ -243,11 +248,11 @@ void show_stack(struct task_struct *tsk, unsigned long *sp)
 #ifdef CONFIG_MACH_LGE
 extern int hidden_reset_enable;
 #endif
-
-static void __die(const char *str, int err, struct thread_info *thread, struct pt_regs *regs)
+static int __die(const char *str, int err, struct thread_info *thread, struct pt_regs *regs)
 {
 	struct task_struct *tsk = thread->task;
 	static int die_counter;
+	int ret;
 
 #ifdef CONFIG_MACH_LGE
 	printk(KERN_EMERG">>>>>\n");
@@ -255,6 +260,12 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
 	printk(KERN_EMERG "Internal error: %s: %x [#%d]" S_PREEMPT S_SMP "\n",
 	       str, err, ++die_counter);
 	sysfs_printk_last_file();
+
+	/* trap and error numbers are mostly meaningless on ARM */
+	ret = notify_die(DIE_OOPS, str, regs, err, tsk->thread.trap_no, SIGSEGV);
+	if (ret == NOTIFY_STOP)
+		return ret;
+
 	print_modules();
 	__show_regs(regs);
 	printk(KERN_EMERG "Process %.*s (pid: %d, stack limit = 0x%p)\n",
@@ -310,6 +321,7 @@ static void __die(const char *str, int err, struct thread_info *thread, struct p
 		//}
 	}
 	/* LGE_CHANGE_E [bluerti@lge.com] 2010-07-22 */
+	return ret;
 }
 
 DEFINE_SPINLOCK(die_lock);
@@ -317,16 +329,21 @@ DEFINE_SPINLOCK(die_lock);
 /*
  * This function is protected against re-entrancy.
  */
-NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
+void die(const char *str, struct pt_regs *regs, int err)
 {
 	struct thread_info *thread = current_thread_info();
+	int ret;
 
 	oops_enter();
 
 	spin_lock_irq(&die_lock);
 	console_verbose();
 	bust_spinlocks(1);
-	__die(str, err, thread, regs);
+	ret = __die(str, err, thread, regs);
+
+	if (regs && kexec_should_crash(thread->task))
+		crash_kexec(regs);
+
 	bust_spinlocks(0);
 	add_taint(TAINT_DIE);
 	spin_unlock_irq(&die_lock);
@@ -334,11 +351,10 @@ NORET_TYPE void die(const char *str, struct pt_regs *regs, int err)
 
 	if (in_interrupt())
 		panic("Fatal exception in interrupt");
-
 	if (panic_on_oops)
 		panic("Fatal exception");
-
-	do_exit(SIGSEGV);
+	if (ret != NOTIFY_STOP)
+		do_exit(SIGSEGV);
 }
 
 void arm_notify_die(const char *str, struct pt_regs *regs,
@@ -505,10 +521,13 @@ do_cache_op(unsigned long start, unsigned long end, int flags)
 		if (end > vma->vm_end)
 			end = vma->vm_end;
 
-		flush_cache_user_range(vma, start, end);
+		up_read(&mm->mmap_sem);
+		flush_cache_user_range(start, end);
+
 #ifdef CONFIG_ARCH_MSM7X27
 		dmb();
 #endif
+		return;
 
 	}
 	up_read(&mm->mmap_sem);

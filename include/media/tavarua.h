@@ -1,4 +1,4 @@
-/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -43,13 +43,42 @@
 #include <linux/videodev2.h>
 
 
-#define FM_DEBUG
+#undef FM_DEBUG
+
+/* constants */
+#define  RDS_BLOCKS_NUM             (4)
+#define BYTES_PER_BLOCK             (3)
+#define MAX_PS_LENGTH              (96)
+#define MAX_RT_LENGTH              (64)
+
+/* Standard buffer size */
+#define STD_BUF_SIZE               (64)
+/* Search direction */
+#define SRCH_DIR_UP                 (0)
+#define SRCH_DIR_DOWN               (1)
+
+/* control options */
+#define CTRL_ON                     (1)
+#define CTRL_OFF                    (0)
+
+#define US_LOW_BAND                 (87.5)
+#define US_HIGH_BAND                (108)
 
 #undef FMDBG
 #ifdef FM_DEBUG
   #define FMDBG(fmt, args...) printk(KERN_INFO "tavarua_radio: " fmt, ##args)
 #else
   #define FMDBG(fmt, args...)
+#endif
+
+#undef FMDERR
+#define FMDERR(fmt, args...) printk(KERN_INFO "tavarua_radio: " fmt, ##args)
+
+#undef FMDBG_I2C
+#ifdef FM_DEBUG_I2C
+  #define FMDBG_I2C(fmt, args...) printk(KERN_INFO "fm_i2c: " fmt, ##args)
+#else
+  #define FMDBG_I2C(fmt, args...)
 #endif
 
 /* function declarations */
@@ -63,8 +92,10 @@ int tavarua_set_audio_path(int digital_on, int analog_on);
 
 /* defines and enums*/
 
-#define MARIMBA_A0 0x01010013
-#define MARIMBA_2_1 0x02010204
+#define MARIMBA_A0	0x01010013
+#define MARIMBA_2_1	0x02010204
+#define BAHAMA_1_0	0x0302010A
+#define BAHAMA_2_0	0x04020205
 #define WAIT_TIMEOUT 2000
 #define RADIO_INIT_TIME 15
 #define TAVARUA_DELAY 10
@@ -153,8 +184,16 @@ enum register_t {
 	RMSSI,
 	AUDIOIND = 0x1E,
 	XFRCTRL,
+	FM_CTL0 = 0xFF,
 	LEAKAGE_CNTRL = 0xFE,
 };
+#define BAHAMA_RBIAS_CTL1       0x07
+#define	BAHAMA_FM_MODE_REG      0xFD
+#define	BAHAMA_FM_CTL1_REG      0xFE
+#define	BAHAMA_FM_CTL0_REG      0xFF
+#define BAHAMA_FM_MODE_NORMAL   0x00
+#define BAHAMA_LDO_DREG_CTL0    0xF0
+#define BAHAMA_LDO_AREG_CTL0    0xF4
 
 /* Radio Control */
 #define RDCTRL_STATE_OFFSET	0

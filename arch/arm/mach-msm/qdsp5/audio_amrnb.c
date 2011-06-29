@@ -37,6 +37,7 @@
 #include <linux/list.h>
 #include <linux/earlysuspend.h>
 #include <linux/android_pmem.h>
+#include <linux/slab.h>
 #include <asm/atomic.h>
 #include <asm/ioctls.h>
 #include <mach/msm_adsp.h>
@@ -47,6 +48,7 @@
 #include <mach/qdsp5/qdsp5audppmsg.h>
 #include <mach/qdsp5/qdsp5audplaycmdi.h>
 #include <mach/qdsp5/qdsp5audplaymsg.h>
+#include <mach/qdsp5/qdsp5rmtcmdi.h>
 #include <mach/debug_mm.h>
 
 #define BUFSZ 1024 /* Hold minimum 700ms voice data and 14 bytes of meta in*/
@@ -519,6 +521,36 @@ static void audamrnb_config_hostpcm(struct audio *audio)
 
 }
 
+static int rmt_put_resource(struct audio *audio)
+{
+	struct aud_codec_config_cmd cmd;
+	unsigned short client_idx;
+
+	cmd.cmd_id = RM_CMD_AUD_CODEC_CFG;
+	cmd.client_id = RM_AUD_CLIENT_ID;
+	cmd.task_id = audio->dec_id;
+	cmd.enable = RMT_DISABLE;
+	cmd.dec_type = AUDDEC_DEC_AMRNB;
+	client_idx = ((cmd.client_id << 8) | cmd.task_id);
+
+	return put_adsp_resource(client_idx, &cmd, sizeof(cmd));
+}
+
+static int rmt_get_resource(struct audio *audio)
+{
+	struct aud_codec_config_cmd cmd;
+	unsigned short client_idx;
+
+	cmd.cmd_id = RM_CMD_AUD_CODEC_CFG;
+	cmd.client_id = RM_AUD_CLIENT_ID;
+	cmd.task_id = audio->dec_id;
+	cmd.enable = RMT_ENABLE;
+	cmd.dec_type = AUDDEC_DEC_AMRNB;
+	client_idx = ((cmd.client_id << 8) | cmd.task_id);
+
+	return get_adsp_resource(client_idx, &cmd, sizeof(cmd));
+}
+
 static void audamrnb_send_data(struct audio *audio, unsigned needed)
 {
 	struct buffer *frame;
@@ -960,8 +992,7 @@ static long audamrnb_ioctl(struct file *file, unsigned int cmd,
 }
 
 /* Only useful in tunnel-mode */
-static int audamrnb_fsync(struct file *file, struct dentry *dentry,
-			int datasync)
+static int audamrnb_fsync(struct file *file, int datasync)
 {
 	struct audio *audio = file->private_data;
 	int rc = 0;
@@ -1217,6 +1248,7 @@ static int audamrnb_release(struct inode *inode, struct file *file)
 	MM_INFO("audio instance 0x%08x freeing\n", (int)audio);
 	mutex_lock(&audio->lock);
 	audamrnb_disable(audio);
+	rmt_put_resource(audio);
 	audamrnb_flush(audio);
 	audamrnb_flush_pcm_buf(audio);
 	msm_adsp_put(audio->audplay);
@@ -1452,6 +1484,16 @@ static int audamrnb_open(struct inode *inode, struct file *file)
 				audio->module_name, (int)audio);
 		if (audio->pcm_feedback == TUNNEL_MODE_PLAYBACK)
 			audmgr_close(&audio->audmgr);
+		goto err;
+	}
+
+	rc = rmt_get_resource(audio);
+	if (rc) {
+		MM_ERR("ADSP resources are not available for AMRNB session \
+			 0x%08x on decoder: %d\n", (int)audio, audio->dec_id);
+		if (audio->pcm_feedback == TUNNEL_MODE_PLAYBACK)
+			audmgr_close(&audio->audmgr);
+		msm_adsp_put(audio->audplay);
 		goto err;
 	}
 

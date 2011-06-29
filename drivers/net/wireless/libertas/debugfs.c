@@ -4,6 +4,7 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <linux/string.h>
+#include <linux/slab.h>
 #include <net/iw_handler.h>
 #include <net/lib80211.h>
 
@@ -74,7 +75,7 @@ static ssize_t lbs_getscantable(struct file *file, char __user *userbuf,
 		return -ENOMEM;
 
 	pos += snprintf(buf+pos, len-pos,
-		"# | ch  | rssi |       bssid       |   cap    | Qual | SSID \n");
+		"# | ch  | rssi |       bssid       |   cap    | Qual | SSID\n");
 
 	mutex_lock(&priv->lock);
 	list_for_each_entry (iter_bss, &priv->network_list, list) {
@@ -451,10 +452,12 @@ static ssize_t lbs_rdmac_read(struct file *file, char __user *userbuf,
 				CMD_MAC_REG_ACCESS, 0,
 				CMD_OPTION_WAITFORRSP, 0, &offval);
 	mdelay(10);
-	pos += snprintf(buf+pos, len-pos, "MAC[0x%x] = 0x%08x\n",
+	if (!ret) {
+		pos += snprintf(buf+pos, len-pos, "MAC[0x%x] = 0x%08x\n",
 				priv->mac_offset, priv->offsetvalue.value);
 
-	ret = simple_read_from_buffer(userbuf, count, ppos, buf, pos);
+		ret = simple_read_from_buffer(userbuf, count, ppos, buf, pos);
+	}
 	free_page(addr);
 	return ret;
 }
@@ -514,7 +517,8 @@ static ssize_t lbs_wrmac_write(struct file *file,
 				CMD_OPTION_WAITFORRSP, 0, &offval);
 	mdelay(10);
 
-	res = count;
+	if (!res)
+		res = count;
 out_unlock:
 	free_page(addr);
 	return res;
@@ -539,10 +543,12 @@ static ssize_t lbs_rdbbp_read(struct file *file, char __user *userbuf,
 				CMD_BBP_REG_ACCESS, 0,
 				CMD_OPTION_WAITFORRSP, 0, &offval);
 	mdelay(10);
-	pos += snprintf(buf+pos, len-pos, "BBP[0x%x] = 0x%08x\n",
+	if (!ret) {
+		pos += snprintf(buf+pos, len-pos, "BBP[0x%x] = 0x%08x\n",
 				priv->bbp_offset, priv->offsetvalue.value);
 
-	ret = simple_read_from_buffer(userbuf, count, ppos, buf, pos);
+		ret = simple_read_from_buffer(userbuf, count, ppos, buf, pos);
+	}
 	free_page(addr);
 
 	return ret;
@@ -603,7 +609,8 @@ static ssize_t lbs_wrbbp_write(struct file *file,
 				CMD_OPTION_WAITFORRSP, 0, &offval);
 	mdelay(10);
 
-	res = count;
+	if (!res)
+		res = count;
 out_unlock:
 	free_page(addr);
 	return res;
@@ -628,10 +635,12 @@ static ssize_t lbs_rdrf_read(struct file *file, char __user *userbuf,
 				CMD_RF_REG_ACCESS, 0,
 				CMD_OPTION_WAITFORRSP, 0, &offval);
 	mdelay(10);
-	pos += snprintf(buf+pos, len-pos, "RF[0x%x] = 0x%08x\n",
+	if (!ret) {
+		pos += snprintf(buf+pos, len-pos, "RF[0x%x] = 0x%08x\n",
 				priv->rf_offset, priv->offsetvalue.value);
 
-	ret = simple_read_from_buffer(userbuf, count, ppos, buf, pos);
+		ret = simple_read_from_buffer(userbuf, count, ppos, buf, pos);
+	}
 	free_page(addr);
 
 	return ret;
@@ -692,7 +701,8 @@ static ssize_t lbs_wrrf_write(struct file *file,
 				CMD_OPTION_WAITFORRSP, 0, &offval);
 	mdelay(10);
 
-	res = count;
+	if (!res)
+		res = count;
 out_unlock:
 	free_page(addr);
 	return res;
@@ -747,15 +757,12 @@ void lbs_debugfs_init(void)
 {
 	if (!lbs_dir)
 		lbs_dir = debugfs_create_dir("lbs_wireless", NULL);
-
-	return;
 }
 
 void lbs_debugfs_remove(void)
 {
 	if (lbs_dir)
 		 debugfs_remove(lbs_dir);
-	return;
 }
 
 void lbs_debugfs_init_one(struct lbs_private *priv, struct net_device *dev)

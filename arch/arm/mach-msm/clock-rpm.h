@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -30,20 +30,41 @@
 #ifndef __ARCH_ARM_MACH_MSM_CLOCK_RPM_H
 #define __ARCH_ARM_MACH_MSM_CLOCK_RPM_H
 
-/* Placeholder for ebi1_clk until an actual ID is assigned. */
-#define R_EBI1_CLK	0
+/* RPM Clock IDs */
+enum {
+	R_AFAB_CLK,
+	R_AFAB_A_CLK,
+	R_CFPB_CLK,
+	R_CFPB_A_CLK,
+	R_DFAB_CLK,
+	R_DFAB_A_CLK,
+	R_EBI1_CLK,
+	R_EBI1_A_CLK,
+	R_MMFAB_CLK,
+	R_MMFAB_A_CLK,
+	R_MMFPB_CLK,
+	R_MMFPB_A_CLK,
+	R_SFAB_CLK,
+	R_SFAB_A_CLK,
+	R_SFPB_CLK,
+	R_SFPB_A_CLK,
+	R_SMI_CLK,
+	R_SMI_A_CLK,
+};
 
 struct clk_ops;
 extern struct clk_ops clk_ops_remote;
 
 #define CLK_RPM(clk_name, clk_id, clk_dev, clk_flags) {	\
-	.name = clk_name, \
-	.id = R_##clk_id, \
-	.remote_id = R_##clk_id, \
-	.ops = &clk_ops_remote, \
-	.flags = clk_flags, \
-	.dev = clk_dev, \
-	.dbg_name = #clk_id, \
+	.con_id = clk_name, \
+	.dev_id = clk_dev, \
+	.clk = &(struct clk){ \
+		.id = R_##clk_id, \
+		.remote_id = R_##clk_id, \
+		.ops = &clk_ops_remote, \
+		.flags = clk_flags, \
+		.dbg_name = #clk_id, \
+	}, \
 	}
 
 #endif

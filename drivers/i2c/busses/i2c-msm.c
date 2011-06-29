@@ -16,6 +16,7 @@
 
 /* #define DEBUG */
 
+#include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/init.h>
@@ -84,13 +85,14 @@ struct msm_i2c_dev {
 	int                          rd_acked;
 	int                          one_bit_t;
 	remote_mutex_t               r_lock;
-	remote_spinlock_t            s_lock;
 	int                          suspended;
 	struct mutex                 mlock;
 	struct msm_i2c_platform_data *pdata;
 	struct timer_list            pwr_timer;
 	int                          clk_state;
 	void                         *complete;
+
+	struct pm_qos_request_list *pm_qos_req;
 };
 
 static void
@@ -268,7 +270,7 @@ msm_i2c_poll_writeready(struct msm_i2c_dev *dev)
 		if (!(status & I2C_STATUS_WR_BUFFER_FULL))
 			return 0;
 		if (retries++ > 1000)
-			udelay(100);
+			usleep_range(100, 200);
 	}
 	return -ETIMEDOUT;
 }
@@ -284,7 +286,7 @@ msm_i2c_poll_notbusy(struct msm_i2c_dev *dev)
 		if (!(status & I2C_STATUS_BUS_ACTIVE))
 			return 0;
 		if (retries++ > 1000)
-			udelay(100);
+			usleep_range(100, 200);
 	}
 	return -ETIMEDOUT;
 }
@@ -334,7 +336,7 @@ msm_i2c_recover_bus_busy(struct msm_i2c_dev *dev, struct i2c_adapter *adap)
 		gpio_direction_input(gpio_clk);
 		udelay(5);
 		if (!gpio_get_value(gpio_clk))
-			udelay(20);
+			usleep_range(20, 30);
 		if (!gpio_get_value(gpio_clk))
 			msleep(10);
 		gpio_clk_status = gpio_get_value(gpio_clk);
@@ -357,32 +359,6 @@ msm_i2c_recover_bus_busy(struct msm_i2c_dev *dev, struct i2c_adapter *adap)
 		 status, readl(dev->base + I2C_INTERFACE_SELECT));
 	enable_irq(dev->irq);
 	return -EBUSY;
-}
-
-static void
-msm_i2c_rspin_lock(struct msm_i2c_dev *dev)
-{
-	int gotlock = 0;
-	unsigned long flags;
-	uint32_t *smem_ptr = (uint32_t *)dev->pdata->rmutex;
-	do {
-		remote_spin_lock_irqsave(&dev->s_lock, flags);
-		if (*smem_ptr == 0) {
-			*smem_ptr = 1;
-			gotlock = 1;
-		}
-		remote_spin_unlock_irqrestore(&dev->s_lock, flags);
-	} while (!gotlock);
-}
-
-static void
-msm_i2c_rspin_unlock(struct msm_i2c_dev *dev)
-{
-	unsigned long flags;
-	uint32_t *smem_ptr = (uint32_t *)dev->pdata->rmutex;
-	remote_spin_lock_irqsave(&dev->s_lock, flags);
-	*smem_ptr = 0;
-	remote_spin_unlock_irqrestore(&dev->s_lock, flags);
 }
 
 static int
@@ -410,18 +386,9 @@ msm_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	}
 
 	/* Don't allow power collapse until we release remote spinlock */
-	pm_qos_update_requirement(PM_QOS_CPU_DMA_LATENCY, "msm_i2c",
-					dev->pdata->pm_lat);
+	pm_qos_update_request(dev->pm_qos_req,  dev->pdata->pm_lat);
 	if (dev->pdata->rmutex) {
-		/*
-		 * Older modem side uses remote_mutex lock only to update
-		 * shared variable, and newer modem side uses remote mutex
-		 * to protect the whole transaction
-		 */
-		if (dev->pdata->rsl_id[0] == 'S')
-			msm_i2c_rspin_lock(dev);
-		else
-			remote_mutex_lock(&dev->r_lock);
+		remote_mutex_lock(&dev->r_lock);
 		/* If other processor did some transactions, we may have
 		 * interrupt pending. Clear it
 		 */
@@ -545,8 +512,8 @@ wait_for_int:
 		}
 		if (dev->err) {
 			dev_err(dev->dev,
-				"Error during data xfer (%d)\n",
-				dev->err);
+				"(%04x) Error during data xfer (%d)\n",
+				addr, dev->err);
 			ret = dev->err;
 			goto out_err;
 		}
@@ -570,14 +537,10 @@ wait_for_int:
 	dev->cnt = 0;
 	spin_unlock_irqrestore(&dev->lock, flags);
 	disable_irq(dev->irq);
-	if (dev->pdata->rmutex) {
-		if (dev->pdata->rsl_id[0] == 'S')
-			msm_i2c_rspin_unlock(dev);
-		else
-			remote_mutex_unlock(&dev->r_lock);
-	}
-	pm_qos_update_requirement(PM_QOS_CPU_DMA_LATENCY, "msm_i2c",
-					PM_QOS_DEFAULT_VALUE);
+	if (dev->pdata->rmutex)
+		remote_mutex_unlock(&dev->r_lock);
+	pm_qos_update_request(dev->pm_qos_req,
+			      PM_QOS_DEFAULT_VALUE);
 	mod_timer(&dev->pwr_timer, (jiffies + 3*HZ));
 	mutex_unlock(&dev->mlock);
 	return ret;
@@ -674,12 +637,7 @@ msm_i2c_probe(struct platform_device *pdev)
 
 	clk_enable(clk);
 
-	if (pdata->rmutex && pdata->rsl_id[0] == 'S') {
-		remote_spinlock_id_t rmid;
-		rmid = pdata->rsl_id;
-		if (remote_spin_lock_init(&dev->s_lock, rmid) != 0)
-			pdata->rmutex = 0;
-	} else if (pdata->rmutex) {
+	if (pdata->rmutex) {
 		struct remote_mutex_id rmid;
 		rmid.r_spinlock_id = pdata->rsl_id;
 		rmid.delay_us = 10000000/pdata->clk_freq;
@@ -729,8 +687,13 @@ msm_i2c_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "request_irq failed\n");
 		goto err_request_irq_failed;
 	}
-	pm_qos_add_requirement(PM_QOS_CPU_DMA_LATENCY, "msm_i2c",
-					PM_QOS_DEFAULT_VALUE);
+	dev->pm_qos_req = pm_qos_add_request(PM_QOS_CPU_DMA_LATENCY,
+					     PM_QOS_DEFAULT_VALUE);
+	if (!dev->pm_qos_req) {
+		dev_err(&pdev->dev, "pm_qos_add_request failed\n");
+		goto err_pm_qos_add_request_failed;
+	}
+
 	disable_irq(dev->irq);
 	dev->suspended = 0;
 	mutex_init(&dev->mlock);
@@ -743,7 +706,8 @@ msm_i2c_probe(struct platform_device *pdev)
 
 	return 0;
 
-/*	free_irq(dev->irq, dev); */
+err_pm_qos_add_request_failed:
+	free_irq(dev->irq, dev); 
 err_request_irq_failed:
 	i2c_del_adapter(&dev->adap_pri);
 	i2c_del_adapter(&dev->adap_aux);
@@ -774,7 +738,7 @@ msm_i2c_remove(struct platform_device *pdev)
 	if (dev->clk_state != 0)
 		msm_i2c_pwr_mgmt(dev, 0);
 	platform_set_drvdata(pdev, NULL);
-	pm_qos_remove_requirement(PM_QOS_CPU_DMA_LATENCY, "msm_i2c");
+	pm_qos_remove_request(dev->pm_qos_req);
 	free_irq(dev->irq, dev);
 	i2c_del_adapter(&dev->adap_pri);
 	i2c_del_adapter(&dev->adap_aux);
@@ -782,7 +746,8 @@ msm_i2c_remove(struct platform_device *pdev)
 	iounmap(dev->base);
 	kfree(dev);
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	release_mem_region(mem->start, (mem->end - mem->start) + 1);
+	if (mem)
+		release_mem_region(mem->start, (mem->end - mem->start) + 1);
 	return 0;
 }
 

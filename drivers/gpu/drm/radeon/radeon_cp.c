@@ -435,14 +435,19 @@ static void radeon_init_pipes(struct drm_device *dev)
 	if ((dev_priv->flags & RADEON_FAMILY_MASK) >= CHIP_R420) {
 		gb_pipe_sel = RADEON_READ(R400_GB_PIPE_SELECT);
 		dev_priv->num_gb_pipes = ((gb_pipe_sel >> 12) & 0x3) + 1;
+		/* SE cards have 1 pipe */
+		if ((dev->pdev->device == 0x5e4c) ||
+		    (dev->pdev->device == 0x5e4f))
+			dev_priv->num_gb_pipes = 1;
 	} else {
 		/* R3xx */
 		if (((dev_priv->flags & RADEON_FAMILY_MASK) == CHIP_R300 &&
 		     dev->pdev->device != 0x4144) ||
-		    ((dev_priv->flags & RADEON_FAMILY_MASK) == CHIP_R350)) {
+		    ((dev_priv->flags & RADEON_FAMILY_MASK) == CHIP_R350 &&
+		     dev->pdev->device != 0x4148)) {
 			dev_priv->num_gb_pipes = 2;
 		} else {
-			/* RV3xx/R300 AD */
+			/* RV3xx/R300 AD/R350 AH */
 			dev_priv->num_gb_pipes = 1;
 		}
 	}
@@ -1944,8 +1949,8 @@ struct drm_buf *radeon_freelist_get(struct drm_device * dev)
 	for (t = 0; t < dev_priv->usec_timeout; t++) {
 		u32 done_age = GET_SCRATCH(dev_priv, 1);
 		DRM_DEBUG("done_age = %d\n", done_age);
-		for (i = start; i < dma->buf_count; i++) {
-			buf = dma->buflist[i];
+		for (i = 0; i < dma->buf_count; i++) {
+			buf = dma->buflist[start];
 			buf_priv = buf->dev_private;
 			if (buf->file_priv == NULL || (buf->pending &&
 						       buf_priv->age <=
@@ -1954,7 +1959,8 @@ struct drm_buf *radeon_freelist_get(struct drm_device * dev)
 				buf->pending = 0;
 				return buf;
 			}
-			start = 0;
+			if (++start >= dma->buf_count)
+				start = 0;
 		}
 
 		if (t) {
@@ -1963,46 +1969,8 @@ struct drm_buf *radeon_freelist_get(struct drm_device * dev)
 		}
 	}
 
-	DRM_DEBUG("returning NULL!\n");
 	return NULL;
 }
-
-#if 0
-struct drm_buf *radeon_freelist_get(struct drm_device * dev)
-{
-	struct drm_device_dma *dma = dev->dma;
-	drm_radeon_private_t *dev_priv = dev->dev_private;
-	drm_radeon_buf_priv_t *buf_priv;
-	struct drm_buf *buf;
-	int i, t;
-	int start;
-	u32 done_age;
-
-	done_age = radeon_read_ring_rptr(dev_priv, RADEON_SCRATCHOFF(1));
-	if (++dev_priv->last_buf >= dma->buf_count)
-		dev_priv->last_buf = 0;
-
-	start = dev_priv->last_buf;
-	dev_priv->stats.freelist_loops++;
-
-	for (t = 0; t < 2; t++) {
-		for (i = start; i < dma->buf_count; i++) {
-			buf = dma->buflist[i];
-			buf_priv = buf->dev_private;
-			if (buf->file_priv == 0 || (buf->pending &&
-						    buf_priv->age <=
-						    done_age)) {
-				dev_priv->stats.requested_bufs++;
-				buf->pending = 0;
-				return buf;
-			}
-		}
-		start = 0;
-	}
-
-	return NULL;
-}
-#endif
 
 void radeon_freelist_reset(struct drm_device * dev)
 {
@@ -2185,6 +2153,7 @@ int radeon_master_create(struct drm_device *dev, struct drm_master *master)
 			 &master_priv->sarea);
 	if (ret) {
 		DRM_ERROR("SAREA setup failed\n");
+		kfree(master_priv);
 		return ret;
 	}
 	master_priv->sarea_priv = master_priv->sarea->handle + sizeof(struct drm_sarea);

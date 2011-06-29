@@ -17,26 +17,6 @@
 #ifndef __LINUX_USB_GADGET_MSM72K_UDC_H__
 #define __LINUX_USB_GADGET_MSM72K_UDC_H__
 
-/*-------------------------------------------------------------------------*/
-
-#define xprintk(level, fmt, args...) \
-	printk(level "%s: " fmt , driver_name , ## args)
-
-#ifdef VERBOSE
-#define VDEBUG DEBUG
-#else
-#define VDEBUG(fmt,args...) \
-	do { } while (0)
-#endif	/* VERBOSE */
-
-#define ERROR(fmt,args...) \
-	xprintk(KERN_ERR , fmt , ## args)
-#define INFO(fmt,args...) \
-	xprintk(KERN_INFO , fmt , ## args)
-
-/*-------------------------------------------------------------------------*/
-
-
 #define USB_ID               (MSM_USB_BASE + 0x0000)
 #define USB_HWGENERAL        (MSM_USB_BASE + 0x0004)
 #define USB_HWHOST           (MSM_USB_BASE + 0x0008)
@@ -181,13 +161,14 @@ struct ept_queue_item {
 #define CTRL_RXT_EP_TYPE_SHIFT 2
 
 #define ULPI_CONFIG_REG		0x31
-#ifdef CONFIG_ARCH_MSM7X30
+#if defined(CONFIG_ARCH_MSM7X30) || defined(CONFIG_ARCH_MSM8X60)
 #define ULPI_DIGOUT_CTRL	0X36
 #define ULPI_CDR_AUTORESET	(1 << 1)
 #else
 #define ULPI_DIGOUT_CTRL	0X31
 #define ULPI_CDR_AUTORESET	(1 << 5)
 #endif
+#define ULPI_SE1_GATE		(1 << 2)
 #define ULPI_CONFIG_REG1	0x30
 #define ULPI_CONFIG_REG2	0X31
 #define ULPI_CONFIG_REG3	0X32

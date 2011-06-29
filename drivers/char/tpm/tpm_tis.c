@@ -22,6 +22,7 @@
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/pnp.h>
+#include <linux/slab.h>
 #include <linux/interrupt.h>
 #include <linux/wait.h>
 #include "tpm.h"
@@ -354,7 +355,6 @@ static DEVICE_ATTR(temp_deactivated, S_IRUGO, tpm_show_temp_deactivated,
 		   NULL);
 static DEVICE_ATTR(caps, S_IRUGO, tpm_show_caps_1_2, NULL);
 static DEVICE_ATTR(cancel, S_IWUSR | S_IWGRP, NULL, tpm_store_cancel);
-static DEVICE_ATTR(timeouts, S_IRUGO, tpm_show_timeouts, NULL);
 
 static struct attribute *tis_attrs[] = {
 	&dev_attr_pubek.attr,
@@ -364,8 +364,7 @@ static struct attribute *tis_attrs[] = {
 	&dev_attr_owned.attr,
 	&dev_attr_temp_deactivated.attr,
 	&dev_attr_caps.attr,
-	&dev_attr_cancel.attr,
-	&dev_attr_timeouts.attr, NULL,
+	&dev_attr_cancel.attr, NULL,
 };
 
 static struct attribute_group tis_attr_grp = {
@@ -599,7 +598,7 @@ out_err:
 	tpm_remove_hardware(chip->dev);
 	return rc;
 }
-
+#ifdef CONFIG_PNP
 static int __devinit tpm_tis_pnp_init(struct pnp_dev *pnp_dev,
 				      const struct pnp_device_id *pnp_id)
 {
@@ -671,7 +670,7 @@ static struct pnp_driver tis_pnp_driver = {
 module_param_string(hid, tpm_pnp_tbl[TIS_HID_USR_IDX].id,
 		    sizeof(tpm_pnp_tbl[TIS_HID_USR_IDX].id), 0444);
 MODULE_PARM_DESC(hid, "Set additional specific HID for this driver to probe");
-
+#endif
 static int tpm_tis_suspend(struct platform_device *dev, pm_message_t msg)
 {
 	return tpm_pm_suspend(&dev->dev, msg);
@@ -698,21 +697,21 @@ MODULE_PARM_DESC(force, "Force device probe rather than using ACPI entry");
 static int __init init_tis(void)
 {
 	int rc;
+#ifdef CONFIG_PNP
+	if (!force)
+		return pnp_register_driver(&tis_pnp_driver);
+#endif
 
-	if (force) {
-		rc = platform_driver_register(&tis_drv);
-		if (rc < 0)
-			return rc;
-		if (IS_ERR(pdev=platform_device_register_simple("tpm_tis", -1, NULL, 0)))
-			return PTR_ERR(pdev);
-		if((rc=tpm_tis_init(&pdev->dev, TIS_MEM_BASE, TIS_MEM_LEN, 0)) != 0) {
-			platform_device_unregister(pdev);
-			platform_driver_unregister(&tis_drv);
-		}
+	rc = platform_driver_register(&tis_drv);
+	if (rc < 0)
 		return rc;
+	if (IS_ERR(pdev=platform_device_register_simple("tpm_tis", -1, NULL, 0)))
+		return PTR_ERR(pdev);
+	if((rc=tpm_tis_init(&pdev->dev, TIS_MEM_BASE, TIS_MEM_LEN, 0)) != 0) {
+		platform_device_unregister(pdev);
+		platform_driver_unregister(&tis_drv);
 	}
-
-	return pnp_register_driver(&tis_pnp_driver);
+	return rc;
 }
 
 static void __exit cleanup_tis(void)
@@ -736,12 +735,14 @@ static void __exit cleanup_tis(void)
 		list_del(&i->list);
 	}
 	spin_unlock(&tis_lock);
-
-	if (force) {
-		platform_device_unregister(pdev);
-		platform_driver_unregister(&tis_drv);
-	} else
+#ifdef CONFIG_PNP
+	if (!force) {
 		pnp_unregister_driver(&tis_pnp_driver);
+		return;
+	}
+#endif
+	platform_device_unregister(pdev);
+	platform_driver_unregister(&tis_drv);
 }
 
 module_init(init_tis);

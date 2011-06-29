@@ -221,6 +221,8 @@ typedef struct ide_tape_obj {
 
 static DEFINE_MUTEX(idetape_ref_mutex);
 
+static DEFINE_MUTEX(idetape_chrdev_mutex);
+
 static struct class *idetape_sysfs_class;
 
 static void ide_tape_release(struct device *);
@@ -1363,7 +1365,7 @@ static int idetape_mtioctop(ide_drive_t *drive, short mt_op, int mt_count)
  * supported here, and not in the corresponding block interface. Our own
  * ide-tape ioctls are supported on both interfaces.
  */
-static int idetape_chrdev_ioctl(struct inode *inode, struct file *file,
+static long do_idetape_chrdev_ioctl(struct file *file,
 				unsigned int cmd, unsigned long arg)
 {
 	struct ide_tape_obj *tape = file->private_data;
@@ -1418,6 +1420,16 @@ static int idetape_chrdev_ioctl(struct inode *inode, struct file *file,
 	}
 }
 
+static long idetape_chrdev_ioctl(struct file *file,
+				unsigned int cmd, unsigned long arg)
+{
+	long ret;
+	lock_kernel();
+	ret = do_idetape_chrdev_ioctl(file, cmd, arg);
+	unlock_kernel();
+	return ret;
+}
+
 /*
  * Do a mode sense page 0 with block descriptor and if it succeeds set the tape
  * block size with the reported value.
@@ -1457,10 +1469,11 @@ static int idetape_chrdev_open(struct inode *inode, struct file *filp)
 	if (i >= MAX_HWIFS * MAX_DRIVES)
 		return -ENXIO;
 
-	lock_kernel();
+	mutex_lock(&idetape_chrdev_mutex);
+
 	tape = ide_tape_get(NULL, true, i);
 	if (!tape) {
-		unlock_kernel();
+		mutex_unlock(&idetape_chrdev_mutex);
 		return -ENXIO;
 	}
 
@@ -1519,12 +1532,15 @@ static int idetape_chrdev_open(struct inode *inode, struct file *filp)
 				tape->door_locked = DOOR_LOCKED;
 		}
 	}
-	unlock_kernel();
+	mutex_unlock(&idetape_chrdev_mutex);
+
 	return 0;
 
 out_put_tape:
 	ide_tape_put(tape);
-	unlock_kernel();
+
+	mutex_unlock(&idetape_chrdev_mutex);
+
 	return retval;
 }
 
@@ -1551,7 +1567,8 @@ static int idetape_chrdev_release(struct inode *inode, struct file *filp)
 	ide_drive_t *drive = tape->drive;
 	unsigned int minor = iminor(inode);
 
-	lock_kernel();
+	mutex_lock(&idetape_chrdev_mutex);
+
 	tape = drive->driver_data;
 
 	ide_debug_log(IDE_DBG_FUNC, "enter");
@@ -1575,7 +1592,9 @@ static int idetape_chrdev_release(struct inode *inode, struct file *filp)
 	}
 	clear_bit(ilog2(IDE_AFLAG_BUSY), &drive->atapi_flags);
 	ide_tape_put(tape);
-	unlock_kernel();
+
+	mutex_unlock(&idetape_chrdev_mutex);
+
 	return 0;
 }
 
@@ -1879,7 +1898,7 @@ static const struct file_operations idetape_fops = {
 	.owner		= THIS_MODULE,
 	.read		= idetape_chrdev_read,
 	.write		= idetape_chrdev_write,
-	.ioctl		= idetape_chrdev_ioctl,
+	.unlocked_ioctl	= idetape_chrdev_ioctl,
 	.open		= idetape_chrdev_open,
 	.release	= idetape_chrdev_release,
 };

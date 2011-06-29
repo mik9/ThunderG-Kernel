@@ -20,6 +20,7 @@
 #include <linux/pm.h>
 #include <linux/platform_device.h>
 #include <linux/power_supply.h>
+#include <linux/slab.h>
 #include <linux/spinlock.h>
 
 #include <linux/android_alarm.h>

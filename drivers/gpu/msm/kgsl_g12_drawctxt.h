@@ -29,12 +29,17 @@
 #ifndef __GSL_DRAWCTXT_G12_H
 #define __GSL_DRAWCTXT_G12_H
 
-#include "kgsl_sharedmem.h"
-
 struct kgsl_device;
 struct kgsl_device_private;
+struct kgsl_context;
 
-#define KGSL_G12_PACKET_SIZE 10
+#define KGSL_G12_PACKET_SIZE 15
+#define KGSL_G12_MARKER_SIZE 10
+#define KGSL_G12_CALL_CMD     0x1000
+#define KGSL_G12_MARKER_CMD   0x8000
+#define KGSL_G12_STREAM_END_CMD 0x9000
+#define KGSL_G12_STREAM_PACKET 0x7C000176
+#define KGSL_G12_STREAM_PACKET_CALL 0x7C000275
 #define KGSL_G12_PACKET_COUNT 8
 #define KGSL_G12_RB_SIZE (KGSL_G12_PACKET_SIZE*KGSL_G12_PACKET_COUNT \
 			  *sizeof(uint32_t))
@@ -57,17 +62,16 @@ struct kgsl_device_private;
 #define PACKETSIZE_STATESTREAM  (ALIGN_IN_BYTES((PACKETSIZE_STATE * \
 				 sizeof(unsigned int)), 32) / \
 				 sizeof(unsigned int))
-#define KGSL_G12_CONTEXT_MAX 16
 
 #define KGSL_G12_INVALID_CONTEXT UINT_MAX
 
 int
 kgsl_g12_drawctxt_create(struct kgsl_device_private *dev_priv,
 			uint32_t unused,
-			unsigned int *drawctxt_id);
+			struct kgsl_context *context);
 
 int
 kgsl_g12_drawctxt_destroy(struct kgsl_device *device,
-			unsigned int drawctxt_id);
+			  struct kgsl_context *context);
 
 #endif  /* __GSL_DRAWCTXT_H */

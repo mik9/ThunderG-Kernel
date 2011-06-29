@@ -20,7 +20,39 @@
 #define PHYS_OFFSET UL(CONFIG_PHYS_OFFSET)
 
 #define MAX_PHYSMEM_BITS 32
-#define SECTION_SIZE_BITS 25
+#define SECTION_SIZE_BITS 28
+
+/* Certain configurations of MSM7x30 have multiple memory banks.
+*  One or more of these banks can contain holes in the memory map as well.
+*  These macros define appropriate conversion routines between the physical
+*  and virtual address domains for supporting these configurations using
+*  SPARSEMEM and a 3G/1G VM split.
+*/
+
+#if defined(CONFIG_ARCH_MSM7X30)
+
+#define EBI0_PHYS_OFFSET PHYS_OFFSET
+#define EBI0_PAGE_OFFSET PAGE_OFFSET
+#define EBI0_SIZE 0x10000000
+
+#define EBI1_PHYS_OFFSET 0x40000000
+#define EBI1_PAGE_OFFSET (EBI0_PAGE_OFFSET + EBI0_SIZE)
+
+#if (defined(CONFIG_SPARSEMEM) && defined(CONFIG_VMSPLIT_3G))
+
+#define __phys_to_virt(phys)				\
+	((phys) >= EBI1_PHYS_OFFSET ?			\
+	(phys) - EBI1_PHYS_OFFSET + EBI1_PAGE_OFFSET :	\
+	(phys) - EBI0_PHYS_OFFSET + EBI0_PAGE_OFFSET)
+
+#define __virt_to_phys(virt)				\
+	((virt) >= EBI1_PAGE_OFFSET ?			\
+	(virt) - EBI1_PAGE_OFFSET + EBI1_PHYS_OFFSET :	\
+	(virt) - EBI0_PAGE_OFFSET + EBI0_PHYS_OFFSET)
+
+#endif
+
+#endif
 
 #define HAS_ARCH_IO_REMAP_PFN_RANGE
 
@@ -30,12 +62,12 @@ void clean_and_invalidate_caches(unsigned long, unsigned long, unsigned long);
 void clean_caches(unsigned long, unsigned long, unsigned long);
 void invalidate_caches(unsigned long, unsigned long, unsigned long);
 int platform_physical_remove_pages(unsigned long, unsigned long);
-int platform_physical_add_pages(unsigned long, unsigned long);
+int platform_physical_active_pages(unsigned long, unsigned long);
 int platform_physical_low_power_pages(unsigned long, unsigned long);
 
 #ifdef CONFIG_ARCH_MSM_ARM11
 void write_to_strongly_ordered_memory(void);
-void map_zero_page_strongly_ordered(void);
+void map_page_strongly_ordered(void);
 
 
 #include <asm/mach-types.h>
@@ -62,7 +94,7 @@ extern void l2x0_cache_sync(void);
 
 #endif
 
-#ifdef CONFIG_ARCH_MSM_SCORPION
+#if defined CONFIG_ARCH_MSM_SCORPION || defined CONFIG_ARCH_MSM_SCORPIONMP
 #define arch_has_speculative_dfetch()	1
 #endif
 
@@ -73,4 +105,4 @@ extern void l2x0_cache_sync(void);
 #define MEMORY_SELF_REFRESH	1
 #define MEMORY_ACTIVE		2
 
-#define NPA_MEMORY_NODE_NAME	"/mem/ebi1/cs1"
+#define NPA_MEMORY_NODE_NAME	"/mem/apps/ddr_dpd"

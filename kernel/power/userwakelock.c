@@ -16,6 +16,7 @@
 #include <linux/ctype.h>
 #include <linux/module.h>
 #include <linux/wakelock.h>
+#include <linux/slab.h>
 
 #include "power.h"
 

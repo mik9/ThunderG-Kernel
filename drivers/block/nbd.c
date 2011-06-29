@@ -27,6 +27,7 @@
 #include <linux/compiler.h>
 #include <linux/err.h>
 #include <linux/kernel.h>
+#include <linux/slab.h>
 #include <net/sock.h>
 #include <linux/net.h>
 #include <linux/kthread.h>
@@ -753,12 +754,6 @@ static int __init nbd_init(void)
 	part_shift = 0;
 	if (max_part > 0)
 		part_shift = fls(max_part);
-
-	if ((1UL << part_shift) > DISK_MAX_PARTS)
-		return -EINVAL;
-
-	if (nbds_max > 1UL << (MINORBITS - part_shift))
-		return -EINVAL;
 
 	for (i = 0; i < nbds_max; i++) {
 		struct gendisk *disk = alloc_disk(1 << part_shift);

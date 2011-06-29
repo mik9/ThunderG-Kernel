@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -156,6 +156,10 @@
 #define ABID_AUDIO_QAFX_RX		0x0001006F
 #define ABID_AUDIO_QCONCERT_RX		0x00010070
 #define ABID_AUDIO_STF_RX		0x00010071
+#define ABID_AUDIO_CALIBRATION_GAIN_RX  0x00011162
+#define ABID_AUDIO_CALIBRATION_GAIN_TX  0x00011149
+#define ABID_AUDIO_PBE_RX               0x00011197
+#define ABID_AUDIO_RMC_TX		0x00011226
 
 #define IID_AUDIO_AGC_PARAMETERS	0x0001007E
 #define IID_NS_PARAMETERS		0x00010072
@@ -166,6 +170,11 @@
 #define IID_QAFX_PARAMETERS		0x00010079
 #define IID_QCONCERT_PARAMETERS		0x0001007A
 #define IID_STF_COEFF			0x0001007B
+#define IID_AUDIO_CALIBRATION_GAIN_RX   0x00011163
+#define IID_AUDIO_CALIBRATION_GAIN_TX   0x00011171
+#define IID_PBE_CONFIG_PARAMETERS       0x00011198
+#define IID_AUDIO_PBE_RX_ENABLE_FLAG    0x00011199
+#define IID_AUDIO_RMC_PARAM		0x00011227
 
 
 #define TOPID_RX_TOPOLOGY_1		0x00010062

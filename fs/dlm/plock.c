@@ -11,6 +11,7 @@
 #include <linux/poll.h>
 #include <linux/dlm.h>
 #include <linux/dlm_plock.h>
+#include <linux/slab.h>
 
 #include "dlm_internal.h"
 #include "lockspace.h"
@@ -143,7 +144,7 @@ out:
 }
 EXPORT_SYMBOL_GPL(dlm_posix_lock);
 
-/* Returns failure iff a succesful lock operation should be canceled */
+/* Returns failure iff a successful lock operation should be canceled */
 static int dlm_plock_callback(struct plock_op *op)
 {
 	struct file *file;

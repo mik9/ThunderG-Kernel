@@ -99,9 +99,9 @@ static int nilfs_prepare_chunk(struct page *page,
 				 NULL, nilfs_get_block);
 }
 
-static int nilfs_commit_chunk(struct page *page,
-			      struct address_space *mapping,
-			      unsigned from, unsigned to)
+static void nilfs_commit_chunk(struct page *page,
+			       struct address_space *mapping,
+			       unsigned from, unsigned to)
 {
 	struct inode *dir = mapping->host;
 	struct nilfs_sb_info *sbi = NILFS_SB(dir->i_sb);
@@ -112,15 +112,13 @@ static int nilfs_commit_chunk(struct page *page,
 
 	nr_dirty = nilfs_page_count_clean_buffers(page, from, to);
 	copied = block_write_end(NULL, mapping, pos, len, len, page, NULL);
-	if (pos + copied > dir->i_size) {
+	if (pos + copied > dir->i_size)
 		i_size_write(dir, pos + copied);
-		mark_inode_dirty(dir);
-	}
 	if (IS_DIRSYNC(dir))
 		nilfs_set_transaction_flag(NILFS_TI_SYNC);
 	err = nilfs_set_file_dirty(sbi, dir, nr_dirty);
+	WARN_ON(err); /* do not happen */
 	unlock_page(page);
-	return err;
 }
 
 static void nilfs_check_page(struct page *page)
@@ -226,7 +224,7 @@ fail:
  * len <= NILFS_NAME_LEN and de != NULL are guaranteed by caller.
  */
 static int
-nilfs_match(int len, const char * const name, struct nilfs_dir_entry *de)
+nilfs_match(int len, const unsigned char *name, struct nilfs_dir_entry *de)
 {
 	if (len != de->name_len)
 		return 0;
@@ -351,11 +349,11 @@ done:
  * Entry is guaranteed to be valid.
  */
 struct nilfs_dir_entry *
-nilfs_find_entry(struct inode *dir, struct dentry *dentry,
+nilfs_find_entry(struct inode *dir, const struct qstr *qstr,
 		 struct page **res_page)
 {
-	const char *name = dentry->d_name.name;
-	int namelen = dentry->d_name.len;
+	const unsigned char *name = qstr->name;
+	int namelen = qstr->len;
 	unsigned reclen = NILFS_DIR_REC_LEN(namelen);
 	unsigned long start, n;
 	unsigned long npages = dir_pages(dir);
@@ -398,7 +396,7 @@ nilfs_find_entry(struct inode *dir, struct dentry *dentry,
 		/* next page is past the blocks we've got */
 		if (unlikely(n > (dir->i_blocks >> (PAGE_CACHE_SHIFT - 9)))) {
 			nilfs_error(dir->i_sb, __func__,
-			       "dir %lu size %lld exceeds block cout %llu",
+			       "dir %lu size %lld exceeds block count %llu",
 			       dir->i_ino, dir->i_size,
 			       (unsigned long long)dir->i_blocks);
 			goto out;
@@ -426,13 +424,13 @@ struct nilfs_dir_entry *nilfs_dotdot(struct inode *dir, struct page **p)
 	return de;
 }
 
-ino_t nilfs_inode_by_name(struct inode *dir, struct dentry *dentry)
+ino_t nilfs_inode_by_name(struct inode *dir, const struct qstr *qstr)
 {
 	ino_t res = 0;
 	struct nilfs_dir_entry *de;
 	struct page *page;
 
-	de = nilfs_find_entry(dir, dentry, &page);
+	de = nilfs_find_entry(dir, qstr, &page);
 	if (de) {
 		res = le64_to_cpu(de->inode);
 		kunmap(page);
@@ -455,11 +453,10 @@ void nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 	BUG_ON(err);
 	de->inode = cpu_to_le64(inode->i_ino);
 	nilfs_set_de_type(de, inode);
-	err = nilfs_commit_chunk(page, mapping, from, to);
+	nilfs_commit_chunk(page, mapping, from, to);
 	nilfs_put_page(page);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 /*	NILFS_I(dir)->i_flags &= ~NILFS_BTREE_FL; */
-	mark_inode_dirty(dir);
 }
 
 /*
@@ -468,7 +465,7 @@ void nilfs_set_link(struct inode *dir, struct nilfs_dir_entry *de,
 int nilfs_add_link(struct dentry *dentry, struct inode *inode)
 {
 	struct inode *dir = dentry->d_parent->d_inode;
-	const char *name = dentry->d_name.name;
+	const unsigned char *name = dentry->d_name.name;
 	int namelen = dentry->d_name.len;
 	unsigned chunk_size = nilfs_chunk_size(dir);
 	unsigned reclen = NILFS_DIR_REC_LEN(namelen);
@@ -548,10 +545,10 @@ got_it:
 	memcpy(de->name, name, namelen);
 	de->inode = cpu_to_le64(inode->i_ino);
 	nilfs_set_de_type(de, inode);
-	err = nilfs_commit_chunk(page, page->mapping, from, to);
+	nilfs_commit_chunk(page, page->mapping, from, to);
 	dir->i_mtime = dir->i_ctime = CURRENT_TIME;
 /*	NILFS_I(dir)->i_flags &= ~NILFS_BTREE_FL; */
-	mark_inode_dirty(dir);
+	nilfs_mark_inode_dirty(dir);
 	/* OFFSET_CACHE */
 out_put:
 	nilfs_put_page(page);
@@ -595,10 +592,9 @@ int nilfs_delete_entry(struct nilfs_dir_entry *dir, struct page *page)
 	if (pde)
 		pde->rec_len = cpu_to_le16(to - from);
 	dir->inode = 0;
-	err = nilfs_commit_chunk(page, mapping, from, to);
+	nilfs_commit_chunk(page, mapping, from, to);
 	inode->i_ctime = inode->i_mtime = CURRENT_TIME;
 /*	NILFS_I(inode)->i_flags &= ~NILFS_BTREE_FL; */
-	mark_inode_dirty(inode);
 out:
 	nilfs_put_page(page);
 	return err;
@@ -640,7 +636,7 @@ int nilfs_make_empty(struct inode *inode, struct inode *parent)
 	memcpy(de->name, "..\0", 4);
 	nilfs_set_de_type(de, inode);
 	kunmap_atomic(kaddr, KM_USER0);
-	err = nilfs_commit_chunk(page, mapping, 0, chunk_size);
+	nilfs_commit_chunk(page, mapping, 0, chunk_size);
 fail:
 	page_cache_release(page);
 	return err;

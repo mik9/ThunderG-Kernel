@@ -1,5 +1,3 @@
-#warning compile out
-#if 0
 /* drivers/input/misc/gpio_axis.c
  *
  * Copyright (C) 2007 Google, Inc.
@@ -19,6 +17,7 @@
 #include <linux/gpio.h>
 #include <linux/gpio_event.h>
 #include <linux/interrupt.h>
+#include <linux/slab.h>
 
 struct gpio_axis_state {
 	struct gpio_event_input_devs *input_devs;
@@ -191,4 +190,3 @@ err_bad_device_index:
 err_alloc_axis_state_failed:
 	return ret;
 }
-#endif

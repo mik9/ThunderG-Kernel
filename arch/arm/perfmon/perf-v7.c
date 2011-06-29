@@ -1,20 +1,19 @@
 /* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
- */
+*
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License version 2 and
+* only version 2 as published by the Free Software Foundation.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+* 02110-1301, USA.
+*/
 
 /*
 perf-v7.c
@@ -52,6 +51,7 @@ and other items needed by this module.
 */
 
 #define PM_NUM_COUNTERS 4
+#define PM_V7_ERR -1
 
 /*------------------------------------------------------------------------
  * Global control bits
@@ -89,13 +89,13 @@ and other items needed by this module.
 #define PM_RELOAD_SHIFT		22
 #define PM_RESUME_SHIFT		20
 #define PM_SUSPEND_SHIFT	18
-#define PM_START_SHIFT	 	16
+#define PM_START_SHIFT		16
 #define PM_STOPALL_SHIFT	15
-#define PM_STOPCOND_SHIFT 	12
-#define PM_RELOADCOND_SHIFT	 9
-#define PM_RESUMECOND_SHIFT    	 6
-#define PM_SUSPENDCOND_SHIFT     3
-#define PM_STARTCOND_SHIFT       0
+#define PM_STOPCOND_SHIFT	12
+#define PM_RELOADCOND_SHIFT	9
+#define PM_RESUMECOND_SHIFT	6
+#define PM_SUSPENDCOND_SHIFT	3
+#define PM_STARTCOND_SHIFT	0
 
 
 /*---------------------------------------------------------------------------
@@ -126,55 +126,55 @@ are writting this at different times we could have a mess...
 /*--------------------------------------------------------------------------
 The Event definitions
 --------------------------------------------------------------------------*/
-#define PM_EVT_SW_INCREMENT 	0
-#define PM_EVT_L1_I_MISS 	1
-#define PM_EVT_ITLB_MISS 	2
-#define PM_EVT_L1_D_MISS 	3
-#define PM_EVT_L1_D_ACCESS 	4
-#define PM_EVT_DTLB_MISS 	5
+#define PM_EVT_SW_INCREMENT	0
+#define PM_EVT_L1_I_MISS	1
+#define PM_EVT_ITLB_MISS	2
+#define PM_EVT_L1_D_MISS	3
+#define PM_EVT_L1_D_ACCESS	4
+#define PM_EVT_DTLB_MISS	5
 #define PM_EVT_DATA_READ	6
 #define PM_EVT_DATA_WRITE	7
 #define PM_EVT_INSTRUCTION	8
 #define PM_EVT_EXCEPTIONS	9
-#define PM_EVT_EXCEPTION_RET 	10
-#define PM_EVT_CTX_CHANGE 	11
-#define PM_EVT_PC_CHANGE 	12
-#define PM_EVT_BRANCH	 	13
-#define PM_EVT_RETURN	 	14
-#define PM_EVT_UNALIGNED 	15
-#define PM_EVT_BRANCH_MISS 	16
-#define PM_EVT_EXTERNAL0 	0x40
-#define PM_EVT_EXTERNAL1 	0x41
-#define PM_EVT_EXTERNAL2 	0x42
-#define PM_EVT_EXTERNAL3 	0x43
-#define PM_EVT_TRACE0 		0x44
-#define PM_EVT_TRACE1 		0x45
-#define PM_EVT_TRACE2 		0x46
-#define PM_EVT_TRACE3 		0x47
-#define PM_EVT_PM0 		0x48
-#define PM_EVT_PM1 		0x49
-#define PM_EVT_PM2 		0x4a
-#define PM_EVT_PM3 		0x4b
-#define PM_EVT_LPM0_EVT0 	0x4c
-#define PM_EVT_LPM0_EVT1 	0x4d
-#define PM_EVT_LPM0_EVT2 	0x4e
-#define PM_EVT_LPM0_EVT3 	0x4f
-#define PM_EVT_LPM1_EVT0 	0x50
-#define PM_EVT_LPM1_EVT1 	0x51
-#define PM_EVT_LPM1_EVT2 	0x52
-#define PM_EVT_LPM1_EVT3 	0x53
-#define PM_EVT_LPM2_EVT0 	0x54
-#define PM_EVT_LPM2_EVT1 	0x55
-#define PM_EVT_LPM2_EVT2 	0x56
-#define PM_EVT_LPM2_EVT3 	0x57
-#define PM_EVT_L2_EVT0 		0x58
-#define PM_EVT_L2_EVT1 		0x59
-#define PM_EVT_L2_EVT2 		0x5a
-#define PM_EVT_L2_EVT3 		0x5b
-#define PM_EVT_VLP_EVT0 	0x5c
-#define PM_EVT_VLP_EVT1 	0x5d
-#define PM_EVT_VLP_EVT2 	0x5e
-#define PM_EVT_VLP_EVT3 	0x5f
+#define PM_EVT_EXCEPTION_RET	10
+#define PM_EVT_CTX_CHANGE	11
+#define PM_EVT_PC_CHANGE	12
+#define PM_EVT_BRANCH		13
+#define PM_EVT_RETURN		14
+#define PM_EVT_UNALIGNED	15
+#define PM_EVT_BRANCH_MISS	16
+#define PM_EVT_EXTERNAL0	0x40
+#define PM_EVT_EXTERNAL1	0x41
+#define PM_EVT_EXTERNAL2	0x42
+#define PM_EVT_EXTERNAL3	0x43
+#define PM_EVT_TRACE0		0x44
+#define PM_EVT_TRACE1		0x45
+#define PM_EVT_TRACE2		0x46
+#define PM_EVT_TRACE3		0x47
+#define PM_EVT_PM0		0x48
+#define PM_EVT_PM1		0x49
+#define PM_EVT_PM2		0x4a
+#define PM_EVT_PM3		0x4b
+#define PM_EVT_LPM0_EVT0	0x4c
+#define PM_EVT_LPM0_EVT1	0x4d
+#define PM_EVT_LPM0_EVT2	0x4e
+#define PM_EVT_LPM0_EVT3	0x4f
+#define PM_EVT_LPM1_EVT0	0x50
+#define PM_EVT_LPM1_EVT1	0x51
+#define PM_EVT_LPM1_EVT2	0x52
+#define PM_EVT_LPM1_EVT3	0x53
+#define PM_EVT_LPM2_EVT0	0x54
+#define PM_EVT_LPM2_EVT1	0x55
+#define PM_EVT_LPM2_EVT2	0x56
+#define PM_EVT_LPM2_EVT3	0x57
+#define PM_EVT_L2_EVT0		0x58
+#define PM_EVT_L2_EVT1		0x59
+#define PM_EVT_L2_EVT2		0x5a
+#define PM_EVT_L2_EVT3		0x5b
+#define PM_EVT_VLP_EVT0		0x5c
+#define PM_EVT_VLP_EVT1		0x5d
+#define PM_EVT_VLP_EVT2		0x5e
+#define PM_EVT_VLP_EVT3		0x5f
 
 /*
 Type Declarations
@@ -233,8 +233,7 @@ static struct pm_trigger_s pm_triggers[4];
 /*--------------------------------------------------------------------------
 Names and indexes of the events
 --------------------------------------------------------------------------*/
-static struct pm_name_s pm_names[] =
-{
+static struct pm_name_s pm_names[] = {
   { PM_EVT_SW_INCREMENT,    "SW Increment"},
   { PM_EVT_L1_I_MISS,       "L1 I MISS"},
   { PM_EVT_ITLB_MISS,       "L1 ITLB MISS"},
@@ -323,7 +322,7 @@ char *pm_find_event_name(unsigned long index)
 FUNCTION  pm_group_stop
 
 DESCRIPTION  Stop a group of the performance monitors.  Event monitor 0 is bit
-0, event monitor 1 bit 1, etc.  The cycle count can also be disable with
+0, event monitor 1 bit 1, etc.  The cycle count can also be disabled with
 bit 31.  Macros are provided for all of the indexes including an ALL.
 
 DEPENDENCIES
@@ -405,7 +404,7 @@ unsigned long pm_get_overflow(int index)
 * Range check
 */
   if (index > pm_max_events)
-	return -1;
+	return PM_V7_ERR;
   RCP15_PMOVSR(overflow);
 
   return overflow & (1<<index);
@@ -618,7 +617,7 @@ int pm_set_count(int index, unsigned long new_value)
 * Range check
 */
   if (index > pm_max_events)
-		return -1;
+		return PM_V7_ERR;
 
 /*
 * Lock, select the index and read the count...unlock
@@ -657,7 +656,7 @@ unsigned long pm_get_count(int index)
 * Range check
 */
   if (index > pm_max_events)
-		return -1;
+		return PM_V7_ERR;
 
 /*
 * Lock, select the index and read the count...unlock
@@ -721,9 +720,9 @@ int pm_event_init(struct pm_trigger_s *data)
   unsigned long actlr = 0;
 
   if (0 == data)
-		return -1;
+		return PM_V7_ERR;
   if (data->index > pm_max_events)
-		return -1;
+		return PM_V7_ERR;
 
   /*
    * Setup the trigger based ont he passed values
@@ -781,7 +780,7 @@ int pm_set_event(int index, unsigned long event)
    * Range check
    */
   if (index > pm_max_events)
-		return -1;
+		return PM_V7_ERR;
 
   /*
    * Lock, select the index and read the count...unlock
@@ -957,12 +956,7 @@ void pm_initialize(void)
 		return;
   initialized = 1;
 
-	#ifdef CONFIG_ARCH_QSD8X50
-		irqid = INT_ARM11_PM;
-	#endif
-	#ifdef CONFIG_ARCH_MSM7X30
-		irqid = INT_ARM11_PM;
-	#endif
+  irqid = INT_ARMQC_PERFMON;
   RCP15_PMCR(reg);
   imp = (reg>>24) & 0xFF;
   id  = (reg>>16) & 0xFF;
@@ -984,8 +978,8 @@ void pm_initialize(void)
   /*
    * Enable access from user space
    */
-  WCP15_SDER(3);
   WCP15_PMUSERENR(1);
+  WCP15_PMACTLR(1);
 
   /*
    * Install interrupt handler and the enable the interrupts

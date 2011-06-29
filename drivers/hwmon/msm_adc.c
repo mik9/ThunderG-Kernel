@@ -28,6 +28,7 @@
 #include <linux/wait.h>
 #include <linux/uaccess.h>
 #include <linux/msm_adc.h>
+#include <linux/slab.h>
 
 #include <mach/dal.h>
 
@@ -95,7 +96,7 @@ struct dal_adc_result {
 struct dal_conv_slot {
 	void				*cb_h;
 	struct dal_adc_result		result;
-	struct completion	 	comp;
+	struct completion		comp;
 	struct list_head		list;
 	uint32_t			idx;
 	uint32_t			chan_idx;

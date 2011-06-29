@@ -32,7 +32,8 @@ Configuration options:
   [0] - I/O port base address
   [1] - IRQ (unused)
   [2] - DMA (unused)
-  [3] - analog output range, set by jumpers on hardware (0 for -10 to 10V bipolar, 1 for 0V to 10V unipolar)
+  [3] - analog output range, set by jumpers on hardware (0 for -10 to 10V
+	bipolar, 1 for 0V to 10V unipolar)
 
 */
 /*
@@ -225,7 +226,7 @@ static int atao_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 		iobase = 0x1c0;
 	ao_unipolar = it->options[3];
 
-	printk("comedi%d: ni_at_ao: 0x%04lx", dev->minor, iobase);
+	printk(KERN_INFO "comedi%d: ni_at_ao: 0x%04lx", dev->minor, iobase);
 
 	if (!request_region(iobase, ATAO_SIZE, "ni_at_ao")) {
 		printk(" I/O port conflict\n");
@@ -282,14 +283,14 @@ static int atao_attach(struct comedi_device *dev, struct comedi_devconfig *it)
 
 	atao_reset(dev);
 
-	printk("\n");
+	printk(KERN_INFO "\n");
 
 	return 0;
 }
 
 static int atao_detach(struct comedi_device *dev)
 {
-	printk("comedi%d: atao: remove\n", dev->minor);
+	printk(KERN_INFO "comedi%d: atao: remove\n", dev->minor);
 
 	if (dev->iobase)
 		release_region(dev->iobase, ATAO_SIZE);
@@ -431,9 +432,8 @@ static int atao_calib_insn_read(struct comedi_device *dev,
 				struct comedi_insn *insn, unsigned int *data)
 {
 	int i;
-	for (i = 0; i < insn->n; i++) {
+	for (i = 0; i < insn->n; i++)
 		data[i] = 0;	/* XXX */
-	}
 	return insn->n;
 }
 

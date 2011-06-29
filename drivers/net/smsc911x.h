@@ -30,7 +30,7 @@
 #define SMSC_NAPI_WEIGHT	16
 
 /* implements a PHY loopback test at initialisation time, to ensure a packet
- * can be succesfully looped back */
+ * can be successfully looped back */
 #define USE_PHY_WORK_AROUND
 
 #define DPRINTK(nlevel, klevel, fmt, args...) \
@@ -240,7 +240,7 @@
 #define PMT_CTRL_PME_EN_		0x00000002
 #define PMT_CTRL_READY_			0x00000001
 
-#define GPIO_CFG			0x88
+#define SMSC_GPIO_CFG			0x88
 #define GPIO_CFG_LED3_EN_		0x40000000
 #define GPIO_CFG_LED2_EN_		0x20000000
 #define GPIO_CFG_LED1_EN_		0x10000000

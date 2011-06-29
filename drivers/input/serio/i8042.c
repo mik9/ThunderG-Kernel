@@ -21,6 +21,7 @@
 #include <linux/rcupdate.h>
 #include <linux/platform_device.h>
 #include <linux/i8042.h>
+#include <linux/slab.h>
 
 #include <asm/io.h>
 
@@ -38,7 +39,7 @@ MODULE_PARM_DESC(noaux, "Do not probe or use AUX (mouse) port.");
 
 static bool i8042_nomux;
 module_param_named(nomux, i8042_nomux, bool, 0);
-MODULE_PARM_DESC(nomux, "Do not check whether an active multiplexing conrtoller is present.");
+MODULE_PARM_DESC(nomux, "Do not check whether an active multiplexing controller is present.");
 
 static bool i8042_unlock;
 module_param_named(unlock, i8042_unlock, bool, 0);
@@ -63,10 +64,6 @@ MODULE_PARM_DESC(noloop, "Disable the AUX Loopback command while probing for the
 static unsigned int i8042_blink_frequency = 500;
 module_param_named(panicblink, i8042_blink_frequency, uint, 0600);
 MODULE_PARM_DESC(panicblink, "Frequency with which keyboard LEDs should blink when kernel panics");
-
-static bool i8042_notimeout;
-module_param_named(notimeout, i8042_notimeout, bool, 0);
-MODULE_PARM_DESC(notimeout, "Ignore timeouts signalled by i8042");
 
 #ifdef CONFIG_X86
 static bool i8042_dritek;
@@ -130,6 +127,8 @@ static unsigned char i8042_suppress_kbd_ack;
 static struct platform_device *i8042_platform_device;
 
 static irqreturn_t i8042_interrupt(int irq, void *dev_id);
+static bool (*i8042_platform_filter)(unsigned char data, unsigned char str,
+				     struct serio *serio);
 
 void i8042_lock_chip(void)
 {
@@ -142,6 +141,48 @@ void i8042_unlock_chip(void)
 	mutex_unlock(&i8042_mutex);
 }
 EXPORT_SYMBOL(i8042_unlock_chip);
+
+int i8042_install_filter(bool (*filter)(unsigned char data, unsigned char str,
+					struct serio *serio))
+{
+	unsigned long flags;
+	int ret = 0;
+
+	spin_lock_irqsave(&i8042_lock, flags);
+
+	if (i8042_platform_filter) {
+		ret = -EBUSY;
+		goto out;
+	}
+
+	i8042_platform_filter = filter;
+
+out:
+	spin_unlock_irqrestore(&i8042_lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL(i8042_install_filter);
+
+int i8042_remove_filter(bool (*filter)(unsigned char data, unsigned char str,
+				       struct serio *port))
+{
+	unsigned long flags;
+	int ret = 0;
+
+	spin_lock_irqsave(&i8042_lock, flags);
+
+	if (i8042_platform_filter != filter) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	i8042_platform_filter = NULL;
+
+out:
+	spin_unlock_irqrestore(&i8042_lock, flags);
+	return ret;
+}
+EXPORT_SYMBOL(i8042_remove_filter);
 
 /*
  * The i8042_wait_read() and i8042_wait_write functions wait for the i8042 to
@@ -373,6 +414,31 @@ static void i8042_stop(struct serio *serio)
 }
 
 /*
+ * i8042_filter() filters out unwanted bytes from the input data stream.
+ * It is called from i8042_interrupt and thus is running with interrupts
+ * off and i8042_lock held.
+ */
+static bool i8042_filter(unsigned char data, unsigned char str,
+			 struct serio *serio)
+{
+	if (unlikely(i8042_suppress_kbd_ack)) {
+		if ((~str & I8042_STR_AUXDATA) &&
+		    (data == 0xfa || data == 0xfe)) {
+			i8042_suppress_kbd_ack--;
+			dbg("Extra keyboard ACK - filtered out\n");
+			return true;
+		}
+	}
+
+	if (i8042_platform_filter && i8042_platform_filter(data, str, serio)) {
+		dbg("Filtered out by platform filter\n");
+		return true;
+	}
+
+	return false;
+}
+
+/*
  * i8042_interrupt() is the most important function in this driver -
  * it handles the interrupts from the i8042, and sends incoming bytes
  * to the upper layers.
@@ -381,13 +447,16 @@ static void i8042_stop(struct serio *serio)
 static irqreturn_t i8042_interrupt(int irq, void *dev_id)
 {
 	struct i8042_port *port;
+	struct serio *serio;
 	unsigned long flags;
 	unsigned char str, data;
 	unsigned int dfl;
 	unsigned int port_no;
+	bool filtered;
 	int ret = 1;
 
 	spin_lock_irqsave(&i8042_lock, flags);
+
 	str = i8042_read_status();
 	if (unlikely(~str & I8042_STR_OBF)) {
 		spin_unlock_irqrestore(&i8042_lock, flags);
@@ -395,8 +464,8 @@ static irqreturn_t i8042_interrupt(int irq, void *dev_id)
 		ret = 0;
 		goto out;
 	}
+
 	data = i8042_read_data();
-	spin_unlock_irqrestore(&i8042_lock, flags);
 
 	if (i8042_mux_present && (str & I8042_STR_AUXDATA)) {
 		static unsigned long last_transmit;
@@ -438,28 +507,26 @@ static irqreturn_t i8042_interrupt(int irq, void *dev_id)
 	} else {
 
 		dfl = ((str & I8042_STR_PARITY) ? SERIO_PARITY : 0) |
-		      ((str & I8042_STR_TIMEOUT && !i8042_notimeout) ? SERIO_TIMEOUT : 0);
+		      ((str & I8042_STR_TIMEOUT) ? SERIO_TIMEOUT : 0);
 
 		port_no = (str & I8042_STR_AUXDATA) ?
 				I8042_AUX_PORT_NO : I8042_KBD_PORT_NO;
 	}
 
 	port = &i8042_ports[port_no];
+	serio = port->exists ? port->serio : NULL;
 
 	dbg("%02x <- i8042 (interrupt, %d, %d%s%s)",
 	    data, port_no, irq,
 	    dfl & SERIO_PARITY ? ", bad parity" : "",
 	    dfl & SERIO_TIMEOUT ? ", timeout" : "");
 
-	if (unlikely(i8042_suppress_kbd_ack))
-		if (port_no == I8042_KBD_PORT_NO &&
-		    (data == 0xfa || data == 0xfe)) {
-			i8042_suppress_kbd_ack--;
-			goto out;
-		}
+	filtered = i8042_filter(data, str, serio);
 
-	if (likely(port->exists))
-		serio_interrupt(port->serio, data, dfl);
+	spin_unlock_irqrestore(&i8042_lock, flags);
+
+	if (likely(port->exists && !filtered))
+		serio_interrupt(serio, data, dfl);
 
  out:
 	return IRQ_RETVAL(ret);
@@ -794,9 +861,6 @@ static int i8042_controller_selftest(void)
 	unsigned char param;
 	int i = 0;
 
-	if (!i8042_reset)
-		return 0;
-
 	/*
 	 * We try this 5 times; on some really fragile systems this does not
 	 * take the first time...
@@ -953,7 +1017,8 @@ static void i8042_controller_reset(void)
  * Reset the controller if requested.
  */
 
-	i8042_controller_selftest();
+	if (i8042_reset)
+		i8042_controller_selftest();
 
 /*
  * Restore the original control register setting.
@@ -1027,23 +1092,11 @@ static void i8042_dritek_enable(void)
 #ifdef CONFIG_PM
 
 /*
- * Here we try to restore the original BIOS settings to avoid
- * upsetting it.
- */
-
-static int i8042_pm_reset(struct device *dev)
-{
-	i8042_controller_reset();
-
-	return 0;
-}
-
-/*
  * Here we try to reset everything back to a state we had
  * before suspending.
  */
 
-static int i8042_pm_restore(struct device *dev)
+static int i8042_controller_resume(bool force_reset)
 {
 	int error;
 
@@ -1051,9 +1104,11 @@ static int i8042_pm_restore(struct device *dev)
 	if (error)
 		return error;
 
-	error = i8042_controller_selftest();
-	if (error)
-		return error;
+	if (i8042_reset || force_reset) {
+		error = i8042_controller_selftest();
+		if (error)
+			return error;
+	}
 
 /*
  * Restore original CTR value and disable all ports
@@ -1095,9 +1150,44 @@ static int i8042_pm_restore(struct device *dev)
 	return 0;
 }
 
+/*
+ * Here we try to restore the original BIOS settings to avoid
+ * upsetting it.
+ */
+
+static int i8042_pm_reset(struct device *dev)
+{
+	i8042_controller_reset();
+
+	return 0;
+}
+
+static int i8042_pm_resume(struct device *dev)
+{
+	/*
+	 * On resume from S2R we always try to reset the controller
+	 * to bring it in a sane state. (In case of S2D we expect
+	 * BIOS to reset the controller for us.)
+	 */
+	return i8042_controller_resume(true);
+}
+
+static int i8042_pm_thaw(struct device *dev)
+{
+	i8042_interrupt(0, NULL);
+
+	return 0;
+}
+
+static int i8042_pm_restore(struct device *dev)
+{
+	return i8042_controller_resume(false);
+}
+
 static const struct dev_pm_ops i8042_pm_ops = {
 	.suspend	= i8042_pm_reset,
-	.resume		= i8042_pm_restore,
+	.resume		= i8042_pm_resume,
+	.thaw		= i8042_pm_thaw,
 	.poweroff	= i8042_pm_reset,
 	.restore	= i8042_pm_restore,
 };
@@ -1312,9 +1402,13 @@ static int __init i8042_probe(struct platform_device *dev)
 {
 	int error;
 
-	error = i8042_controller_selftest();
-	if (error)
-		return error;
+	i8042_platform_device = dev;
+
+	if (i8042_reset) {
+		error = i8042_controller_selftest();
+		if (error)
+			return error;
+	}
 
 	error = i8042_controller_init();
 	if (error)
@@ -1347,6 +1441,7 @@ static int __init i8042_probe(struct platform_device *dev)
 	i8042_free_aux_ports();	/* in case KBD failed but AUX not */
 	i8042_free_irqs();
 	i8042_controller_reset();
+	i8042_platform_device = NULL;
 
 	return error;
 }
@@ -1356,6 +1451,7 @@ static int __devexit i8042_remove(struct platform_device *dev)
 	i8042_unregister_ports();
 	i8042_free_irqs();
 	i8042_controller_reset();
+	i8042_platform_device = NULL;
 
 	return 0;
 }
@@ -1374,6 +1470,7 @@ static struct platform_driver i8042_driver = {
 
 static int __init i8042_init(void)
 {
+	struct platform_device *pdev;
 	int err;
 
 	dbg_init();
@@ -1386,31 +1483,18 @@ static int __init i8042_init(void)
 	if (err)
 		goto err_platform_exit;
 
-	i8042_platform_device = platform_device_alloc("i8042", -1);
-	if (!i8042_platform_device) {
-		err = -ENOMEM;
+	pdev = platform_create_bundle(&i8042_driver, i8042_probe, NULL, 0, NULL, 0);
+	if (IS_ERR(pdev)) {
+		err = PTR_ERR(pdev);
 		goto err_platform_exit;
 	}
-
-	err = platform_device_add(i8042_platform_device);
-	if (err)
-		goto err_free_device;
-
-	err = platform_driver_probe(&i8042_driver, i8042_probe);
-	if (err)
-		goto err_del_device;
 
 	panic_blink = i8042_panic_blink;
 
 	return 0;
 
- err_del_device:
-	platform_device_del(i8042_platform_device);
- err_free_device:
-	platform_device_put(i8042_platform_device);
  err_platform_exit:
 	i8042_platform_exit();
-
 	return err;
 }
 

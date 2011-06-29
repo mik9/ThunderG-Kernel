@@ -18,23 +18,12 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
+#include <linux/vcm.h>
 #include <linux/vcm_alloc.h>
 #include <linux/string.h>
 #include <asm/sizes.h>
 
-/* Amount of memory managed by VCM */
-#define TOTAL_MEM_SIZE SZ_32M
-
-static unsigned int base_pa = 0x80000000;
 int basicalloc_init;
-
-int chunk_sizes[NUM_CHUNK_SIZES] = {SZ_1M, SZ_64K, SZ_4K};
-int init_num_chunks[] = {
-	(TOTAL_MEM_SIZE/2) / SZ_1M,
-	(TOTAL_MEM_SIZE/4) / SZ_64K,
-	(TOTAL_MEM_SIZE/4) / SZ_4K
-};
-#define LAST_SZ() (ARRAY_SIZE(chunk_sizes) - 1)
 
 #define vcm_alloc_err(a, ...)						\
 	pr_err("ERROR %s %i " a, __func__, __LINE__, ##__VA_ARGS__)
@@ -44,9 +33,83 @@ struct phys_chunk_head {
 	int num;
 };
 
-struct phys_mem {
-	struct phys_chunk_head heads[ARRAY_SIZE(chunk_sizes)];
-} phys_mem;
+struct phys_pool {
+	int size;
+	int chunk_size;
+	struct phys_chunk_head head;
+};
+
+static int vcm_num_phys_pools;
+static int vcm_num_memtypes;
+static struct phys_pool *vcm_phys_pool;
+static struct vcm_memtype_map *memtype_map;
+
+static int num_pools(enum memtype_t memtype)
+{
+	if (memtype >= vcm_num_memtypes) {
+		vcm_alloc_err("Bad memtype: %d\n", memtype);
+		return -EINVAL;
+	}
+	return memtype_map[memtype].num_pools;
+}
+
+static int pool_chunk_size(enum memtype_t memtype, int prio_idx)
+{
+	int pool_idx;
+	if (memtype >= vcm_num_memtypes) {
+		vcm_alloc_err("Bad memtype: %d\n", memtype);
+		return -EINVAL;
+	}
+
+	if (prio_idx >= num_pools(memtype)) {
+		vcm_alloc_err("Bad prio index: %d, max=%d, mt=%d\n", prio_idx,
+			      num_pools(memtype), memtype);
+		return -EINVAL;
+	}
+
+	pool_idx = memtype_map[memtype].pool_id[prio_idx];
+	return vcm_phys_pool[pool_idx].chunk_size;
+}
+
+int vcm_alloc_pool_idx_to_size(int pool_idx)
+{
+	if (pool_idx >= vcm_num_phys_pools) {
+		vcm_alloc_err("Bad pool index: %d\n, max=%d\n", pool_idx,
+			      vcm_num_phys_pools);
+		return -EINVAL;
+	}
+	return vcm_phys_pool[pool_idx].chunk_size;
+}
+
+static struct phys_chunk_head *get_chunk_list(enum memtype_t memtype,
+					      int prio_idx)
+{
+	unsigned int pool_idx;
+
+	if (memtype >= vcm_num_memtypes) {
+		vcm_alloc_err("Bad memtype: %d\n", memtype);
+		return NULL;
+	}
+
+	if (prio_idx >= num_pools(memtype)) {
+		vcm_alloc_err("bad chunk size: mt=%d, prioidx=%d, np=%d\n",
+			      memtype, prio_idx, num_pools(memtype));
+		BUG();
+		return NULL;
+	}
+
+	if (!vcm_phys_pool) {
+		vcm_alloc_err("phys_pool is null\n");
+		return NULL;
+	}
+
+	/* We don't have a "pool count" anywhere but this is coming
+	 * strictly from data in a board file
+	 */
+	pool_idx = memtype_map[memtype].pool_id[prio_idx];
+
+	return &vcm_phys_pool[pool_idx].head;
+}
 
 static int is_allocated(struct list_head *allocated)
 {
@@ -63,18 +126,24 @@ static int is_allocated(struct list_head *allocated)
 	return !list_empty(allocated);
 }
 
-static int count_allocated_size(enum chunk_size_idx idx)
+static int count_allocated_size(enum memtype_t memtype, int idx)
 {
 	int cnt = 0;
 	struct phys_chunk *chunk, *tmp;
+	struct phys_chunk_head *pch;
 
 	if (!basicalloc_init) {
 		vcm_alloc_err("no basicalloc_init\n");
 		return 0;
 	}
 
-	list_for_each_entry_safe(chunk, tmp,
-				 &phys_mem.heads[idx].head, list) {
+	pch = get_chunk_list(memtype, idx);
+	if (!pch) {
+		vcm_alloc_err("null pch\n");
+		return -EINVAL;
+	}
+
+	list_for_each_entry_safe(chunk, tmp, &pch->head, list) {
 		if (is_allocated(&chunk->allocated))
 			cnt++;
 	}
@@ -85,167 +154,209 @@ static int count_allocated_size(enum chunk_size_idx idx)
 
 int vcm_alloc_get_mem_size(void)
 {
-	return TOTAL_MEM_SIZE;
+	if (!vcm_phys_pool) {
+		vcm_alloc_err("No physical pool set up!\n");
+		return -ENODEV;
+	}
+	return vcm_phys_pool[0].size;
 }
 EXPORT_SYMBOL(vcm_alloc_get_mem_size);
 
-
-int vcm_alloc_blocks_avail(enum chunk_size_idx idx)
-{
-	if (!basicalloc_init) {
-		vcm_alloc_err("no basicalloc_init\n");
-		return 0;
-	}
-
-	return phys_mem.heads[idx].num;
-}
-EXPORT_SYMBOL(vcm_alloc_blocks_avail);
-
-
-int vcm_alloc_get_num_chunks(void)
-{
-	return ARRAY_SIZE(chunk_sizes);
-}
-EXPORT_SYMBOL(vcm_alloc_get_num_chunks);
-
-
-int vcm_alloc_all_blocks_avail(void)
-{
-	int i;
-	int cnt = 0;
-
-	if (!basicalloc_init) {
-		vcm_alloc_err("no basicalloc_init\n");
-		return 0;
-	}
-
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i)
-		cnt += vcm_alloc_blocks_avail(i);
-	return cnt;
-}
-EXPORT_SYMBOL(vcm_alloc_all_blocks_avail);
-
-
-int vcm_alloc_count_allocated(void)
-{
-	int i;
-	int cnt = 0;
-
-	if (!basicalloc_init) {
-		vcm_alloc_err("no basicalloc_init\n");
-		return 0;
-	}
-
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i)
-		cnt += count_allocated_size(i);
-	return cnt;
-}
-EXPORT_SYMBOL(vcm_alloc_count_allocated);
-
-
-void vcm_alloc_print_list(int just_allocated)
+void vcm_alloc_print_list(enum memtype_t memtype, int just_allocated)
 {
 	int i;
 	struct phys_chunk *chunk, *tmp;
+	struct phys_chunk_head *pch;
 
 	if (!basicalloc_init) {
 		vcm_alloc_err("no basicalloc_init\n");
 		return;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i) {
-		if (list_empty(&phys_mem.heads[i].head))
+	for (i = 0; i < num_pools(memtype); ++i) {
+		pch = get_chunk_list(memtype, i);
+
+		if (!pch) {
+			vcm_alloc_err("pch is null\n");
+			return;
+		}
+
+		if (list_empty(&pch->head))
 			continue;
-		list_for_each_entry_safe(chunk, tmp,
-					 &phys_mem.heads[i].head, list) {
+
+		list_for_each_entry_safe(chunk, tmp, &pch->head, list) {
 			if (just_allocated && !is_allocated(&chunk->allocated))
 				continue;
 
 			printk(KERN_INFO "pa = %#x, size = %#x\n",
-			       chunk->pa, chunk_sizes[chunk->size_idx]);
+			chunk->pa, vcm_phys_pool[chunk->pool_idx].chunk_size);
 		}
 	}
 }
 EXPORT_SYMBOL(vcm_alloc_print_list);
 
-
-int vcm_alloc_idx_to_size(int idx)
+int vcm_alloc_blocks_avail(enum memtype_t memtype, int idx)
 {
-	return chunk_sizes[idx];
-}
-EXPORT_SYMBOL(vcm_alloc_idx_to_size);
+	struct phys_chunk_head *pch;
+	if (!basicalloc_init) {
+		vcm_alloc_err("no basicalloc_init\n");
+		return 0;
+	}
+	pch = get_chunk_list(memtype, idx);
 
+	if (!pch) {
+		vcm_alloc_err("pch is null\n");
+		return 0;
+	}
+	return pch->num;
+}
+EXPORT_SYMBOL(vcm_alloc_blocks_avail);
+
+
+int vcm_alloc_get_num_chunks(enum memtype_t memtype)
+{
+	return num_pools(memtype);
+}
+EXPORT_SYMBOL(vcm_alloc_get_num_chunks);
+
+
+int vcm_alloc_all_blocks_avail(enum memtarget_t memtype)
+{
+	int i;
+	int cnt = 0;
+
+	if (!basicalloc_init) {
+		vcm_alloc_err("no basicalloc_init\n");
+		return 0;
+	}
+
+	for (i = 0; i < num_pools(memtype); ++i)
+		cnt += vcm_alloc_blocks_avail(memtype, i);
+	return cnt;
+}
+EXPORT_SYMBOL(vcm_alloc_all_blocks_avail);
+
+
+int vcm_alloc_count_allocated(enum memtype_t memtype)
+{
+	int i;
+	int cnt = 0;
+
+	if (!basicalloc_init) {
+		vcm_alloc_err("no basicalloc_init\n");
+		return 0;
+	}
+
+	for (i = 0; i < num_pools(memtype); ++i)
+		cnt += count_allocated_size(memtype, i);
+	return cnt;
+}
+EXPORT_SYMBOL(vcm_alloc_count_allocated);
 
 int vcm_alloc_destroy(void)
 {
-	int i;
+	int i, mt;
 	struct phys_chunk *chunk, *tmp;
 
 	if (!basicalloc_init) {
 		vcm_alloc_err("no basicalloc_init\n");
-		return -1;
+		return -ENODEV;
 	}
 
 	/* can't destroy a space that has allocations */
-	if (vcm_alloc_count_allocated()) {
-		vcm_alloc_err("allocations still present\n");
-		return -1;
-	}
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i) {
+	for (mt = 0; mt < vcm_num_memtypes; mt++)
+		if (vcm_alloc_count_allocated(mt)) {
+			vcm_alloc_err("allocations still present\n");
+			return -EBUSY;
+		}
 
-		if (list_empty(&phys_mem.heads[i].head))
+	for (i = 0; i < vcm_num_phys_pools; i++) {
+		struct phys_chunk_head *pch = &vcm_phys_pool[i].head;
+
+		if (list_empty(&pch->head))
 			continue;
-		list_for_each_entry_safe(chunk, tmp,
-					 &phys_mem.heads[i].head, list) {
+		list_for_each_entry_safe(chunk, tmp, &pch->head, list) {
 			list_del(&chunk->list);
 			memset(chunk, 0, sizeof(*chunk));
 			kfree(chunk);
 		}
+		vcm_phys_pool[i].head.num = 0;
 	}
 
-	basicalloc_init = 0;
+	kfree(vcm_phys_pool);
+	kfree(memtype_map);
 
+	vcm_phys_pool = NULL;
+	memtype_map = NULL;
+	basicalloc_init = 0;
+	vcm_num_phys_pools = 0;
 	return 0;
 }
 EXPORT_SYMBOL(vcm_alloc_destroy);
 
 
-int vcm_alloc_init(unsigned int set_base_pa)
+int vcm_alloc_init(struct physmem_region *mem, int n_regions,
+		   struct vcm_memtype_map *mt_map, int n_mt)
 {
-	int i = 0, j = 0;
+	int i = 0, j = 0, r = 0, num_chunks;
 	struct phys_chunk *chunk;
-	int pa;
-
-	if (set_base_pa)
-		base_pa = set_base_pa;
-
-	pa = base_pa;
+	struct phys_chunk_head *pch = NULL;
+	unsigned long pa;
 
 	/* no double inits */
 	if (basicalloc_init) {
 		vcm_alloc_err("double basicalloc_init\n");
 		BUG();
-		return -1;
+		goto fail;
+	}
+	memtype_map = kzalloc(sizeof(*mt_map) * n_mt, GFP_KERNEL);
+	if (!memtype_map) {
+		vcm_alloc_err("Could not copy memtype map\n");
+		goto fail;
+	}
+	memcpy(memtype_map, mt_map, sizeof(*mt_map) * n_mt);
+
+	vcm_phys_pool = kzalloc(sizeof(*vcm_phys_pool) * n_regions, GFP_KERNEL);
+	vcm_num_phys_pools = n_regions;
+	vcm_num_memtypes = n_mt;
+
+	if (!vcm_phys_pool) {
+		vcm_alloc_err("Could not allocate physical pool structure\n");
+		goto fail;
 	}
 
 	/* separate out to ensure good cleanup */
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i) {
-		INIT_LIST_HEAD(&phys_mem.heads[i].head);
-		phys_mem.heads[i].num = 0;
+	for (i = 0; i < n_regions; i++) {
+		pch = &vcm_phys_pool[i].head;
+		INIT_LIST_HEAD(&pch->head);
+		pch->num = 0;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i) {
-		for (j = 0; j < init_num_chunks[i]; ++j) {
+	for (r = 0; r < n_regions; r++) {
+		pa = mem[r].addr;
+		vcm_phys_pool[r].size = mem[r].size;
+		vcm_phys_pool[r].chunk_size = mem[r].chunk_size;
+		pch = &vcm_phys_pool[r].head;
+
+		num_chunks = mem[r].size / mem[r].chunk_size;
+
+		printk(KERN_INFO "VCM Init: region %d, chunk size=%d, "
+		       "num=%d, pa=%p\n", r, mem[r].chunk_size, num_chunks,
+		       (void *)pa);
+
+		for (j = 0; j < num_chunks; ++j) {
 			chunk = kzalloc(sizeof(*chunk), GFP_KERNEL);
 			if (!chunk) {
 				vcm_alloc_err("null chunk\n");
 				goto fail;
 			}
-			chunk->pa = pa; pa += chunk_sizes[i];
-			chunk->size_idx = i;
+			chunk->pa = pa;
+			chunk->size = mem[r].chunk_size;
+			pa += mem[r].chunk_size;
+			chunk->pool_idx = r;
 			INIT_LIST_HEAD(&chunk->allocated);
-			list_add_tail(&chunk->list, &phys_mem.heads[i].head);
-			phys_mem.heads[i].num++;
+			list_add_tail(&chunk->list, &pch->head);
+			pch->num++;
 		}
 	}
 
@@ -253,14 +364,15 @@ int vcm_alloc_init(unsigned int set_base_pa)
 	return 0;
 fail:
 	vcm_alloc_destroy();
-	return -1;
+	return -EINVAL;
 }
 EXPORT_SYMBOL(vcm_alloc_init);
 
 
-int vcm_alloc_free_blocks(struct phys_chunk *alloc_head)
+int vcm_alloc_free_blocks(enum memtype_t memtype, struct phys_chunk *alloc_head)
 {
 	struct phys_chunk *chunk, *tmp;
+	struct phys_chunk_head *pch = NULL;
 
 	if (!basicalloc_init) {
 		vcm_alloc_err("no basicalloc_init\n");
@@ -275,21 +387,27 @@ int vcm_alloc_free_blocks(struct phys_chunk *alloc_head)
 	list_for_each_entry_safe(chunk, tmp, &alloc_head->allocated,
 				 allocated) {
 		list_del_init(&chunk->allocated);
-		phys_mem.heads[chunk->size_idx].num++;
+		pch = &vcm_phys_pool[chunk->pool_idx].head;
+
+		if (!pch) {
+			vcm_alloc_err("null pch\n");
+			goto fail;
+		}
+		pch->num++;
 	}
 
 	return 0;
 fail:
-	return -1;
+	return -ENODEV;
 }
 EXPORT_SYMBOL(vcm_alloc_free_blocks);
 
 
-int vcm_alloc_num_blocks(int num,
-			 enum chunk_size_idx idx, /* chunk size */
+int vcm_alloc_num_blocks(int num, enum memtype_t memtype, int idx,
 			 struct phys_chunk *alloc_head)
 {
 	struct phys_chunk *chunk;
+	struct phys_chunk_head *pch = NULL;
 	int num_allocated = 0;
 
 	if (!basicalloc_init) {
@@ -302,24 +420,30 @@ int vcm_alloc_num_blocks(int num,
 		goto fail;
 	}
 
-	if (list_empty(&phys_mem.heads[idx].head)) {
+	pch = get_chunk_list(memtype, idx);
+
+	if (!pch) {
+		vcm_alloc_err("null pch\n");
+		goto fail;
+	}
+	if (list_empty(&pch->head)) {
 		vcm_alloc_err("list is empty\n");
 		goto fail;
 	}
 
-	if (vcm_alloc_blocks_avail(idx) < num) {
+	if (vcm_alloc_blocks_avail(memtype, idx) < num) {
 		vcm_alloc_err("not enough blocks? num=%d\n", num);
 		goto fail;
 	}
 
-	list_for_each_entry(chunk, &phys_mem.heads[idx].head, list) {
+	list_for_each_entry(chunk, &pch->head, list) {
 		if (num_allocated == num)
 			break;
 		if (is_allocated(&chunk->allocated))
 			continue;
 
 		list_add_tail(&chunk->allocated, &alloc_head->allocated);
-		phys_mem.heads[idx].num--;
+		pch->num--;
 		num_allocated++;
 	}
 	return num_allocated;
@@ -329,7 +453,7 @@ fail:
 EXPORT_SYMBOL(vcm_alloc_num_blocks);
 
 
-int vcm_alloc_max_munch(int len,
+int vcm_alloc_max_munch(int len, enum memtype_t memtype,
 			struct phys_chunk *alloc_head)
 {
 	int i;
@@ -337,7 +461,7 @@ int vcm_alloc_max_munch(int len,
 	int blocks_req = 0;
 	int block_residual = 0;
 	int blocks_allocated = 0;
-
+	int cur_chunk_size = 0;
 	int ba = 0;
 
 	if (!basicalloc_init) {
@@ -350,9 +474,21 @@ int vcm_alloc_max_munch(int len,
 		goto fail;
 	}
 
-	for (i = 0; i < ARRAY_SIZE(chunk_sizes); ++i) {
-		blocks_req = len / chunk_sizes[i];
-		block_residual = len % chunk_sizes[i];
+	if (num_pools(memtype) <= 0) {
+		vcm_alloc_err("Memtype %d has improper mempool configuration\n",
+			      memtype);
+		goto fail;
+	}
+
+	for (i = 0; i < num_pools(memtype); ++i) {
+		cur_chunk_size = pool_chunk_size(memtype, i);
+		if (cur_chunk_size <= 0) {
+			vcm_alloc_err("Bad chunk size: %d\n", cur_chunk_size);
+			goto fail;
+		}
+
+		blocks_req = len / cur_chunk_size;
+		block_residual = len % cur_chunk_size;
 
 		len = block_residual; /* len left */
 		if (blocks_req) {
@@ -360,12 +496,12 @@ int vcm_alloc_max_munch(int len,
 			int blocks_diff = 0;
 			int bytes_diff = 0;
 
-			blocks_available = vcm_alloc_blocks_avail(i);
+			blocks_available = vcm_alloc_blocks_avail(memtype, i);
 			if (blocks_available < blocks_req) {
 				blocks_diff =
 					(blocks_req - blocks_available);
 				bytes_diff =
-					blocks_diff * chunk_sizes[i];
+					blocks_diff * cur_chunk_size;
 
 				/* add back in the rest */
 				len += bytes_diff;
@@ -376,7 +512,7 @@ int vcm_alloc_max_munch(int len,
 					? blocks_req : blocks_available;
 			}
 
-			ba = vcm_alloc_num_blocks(blocks_available, i,
+			ba = vcm_alloc_num_blocks(blocks_available, memtype, i,
 						  alloc_head);
 
 			if (ba != blocks_available) {
@@ -394,18 +530,19 @@ int vcm_alloc_max_munch(int len,
 
 	if (len) {
 		int blocks_available = 0;
+		int last_sz = num_pools(memtype) - 1;
+		blocks_available = vcm_alloc_blocks_avail(memtype, last_sz);
 
-		blocks_available = vcm_alloc_blocks_avail(LAST_SZ());
-
-		if (blocks_available > 1) {
-			ba = vcm_alloc_num_blocks(1, LAST_SZ(), alloc_head);
+		if (blocks_available > 0) {
+			ba = vcm_alloc_num_blocks(1, memtype, last_sz,
+						  alloc_head);
 			if (ba != 1) {
 				vcm_alloc_err("blocks allocated (%i) !="
 					      " blocks_available (%i):"
 					      " chunk size = %#x,"
 					      " alloc_head = %p\n",
 					      ba, 1,
-					      LAST_SZ(),
+					      last_sz,
 					      (void *) alloc_head);
 				goto fail;
 			}
@@ -419,7 +556,7 @@ int vcm_alloc_max_munch(int len,
 
 	return blocks_allocated;
 fail:
-	vcm_alloc_free_blocks(alloc_head);
+	vcm_alloc_free_blocks(memtype, alloc_head);
 	return 0;
 }
 EXPORT_SYMBOL(vcm_alloc_max_munch);

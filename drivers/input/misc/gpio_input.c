@@ -1,5 +1,3 @@
-#warning compile out
-#if 0
 /* drivers/input/misc/gpio_input.c
  *
  * Copyright (C) 2007 Google, Inc.
@@ -21,6 +19,7 @@
 #include <linux/hrtimer.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
+#include <linux/slab.h>
 #include <linux/wakelock.h>
 
 enum {
@@ -352,4 +351,3 @@ err_bad_keymap:
 err_ds_alloc_failed:
 	return ret;
 }
-#endif

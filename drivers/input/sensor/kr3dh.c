@@ -28,6 +28,7 @@
 #include <linux/input-polldev.h>
 #include <linux/miscdevice.h>
 #include <linux/uaccess.h>
+#include <linux/slab.h>
 
 #include <mach/board_lge.h> // platform data
 #include <linux/akm8973.h>	// akm daemon ioctl set
@@ -40,6 +41,10 @@ struct early_suspend kr3dh_sensor_early_suspend;
 
 static void kr3dh_early_suspend(struct early_suspend *h);
 static void kr3dh_late_resume(struct early_suspend *h);
+#endif
+
+#if defined(CONFIG_PM_RUNTIME)
+#include <linux/pm_runtime.h>
 #endif
 
 #define KR3DH_DEBUG_PRINT	(1)
@@ -471,35 +476,61 @@ static int kr3dh_misc_ioctl(struct inode *inode, struct file *file,
 	int err;
 	int interval;
 	struct kr3dh_data *kr = file->private_data;
+	
+#if defined(CONFIG_PM_RUNTIME)
+	pm_runtime_get_sync(&kr->client->dev);
+	msleep(11);
+#endif
 
 	switch (cmd) {
 	case KR3DH_IOCTL_GET_DELAY:
 		interval = kr->pdata->poll_interval;
-		if (copy_to_user(argp, &interval, sizeof(interval)))
+		if (copy_to_user(argp, &interval, sizeof(interval))){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EFAULT;
+		}
 		break;
 
 	case KR3DH_IOCTL_SET_DELAY:
-		if (copy_from_user(&interval, argp, sizeof(interval)))
+		if (copy_from_user(&interval, argp, sizeof(interval))){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EFAULT;
-		if (interval < 0 || interval > 200)
+		}
+		if (interval < 0 || interval > 200){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EINVAL;
-
+		}
 		kr->pdata->poll_interval =
 		    max(interval, kr->pdata->min_interval);
 		err = kr3dh_update_odr(kr, kr->pdata->poll_interval);
 		/* TODO: if update fails poll is still set */
-		if (err < 0)
+		if (err < 0){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return err;
-
+		}
 		break;
 
 	case KR3DH_IOCTL_SET_ENABLE:
-		if (copy_from_user(&interval, argp, sizeof(interval)))
+		if (copy_from_user(&interval, argp, sizeof(interval))){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EFAULT;
-		if (interval > 1)
+		}
+		if (interval > 1){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EINVAL;
-
+		}
 		if (interval)
 			kr3dh_enable(kr);
 		else
@@ -509,48 +540,81 @@ static int kr3dh_misc_ioctl(struct inode *inode, struct file *file,
 
 	case KR3DH_IOCTL_GET_ENABLE:
 		interval = atomic_read(&kr->enabled);
-		if (copy_to_user(argp, &interval, sizeof(interval)))
+		if (copy_to_user(argp, &interval, sizeof(interval))){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EINVAL;
-
+		}
 		break;
 
 	case KR3DH_IOCTL_SET_G_RANGE:
-		if (copy_from_user(&buf, argp, 1))
+		if (copy_from_user(&buf, argp, 1)){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EFAULT;
+		}
 		err = kr3dh_update_g_range(kr, arg);
-		if (err < 0)
+		if (err < 0){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return err;
-
+		}
 		break;
 
 	case KR3DH_IOCTL_READ_ACCEL_XYZ:
 		err=kr3dh_get_acceleration_data(kr, buf);
-		if (err < 0)
+		if (err < 0){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 				return err;
-
-		if (copy_to_user(argp, buf, sizeof(int)*3))
+		}
+		if (copy_to_user(argp, buf, sizeof(int)*3)){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EINVAL;
-
+		}
+#if defined(CONFIG_PM_RUNTIME)
+		pm_runtime_put_sync(&kr->client->dev);
+#endif
 		return err;
 
 		break;
 
 	case AKMD2_TO_ACCEL_IOCTL_READ_XYZ:	/* LGE_CHANGE [hyesung.shin@lge.com] on 2010-1-23, for <Sensor driver structure> */
 		err=kr3dh_get_acceleration_data(kr, buf);
-		if (err < 0)
+		if (err < 0){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 				return err;
-
-		if (copy_to_user(argp, buf, sizeof(int)*3))
+		}
+		if (copy_to_user(argp, buf, sizeof(int)*3)){
+#if defined(CONFIG_PM_RUNTIME)
+			pm_runtime_put_sync(&kr->client->dev);
+#endif
 			return -EINVAL;
-
+		}
+#if defined(CONFIG_PM_RUNTIME)
+		pm_runtime_put_sync(&kr->client->dev);
+#endif
 		return err;
 
 		break;
 
 	default:
+#if defined(CONFIG_PM_RUNTIME)
+		pm_runtime_put_sync(&kr->client->dev);
+#endif
 		return -EINVAL;
 	}
-
+#if defined(CONFIG_PM_RUNTIME)
+	pm_runtime_put_sync(&kr->client->dev);
+#endif
 	return 0;
 }
 
@@ -806,6 +870,9 @@ static int kr3dh_probe(struct i2c_client *client,
 
 	dev_info(&client->dev, "%s kr3dh: Accelerometer chip found\n", client->name);
 
+#if defined(CONFIG_PM_RUNTIME)
+	pm_runtime_enable(&client->dev);
+#endif
 	return 0;
 
 err4:
@@ -897,6 +964,49 @@ static int kr3dh_suspend(struct device *device)
 
 	return kr3dh_disable(kr);
 }
+#if defined(CONFIG_PM_RUNTIME)
+#define PM_BIT_MASK 0x1F
+#define KR3DH_SET_PM(x) ((x)&PM_BIT_MASK)
+static int kr3dh_runtime_suspend(struct device* dev)
+{
+	struct i2c_client* client = i2c_verify_client(dev);
+	struct kr3dh_data* kr = i2c_get_clientdata(client);
+	int err;
+	u8 ctrl = CTRL_REG1;
+	u8 buf[2];
+	
+	err = kr3dh_i2c_read(kr, &ctrl, 1);
+	if(err<0)
+		goto err_runtime_pm;
+	
+	buf[0] = CTRL_REG1;
+	buf[1] = KR3DH_SET_PM(ctrl);
+	err = kr3dh_i2c_write(kr, buf,1);
+	if(err<0)
+		goto err_runtime_pm;
+	
+	return 0;
+
+err_runtime_pm:
+	dev_err(&kr->client->dev, "soft power off fail: i2c error\n");
+	return err;
+	
+}
+static int kr3dh_runtime_resume(struct device* dev)
+{
+	struct i2c_client* client = i2c_verify_client(dev);
+	struct kr3dh_data* kr = i2c_get_clientdata(client);
+	int err;
+	u8 buf[2] = {CTRL_REG1, kr->resume_state[0]};
+	
+	err = kr3dh_i2c_write(kr, buf, 1);
+	if(err<0){
+		dev_err(&kr->client->dev, "soft power on fail: i2c error\n");
+		return err;
+	}
+	return 0;
+}
+#endif
 #endif
 
 static const struct i2c_device_id kr3dh_id[] = {
@@ -910,6 +1020,10 @@ MODULE_DEVICE_TABLE(i2c, kr3dh_id);
 static struct dev_pm_ops kr3dh_pm_ops = {
        .suspend = kr3dh_suspend,
        .resume = kr3dh_resume,
+#if defined(CONFIG_PM_RUNTIME)
+       .runtime_suspend = kr3dh_runtime_suspend,
+       .runtime_resume = kr3dh_runtime_resume,
+#endif
 };
 #endif
 

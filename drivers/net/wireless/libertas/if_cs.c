@@ -22,6 +22,7 @@
 */
 
 #include <linux/module.h>
+#include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/moduleparam.h>
 #include <linux/firmware.h>
@@ -48,6 +49,7 @@
 MODULE_AUTHOR("Holger Schurig <hs4233@mail.mn-solutions.de>");
 MODULE_DESCRIPTION("Driver for Marvell 83xx compact flash WLAN cards");
 MODULE_LICENSE("GPL");
+MODULE_FIRMWARE("libertas_cs_helper.fw");
 
 
 
@@ -590,7 +592,7 @@ static int if_cs_prog_helper(struct if_cs_card *card)
 
 	/* TODO: make firmware file configurable */
 	ret = request_firmware(&fw, "libertas_cs_helper.fw",
-		&handle_to_dev(card->p_dev));
+		&card->p_dev->dev);
 	if (ret) {
 		lbs_pr_err("can't load helper firmware\n");
 		ret = -ENODEV;
@@ -663,7 +665,7 @@ static int if_cs_prog_real(struct if_cs_card *card)
 
 	/* TODO: make firmware file configurable */
 	ret = request_firmware(&fw, "libertas_cs.fw",
-		&handle_to_dev(card->p_dev));
+		&card->p_dev->dev);
 	if (ret) {
 		lbs_pr_err("can't load firmware\n");
 		ret = -ENODEV;
@@ -775,7 +777,7 @@ static void if_cs_release(struct pcmcia_device *p_dev)
 
 	lbs_deb_enter(LBS_DEB_CS);
 
-	free_irq(p_dev->irq.AssignedIRQ, card);
+	free_irq(p_dev->irq, card);
 	pcmcia_disable_device(p_dev);
 	if (card->iobase)
 		ioport_unmap(card->iobase);
@@ -793,18 +795,36 @@ static void if_cs_release(struct pcmcia_device *p_dev)
  * configure the card at this point -- we wait until we receive a card
  * insertion event.
  */
+
+static int if_cs_ioprobe(struct pcmcia_device *p_dev,
+			 cistpl_cftable_entry_t *cfg,
+			 cistpl_cftable_entry_t *dflt,
+			 unsigned int vcc,
+			 void *priv_data)
+{
+	p_dev->io.Attributes1 = IO_DATA_PATH_WIDTH_AUTO;
+	p_dev->io.BasePort1 = cfg->io.win[0].base;
+	p_dev->io.NumPorts1 = cfg->io.win[0].len;
+
+	/* Do we need to allocate an interrupt? */
+	p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
+
+	/* IO window settings */
+	if (cfg->io.nwin != 1) {
+		lbs_pr_err("wrong CIS (check number of IO windows)\n");
+		return -ENODEV;
+	}
+
+	/* This reserves IO space but doesn't actually enable it */
+	return pcmcia_request_io(p_dev, &p_dev->io);
+}
+
 static int if_cs_probe(struct pcmcia_device *p_dev)
 {
 	int ret = -ENOMEM;
 	unsigned int prod_id;
 	struct lbs_private *priv;
 	struct if_cs_card *card;
-	/* CIS parsing */
-	tuple_t tuple;
-	cisparse_t parse;
-	cistpl_cftable_entry_t *cfg = &parse.cftable_entry;
-	cistpl_io_t *io = &cfg->io;
-	u_char buf[64];
 
 	lbs_deb_enter(LBS_DEB_CS);
 
@@ -816,63 +836,22 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 	card->p_dev = p_dev;
 	p_dev->priv = card;
 
-	p_dev->irq.Attributes = IRQ_TYPE_DYNAMIC_SHARING;
-	p_dev->irq.Handler = NULL;
-	p_dev->irq.IRQInfo1 = IRQ_INFO2_VALID | IRQ_LEVEL_ID;
-
 	p_dev->conf.Attributes = 0;
 	p_dev->conf.IntType = INT_MEMORY_AND_IO;
 
-	tuple.Attributes = 0;
-	tuple.TupleData = buf;
-	tuple.TupleDataMax = sizeof(buf);
-	tuple.TupleOffset = 0;
-
-	tuple.DesiredTuple = CISTPL_CFTABLE_ENTRY;
-	if ((ret = pcmcia_get_first_tuple(p_dev, &tuple)) != 0 ||
-	    (ret = pcmcia_get_tuple_data(p_dev, &tuple)) != 0 ||
-	    (ret = pcmcia_parse_tuple(&tuple, &parse)) != 0)
-	{
-		lbs_pr_err("error in pcmcia_get_first_tuple etc\n");
+	if (pcmcia_loop_config(p_dev, if_cs_ioprobe, NULL)) {
+		lbs_pr_err("error in pcmcia_loop_config\n");
 		goto out1;
 	}
 
-	p_dev->conf.ConfigIndex = cfg->index;
-
-	/* Do we need to allocate an interrupt? */
-	if (cfg->irq.IRQInfo1) {
-		p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
-	}
-
-	/* IO window settings */
-	if (cfg->io.nwin != 1) {
-		lbs_pr_err("wrong CIS (check number of IO windows)\n");
-		ret = -ENODEV;
-		goto out1;
-	}
-	p_dev->io.Attributes1 = IO_DATA_PATH_WIDTH_AUTO;
-	p_dev->io.BasePort1 = io->win[0].base;
-	p_dev->io.NumPorts1 = io->win[0].len;
-
-	/* This reserves IO space but doesn't actually enable it */
-	ret = pcmcia_request_io(p_dev, &p_dev->io);
-	if (ret) {
-		lbs_pr_err("error in pcmcia_request_io\n");
-		goto out1;
-	}
 
 	/*
 	 * Allocate an interrupt line.  Note that this does not assign
 	 * a handler to the interrupt, unless the 'Handler' member of
 	 * the irq structure is initialized.
 	 */
-	if (p_dev->conf.Attributes & CONF_ENABLE_IRQ) {
-		ret = pcmcia_request_irq(p_dev, &p_dev->irq);
-		if (ret) {
-			lbs_pr_err("error in pcmcia_request_irq\n");
-			goto out1;
-		}
-	}
+	if (!p_dev->irq)
+		goto out1;
 
 	/* Initialize io access */
 	card->iobase = ioport_map(p_dev->io.BasePort1, p_dev->io.NumPorts1);
@@ -895,7 +874,7 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 
 	/* Finally, report what we've done */
 	lbs_deb_cs("irq %d, io 0x%04x-0x%04x\n",
-	       p_dev->irq.AssignedIRQ, p_dev->io.BasePort1,
+	       p_dev->irq, p_dev->io.BasePort1,
 	       p_dev->io.BasePort1 + p_dev->io.NumPorts1 - 1);
 
 	/*
@@ -946,10 +925,13 @@ static int if_cs_probe(struct pcmcia_device *p_dev)
 	card->priv = priv;
 	priv->card = card;
 	priv->hw_host_to_card = if_cs_host_to_card;
+	priv->enter_deep_sleep = NULL;
+	priv->exit_deep_sleep = NULL;
+	priv->reset_deep_sleep_wakeup = NULL;
 	priv->fw_ready = 1;
 
 	/* Now actually get the IRQ */
-	ret = request_irq(p_dev->irq.AssignedIRQ, if_cs_interrupt,
+	ret = request_irq(p_dev->irq, if_cs_interrupt,
 		IRQF_SHARED, DRV_NAME, card);
 	if (ret) {
 		lbs_pr_err("error in request_irq\n");

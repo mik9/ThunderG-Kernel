@@ -14,6 +14,7 @@
  */
 
 #include <linux/sched.h>
+#include <linux/slab.h>
 #include <linux/smp_lock.h>
 #include "irnet_ppp.h"		/* Private header */
 /* Please put other headers in irnet.h - Thanks */
@@ -76,9 +77,8 @@ irnet_ctrl_write(irnet_socket *	ap,
       /* Look at the next command */
       start = next;
 
-      /* Scrap whitespaces before the command */
-      while(isspace(*start))
-	start++;
+	/* Scrap whitespaces before the command */
+	start = skip_spaces(start);
 
       /* ',' is our command separator */
       next = strchr(start, ',');
@@ -105,9 +105,6 @@ irnet_ctrl_write(irnet_socket *	ap,
 	      /* Strip out trailing whitespaces */
 	      while(isspace(start[length - 1]))
 		length--;
-
-	      DABORT(length < 5 || length > NICKNAME_MAX_LEN + 5,
-		     -EINVAL, CTRL_ERROR, "Invalid nickname.\n");
 
 	      /* Copy the name for later reuse */
 	      memcpy(ap->rname, start + 5, length - 5);
@@ -136,8 +133,7 @@ irnet_ctrl_write(irnet_socket *	ap,
 	      char *	endp;
 
 	      /* Scrap whitespaces before the command */
-	      while(isspace(*begp))
-		begp++;
+	      begp = skip_spaces(begp);
 
 	      /* Convert argument to a number (last arg is the base) */
 	      addr = simple_strtoul(begp, &endp, 16);
@@ -703,15 +699,18 @@ dev_irnet_ioctl(
 
       /* Query PPP channel and unit number */
     case PPPIOCGCHAN:
+      lock_kernel();
       if(ap->ppp_open && !put_user(ppp_channel_index(&ap->chan),
 						(int __user *)argp))
 	err = 0;
+      unlock_kernel();
       break;
     case PPPIOCGUNIT:
       lock_kernel();
       if(ap->ppp_open && !put_user(ppp_unit_number(&ap->chan),
 						(int __user *)argp))
-      err = 0;
+        err = 0;
+      unlock_kernel();
       break;
 
       /* All these ioctls can be passed both directly and from ppp_generic,

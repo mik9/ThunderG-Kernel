@@ -88,9 +88,9 @@ struct msm_gemini_hw_cmd hw_cmd_irq_get_status[] = {
 int msm_gemini_hw_irq_get_status(void)
 {
 	uint32_t n_irq_status = 0;
-
+	rmb();
 	n_irq_status = msm_gemini_hw_read(&hw_cmd_irq_get_status[0]);
-
+	rmb();
 	return n_irq_status;
 }
 
@@ -112,12 +112,15 @@ long msm_gemini_hw_encode_output_size(void)
 
 struct msm_gemini_hw_cmd hw_cmd_irq_clear[] = {
 	/* type, repeat n times, offset, mask, data or pdata */
-	{MSM_GEMINI_HW_CMD_TYPE_READ, 1, HWIO_JPEG_IRQ_CLEAR_ADDR,
+	{MSM_GEMINI_HW_CMD_TYPE_WRITE, 1, HWIO_JPEG_IRQ_CLEAR_ADDR,
 		HWIO_JPEG_IRQ_CLEAR_RMSK, {JPEG_IRQ_CLEAR_ALL} },
 };
 
-void msm_gemini_hw_irq_clear(void)
+void msm_gemini_hw_irq_clear(uint32_t mask, uint32_t data)
 {
+	GMN_DBG("%s:%d] mask %0x data %0x", __func__, __LINE__, mask, data);
+	hw_cmd_irq_clear[0].mask = mask;
+	hw_cmd_irq_clear[0].data = data;
 	msm_gemini_hw_write(&hw_cmd_irq_clear[0]);
 }
 
@@ -342,19 +345,24 @@ struct msm_gemini_hw_cmd hw_cmd_reset[] = {
 		HWIO_JPEG_RESET_CMD_RMSK, {JPEG_RESET_DEFAULT} },
 };
 
+void msm_gemini_hw_init(void *base, int size)
+{
+	gemini_region_base = base;
+	gemini_region_size = size;
+}
+
 void msm_gemini_hw_reset(void *base, int size)
 {
 	struct msm_gemini_hw_cmd *hw_cmd_p;
 
-	gemini_region_base = base;
-	gemini_region_size = size;
-
 	hw_cmd_p = &hw_cmd_reset[0];
 
+	wmb();
 	msm_gemini_hw_write(hw_cmd_p++);
 	msm_gemini_hw_write(hw_cmd_p++);
 	msm_gemini_hw_write(hw_cmd_p++);
 	msm_gemini_hw_write(hw_cmd_p);
+	wmb();
 
 	return;
 }

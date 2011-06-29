@@ -247,7 +247,7 @@ static struct {
 	{ "NatSemi DP8381[56]", 0, 24 },
 };
 
-static struct pci_device_id natsemi_pci_tbl[] __devinitdata = {
+static DEFINE_PCI_DEVICE_TABLE(natsemi_pci_tbl) = {
 	{ PCI_VENDOR_ID_NS, 0x0020, 0x12d9,     0x000c,     0, 0, 0 },
 	{ PCI_VENDOR_ID_NS, 0x0020, PCI_ANY_ID, PCI_ANY_ID, 0, 0, 1 },
 	{ }	/* terminate list */
@@ -683,8 +683,8 @@ static ssize_t natsemi_set_dspcfg_workaround(struct device *dev,
         /* Find out the new setting */
         if (!strncmp("on", buf, count - 1) || !strncmp("1", buf, count - 1))
                 new_setting = 1;
-        else if (!strncmp("off", buf, count - 1)
-                 || !strncmp("0", buf, count - 1))
+        else if (!strncmp("off", buf, count - 1) ||
+                 !strncmp("0", buf, count - 1))
 		new_setting = 0;
 	else
                  return count;
@@ -757,8 +757,8 @@ static void __devinit natsemi_init_media (struct net_device *dev)
 	np->autoneg    = (tmp & BMCR_ANENABLE)? AUTONEG_ENABLE: AUTONEG_DISABLE;
 	np->advertising= mdio_read(dev, MII_ADVERTISE);
 
-	if ((np->advertising & ADVERTISE_ALL) != ADVERTISE_ALL
-	 && netif_msg_probe(np)) {
+	if ((np->advertising & ADVERTISE_ALL) != ADVERTISE_ALL &&
+	    netif_msg_probe(np)) {
 		printk(KERN_INFO "natsemi %s: Transceiver default autonegotiation %s "
 			"10%s %s duplex.\n",
 			pci_name(np->pci_dev),
@@ -1153,8 +1153,8 @@ static void init_phy_fixup(struct net_device *dev)
 	tmp = mdio_read(dev, MII_BMCR);
 	if (np->autoneg == AUTONEG_ENABLE) {
 		/* renegotiate if something changed */
-		if ((tmp & BMCR_ANENABLE) == 0
-		 || np->advertising != mdio_read(dev, MII_ADVERTISE))
+		if ((tmp & BMCR_ANENABLE) == 0 ||
+		    np->advertising != mdio_read(dev, MII_ADVERTISE))
 		{
 			/* turn on autonegotiation and force negotiation */
 			tmp |= (BMCR_ANENABLE | BMCR_ANRESTART);
@@ -1535,7 +1535,7 @@ static int netdev_open(struct net_device *dev)
 	/* Reset the chip, just in case. */
 	natsemi_reset(dev);
 
-	i = request_irq(dev->irq, &intr_handler, IRQF_SHARED, dev->name, dev);
+	i = request_irq(dev->irq, intr_handler, IRQF_SHARED, dev->name, dev);
 	if (i) return i;
 
 	if (netif_msg_ifup(np))
@@ -1905,7 +1905,7 @@ static void ns_tx_timeout(struct net_device *dev)
 	spin_unlock_irq(&np->lock);
 	enable_irq(dev->irq);
 
-	dev->trans_start = jiffies;
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	np->stats.tx_errors++;
 	netif_wake_queue(dev);
 }
@@ -2119,8 +2119,6 @@ static netdev_tx_t start_tx(struct sk_buff *skb, struct net_device *dev)
 	}
 	spin_unlock_irqrestore(&np->lock, flags);
 
-	dev->trans_start = jiffies;
-
 	if (netif_msg_tx_queued(np)) {
 		printk(KERN_DEBUG "%s: Transmit frame #%d queued in slot %d.\n",
 			dev->name, np->cur_tx, entry);
@@ -2164,8 +2162,8 @@ static void netdev_tx_done(struct net_device *dev)
 		dev_kfree_skb_irq(np->tx_skbuff[entry]);
 		np->tx_skbuff[entry] = NULL;
 	}
-	if (netif_queue_stopped(dev)
-		&& np->cur_tx - np->dirty_tx < TX_QUEUE_LEN - 4) {
+	if (netif_queue_stopped(dev) &&
+	    np->cur_tx - np->dirty_tx < TX_QUEUE_LEN - 4) {
 		/* The ring is no longer full, wake queue. */
 		netif_wake_queue(dev);
 	}
@@ -2343,8 +2341,8 @@ static void netdev_rx(struct net_device *dev, int *work_done, int work_to_do)
 			/* Omit CRC size. */
 			/* Check if the packet is long enough to accept
 			 * without copying to a minimally-sized skbuff. */
-			if (pkt_len < rx_copybreak
-			    && (skb = dev_alloc_skb(pkt_len + RX_OFFSET)) != NULL) {
+			if (pkt_len < rx_copybreak &&
+			    (skb = dev_alloc_skb(pkt_len + RX_OFFSET)) != NULL) {
 				/* 16 byte align the IP header */
 				skb_reserve(skb, RX_OFFSET);
 				pci_dma_sync_single_for_cpu(np->pci_dev,
@@ -2390,8 +2388,8 @@ static void netdev_error(struct net_device *dev, int intr_status)
 	spin_lock(&np->lock);
 	if (intr_status & LinkChange) {
 		u16 lpa = mdio_read(dev, MII_LPA);
-		if (mdio_read(dev, MII_BMCR) & BMCR_ANENABLE
-		 && netif_msg_link(np)) {
+		if (mdio_read(dev, MII_BMCR) & BMCR_ANENABLE &&
+		    netif_msg_link(np)) {
 			printk(KERN_INFO
 				"%s: Autonegotiation advertising"
 				" %#04x  partner %#04x.\n", dev->name,
@@ -2488,17 +2486,17 @@ static void __set_rx_mode(struct net_device *dev)
 	if (dev->flags & IFF_PROMISC) { /* Set promiscuous. */
 		rx_mode = RxFilterEnable | AcceptBroadcast
 			| AcceptAllMulticast | AcceptAllPhys | AcceptMyPhys;
-	} else if ((dev->mc_count > multicast_filter_limit)
-	  || (dev->flags & IFF_ALLMULTI)) {
+	} else if ((netdev_mc_count(dev) > multicast_filter_limit) ||
+		   (dev->flags & IFF_ALLMULTI)) {
 		rx_mode = RxFilterEnable | AcceptBroadcast
 			| AcceptAllMulticast | AcceptMyPhys;
 	} else {
-		struct dev_mc_list *mclist;
+		struct netdev_hw_addr *ha;
 		int i;
+
 		memset(mc_filter, 0, sizeof(mc_filter));
-		for (i = 0, mclist = dev->mc_list; mclist && i < dev->mc_count;
-			 i++, mclist = mclist->next) {
-			int b = (ether_crc(ETH_ALEN, mclist->dmi_addr) >> 23) & 0x1ff;
+		netdev_for_each_mc_addr(ha, dev) {
+			int b = (ether_crc(ETH_ALEN, ha->addr) >> 23) & 0x1ff;
 			mc_filter[b/8] |= (1 << (b & 0x07));
 		}
 		rx_mode = RxFilterEnable | AcceptBroadcast

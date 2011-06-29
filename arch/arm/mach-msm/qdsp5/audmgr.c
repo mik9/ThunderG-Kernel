@@ -21,6 +21,7 @@
 #include <linux/uaccess.h>
 #include <linux/kthread.h>
 #include <linux/wait.h>
+#include <linux/slab.h>
 
 #include <asm/atomic.h>
 #include <mach/msm_rpcrouter.h>

@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions are
@@ -47,8 +47,9 @@ enum {
 	PMAPP_CLOCK_VOTE_PIN_CTRL,
 };
 
-/* SMPS vreg ids */
+/* vreg ids */
 enum {
+	PMAPP_VREG_LDO22 = 14,
 	PMAPP_VREG_S3 = 21,
 	PMAPP_VREG_S2 = 23,
 	PMAPP_VREG_S4 = 24,
@@ -69,11 +70,12 @@ enum {
 	PMAPP_SMPS_MODE_VOTE_AUTO
 };
 
-int msm_pm_app_rpc_init(void);
-void msm_pm_app_rpc_deinit(void);
+int msm_pm_app_rpc_init(void(*callback)(int online));
+void msm_pm_app_rpc_deinit(void(*callback)(int online));
 int msm_pm_app_register_vbus_sn(void (*callback)(int online));
 void msm_pm_app_unregister_vbus_sn(void (*callback)(int online));
 int msm_pm_app_enable_usb_ldo(int);
+int pmic_vote_3p3_pwr_sel_switch(int boost);
 
 int pmapp_display_clock_config(uint enable);
 
@@ -81,5 +83,6 @@ int pmapp_clock_vote(const char *voter_id, uint clock_id, uint vote);
 int pmapp_smps_clock_vote(const char *voter_id, uint vreg_id, uint vote);
 int pmapp_vreg_level_vote(const char *voter_id, uint vreg_id, uint level);
 int pmapp_smps_mode_vote(const char *voter_id, uint vreg_id, uint mode);
-
+int pmapp_vreg_pincntrl_vote(const char *voter_id, uint vreg_id,
+					uint clock_id, uint vote);
 #endif

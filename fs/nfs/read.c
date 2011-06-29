@@ -40,7 +40,7 @@ static mempool_t *nfs_rdata_mempool;
 
 struct nfs_read_data *nfs_readdata_alloc(unsigned int pagecount)
 {
-	struct nfs_read_data *p = mempool_alloc(nfs_rdata_mempool, GFP_NOFS);
+	struct nfs_read_data *p = mempool_alloc(nfs_rdata_mempool, GFP_KERNEL);
 
 	if (p) {
 		memset(p, 0, sizeof(*p));
@@ -50,7 +50,7 @@ struct nfs_read_data *nfs_readdata_alloc(unsigned int pagecount)
 		if (pagecount <= ARRAY_SIZE(p->page_array))
 			p->pagevec = p->page_array;
 		else {
-			p->pagevec = kcalloc(pagecount, sizeof(struct page *), GFP_NOFS);
+			p->pagevec = kcalloc(pagecount, sizeof(struct page *), GFP_KERNEL);
 			if (!p->pagevec) {
 				mempool_free(p, nfs_rdata_mempool);
 				p = NULL;
@@ -356,25 +356,19 @@ static void nfs_readpage_retry(struct rpc_task *task, struct nfs_read_data *data
 	struct nfs_readres *resp = &data->res;
 
 	if (resp->eof || resp->count == argp->count)
-		goto out;
+		return;
 
 	/* This is a short read! */
 	nfs_inc_stats(data->inode, NFSIOS_SHORTREAD);
 	/* Has the server at least made some progress? */
 	if (resp->count == 0)
-		goto out;
+		return;
 
 	/* Yes, so retry the read at the end of the data */
 	argp->offset += resp->count;
 	argp->pgbase += resp->count;
 	argp->count -= resp->count;
-	nfs4_restart_rpc(task, NFS_SERVER(data->inode)->nfs_client);
-	return;
-out:
-	nfs4_sequence_free_slot(NFS_SERVER(data->inode)->nfs_client,
-				&data->res.seq_res);
-	return;
-
+	nfs_restart_rpc(task, NFS_SERVER(data->inode)->nfs_client);
 }
 
 /*

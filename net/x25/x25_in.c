@@ -23,6 +23,7 @@
  *					  i-frames.
  */
 
+#include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/string.h>
@@ -123,7 +124,7 @@ static int x25_state1_machine(struct sock *sk, struct sk_buff *skb, int frametyp
 			/*
 			 *	Copy any Call User Data.
 			 */
-			if (skb->len >= 0) {
+			if (skb->len > 0) {
 				skb_copy_from_linear_data(skb,
 					      x25->calluserdata.cuddata,
 					      skb->len);
@@ -274,7 +275,7 @@ static int x25_state3_machine(struct sock *sk, struct sk_buff *skb, int frametyp
 			break;
 
 		case X25_INTERRUPT_CONFIRMATION:
-			x25->intflag = 0;
+			clear_bit(X25_INTERRUPT_FLAG, &x25->flags);
 			break;
 
 		case X25_INTERRUPT:

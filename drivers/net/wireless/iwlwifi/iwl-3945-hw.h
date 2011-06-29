@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2005 - 2009 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2010 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2005 - 2009 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2010 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -71,18 +71,10 @@
 
 #include "iwl-eeprom.h"
 
-/*
- * uCode queue management definitions ...
- * Queue #4 is the command queue for 3945 and 4965.
- */
-#define IWL_CMD_QUEUE_NUM	4
-
-/* Time constants */
-#define SHORT_SLOT_TIME 9
-#define LONG_SLOT_TIME 20
-
 /* RSSI to dBm */
 #define IWL39_RSSI_OFFSET	95
+
+#define IWL_DEFAULT_TX_POWER	0x0F
 
 /*
  * EEPROM related constants, enums, and structures.
@@ -234,7 +226,6 @@ struct iwl3945_eeprom {
 
 /* 4 DATA + 1 CMD. There are 2 HCCA queues that are not used. */
 #define IWL39_NUM_QUEUES        5
-#define IWL_NUM_SCAN_RATES         (2)
 
 #define IWL_DEFAULT_TX_RETRY  15
 
@@ -253,12 +244,6 @@ struct iwl3945_eeprom {
 #define TFD_CTL_COUNT_GET(ctl)     ((ctl >> 24) & 7)
 #define TFD_CTL_PAD_SET(n)         (n << 28)
 #define TFD_CTL_PAD_GET(ctl)       (ctl >> 28)
-
-/*
- * RX related structures and functions
- */
-#define RX_FREE_BUFFERS 64
-#define RX_LOW_WATERMARK 8
 
 /* Sizes and addresses for instruction and data memory (SRAM) in
  * 3945's embedded processor.  Driver access is via HBUS_TARG_MEM_* regs. */

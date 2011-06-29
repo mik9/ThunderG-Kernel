@@ -78,8 +78,7 @@ static inline u32 getmiso(struct spi_device *dev)
 
 #define spidelay(x) ndelay(x)
 
-#define EXPAND_BITBANG_TXRX
-#include <linux/spi/spi_bitbang.h>
+#include "spi_bitbang_txrx.h"
 
 static u32 sh_sci_spi_txrx_mode0(struct spi_device *spi,
 				      unsigned nsecs, u32 word, u8 bits)
@@ -148,7 +147,7 @@ static int sh_sci_spi_probe(struct platform_device *dev)
 		ret = -ENOENT;
 		goto err1;
 	}
-	sp->membase = ioremap(r->start, r->end - r->start + 1);
+	sp->membase = ioremap(r->start, resource_size(r));
 	if (!sp->membase) {
 		ret = -ENXIO;
 		goto err1;

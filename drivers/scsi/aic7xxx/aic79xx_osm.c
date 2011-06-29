@@ -53,6 +53,7 @@ static struct scsi_transport_template *ahd_linux_transport_template = NULL;
 #include <linux/blkdev.h>		/* For block_size() */
 #include <linux/delay.h>	/* For ssleep/msleep */
 #include <linux/device.h>
+#include <linux/slab.h>
 
 /*
  * Bucket size for counting good commands in between bad ones.
@@ -2335,7 +2336,7 @@ ahd_linux_queue_abort_cmd(struct scsi_cmnd *cmd)
 			/*
 			 * The sequencer will never re-reference the
 			 * in-core SCB.  To make sure we are notified
-			 * during reslection, set the MK_MESSAGE flag in
+			 * during reselection, set the MK_MESSAGE flag in
 			 * the card's copy of the SCB.
 			 */
 			ahd_outb(ahd, SCB_CONTROL,

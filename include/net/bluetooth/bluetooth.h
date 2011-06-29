@@ -121,7 +121,7 @@ struct bt_sock_list {
 	rwlock_t          lock;
 };
 
-int  bt_sock_register(int proto, struct net_proto_family *ops);
+int  bt_sock_register(int proto, const struct net_proto_family *ops);
 int  bt_sock_unregister(int proto);
 void bt_sock_link(struct bt_sock_list *l, struct sock *s);
 void bt_sock_unlink(struct bt_sock_list *l, struct sock *s);
@@ -176,6 +176,6 @@ extern void hci_sock_cleanup(void);
 extern int bt_sysfs_init(void);
 extern void bt_sysfs_cleanup(void);
 
-extern struct class *bt_class;
+extern struct dentry *bt_debugfs;
 
 #endif /* __BLUETOOTH_H */

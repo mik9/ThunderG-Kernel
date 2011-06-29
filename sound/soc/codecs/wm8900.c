@@ -24,6 +24,7 @@
 #include <linux/pm.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -187,7 +188,6 @@ static int wm8900_volatile_register(unsigned int reg)
 {
 	switch (reg) {
 	case WM8900_REG_ID:
-	case WM8900_REG_POWER1:
 		return 1;
 	default:
 		return 0;
@@ -199,7 +199,7 @@ static void wm8900_reset(struct snd_soc_codec *codec)
 	snd_soc_write(codec, WM8900_REG_RESET, 0);
 
 	memcpy(codec->reg_cache, wm8900_reg_defaults,
-	       sizeof(codec->reg_cache));
+	       sizeof(wm8900_reg_defaults));
 }
 
 static int wm8900_hp_event(struct snd_soc_dapm_widget *w,
@@ -618,8 +618,6 @@ static int wm8900_add_widgets(struct snd_soc_codec *codec)
 
 	snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
 
-	snd_soc_dapm_new_widgets(codec);
-
 	return 0;
 }
 
@@ -746,7 +744,7 @@ static int fll_factors(struct _fll_div *fll_div, unsigned int Fref,
 static int wm8900_set_fll(struct snd_soc_codec *codec,
 	int fll_id, unsigned int freq_in, unsigned int freq_out)
 {
-	struct wm8900_priv *wm8900 = codec->private_data;
+	struct wm8900_priv *wm8900 = snd_soc_codec_get_drvdata(codec);
 	struct _fll_div fll_div;
 	unsigned int reg;
 
@@ -814,8 +812,8 @@ reenable:
 	return 0;
 }
 
-static int wm8900_set_dai_pll(struct snd_soc_dai *codec_dai,
-		int pll_id, unsigned int freq_in, unsigned int freq_out)
+static int wm8900_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
+		int source, unsigned int freq_in, unsigned int freq_out)
 {
 	return wm8900_set_fll(codec_dai->codec, pll_id, freq_in, freq_out);
 }
@@ -1133,7 +1131,7 @@ static int wm8900_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
 	struct snd_soc_codec *codec = socdev->card->codec;
-	struct wm8900_priv *wm8900 = codec->private_data;
+	struct wm8900_priv *wm8900 = snd_soc_codec_get_drvdata(codec);
 	int fll_out = wm8900->fll_out;
 	int fll_in  = wm8900->fll_in;
 	int ret;
@@ -1157,7 +1155,7 @@ static int wm8900_resume(struct platform_device *pdev)
 {
 	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
 	struct snd_soc_codec *codec = socdev->card->codec;
-	struct wm8900_priv *wm8900 = codec->private_data;
+	struct wm8900_priv *wm8900 = snd_soc_codec_get_drvdata(codec);
 	u16 *cache;
 	int i, ret;
 
@@ -1207,7 +1205,7 @@ static __devinit int wm8900_i2c_probe(struct i2c_client *i2c,
 		return -ENOMEM;
 
 	codec = &wm8900->codec;
-	codec->private_data = wm8900;
+	snd_soc_codec_set_drvdata(codec, wm8900);
 	codec->reg_cache = &wm8900->reg_cache[0];
 	codec->reg_cache_size = WM8900_MAXREG;
 
@@ -1236,11 +1234,6 @@ static __devinit int wm8900_i2c_probe(struct i2c_client *i2c,
 		ret = -ENODEV;
 		goto err;
 	}
-
-	/* Read back from the chip */
-	reg = snd_soc_read(codec, WM8900_REG_POWER1);
-	reg = (reg >> 12) & 0xf;
-	dev_info(&i2c->dev, "WM8900 revision %d\n", reg);
 
 	wm8900_reset(codec);
 
@@ -1306,26 +1299,11 @@ static __devexit int wm8900_i2c_remove(struct i2c_client *client)
 	wm8900_set_bias_level(wm8900_codec, SND_SOC_BIAS_OFF);
 
 	wm8900_dai.dev = NULL;
-	kfree(wm8900_codec->private_data);
+	kfree(snd_soc_codec_get_drvdata(wm8900_codec));
 	wm8900_codec = NULL;
 
 	return 0;
 }
-
-#ifdef CONFIG_PM
-static int wm8900_i2c_suspend(struct i2c_client *client, pm_message_t msg)
-{
-	return snd_soc_suspend_device(&client->dev);
-}
-
-static int wm8900_i2c_resume(struct i2c_client *client)
-{
-	return snd_soc_resume_device(&client->dev);
-}
-#else
-#define wm8900_i2c_suspend NULL
-#define wm8900_i2c_resume NULL
-#endif
 
 static const struct i2c_device_id wm8900_i2c_id[] = {
 	{ "wm8900", 0 },
@@ -1340,8 +1318,6 @@ static struct i2c_driver wm8900_i2c_driver = {
 	},
 	.probe = wm8900_i2c_probe,
 	.remove = __devexit_p(wm8900_i2c_remove),
-	.suspend = wm8900_i2c_suspend,
-	.resume = wm8900_i2c_resume,
 	.id_table = wm8900_i2c_id,
 };
 
@@ -1370,17 +1346,6 @@ static int wm8900_probe(struct platform_device *pdev)
 				ARRAY_SIZE(wm8900_snd_controls));
 	wm8900_add_widgets(codec);
 
-	ret = snd_soc_init_card(socdev);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Failed to register card\n");
-		goto card_err;
-	}
-
-	return ret;
-
-card_err:
-	snd_soc_free_pcms(socdev);
-	snd_soc_dapm_free(socdev);
 pcm_err:
 	return ret;
 }

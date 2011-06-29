@@ -26,6 +26,7 @@
 #include <linux/mfd/pmic8058.h>
 #include <linux/pmic8058-nfc.h>
 #include <linux/debugfs.h>
+#include <linux/slab.h>
 
 /* PMIC8058 NFC */
 #define	SSBI_REG_NFC_CTRL	0x14D

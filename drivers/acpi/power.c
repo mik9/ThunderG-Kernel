@@ -39,6 +39,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/types.h>
+#include <linux/slab.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #include <acpi/acpi_bus.h>
@@ -65,7 +66,7 @@ static int acpi_power_remove(struct acpi_device *device, int type);
 static int acpi_power_resume(struct acpi_device *device);
 static int acpi_power_open_fs(struct inode *inode, struct file *file);
 
-static struct acpi_device_id power_device_ids[] = {
+static const struct acpi_device_id power_device_ids[] = {
 	{ACPI_POWER_HID, 0},
 	{"", 0},
 };
@@ -171,7 +172,6 @@ static int acpi_power_get_list_state(struct acpi_handle_list *list, int *state)
 		return -EINVAL;
 
 	/* The state of the list is 'on' IFF all resources are 'on'. */
-	/* */
 
 	for (i = 0; i < list->count; i++) {
 		/*

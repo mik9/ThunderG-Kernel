@@ -20,10 +20,32 @@
 #include <linux/err.h>
 #include <mach/msm_reqs.h>
 
+struct pm_qos_request_list {
+        struct list_head list;
+        union {
+                s32 value;
+                s32 usec;
+                s32 kbps;
+        };
+        int pm_qos_class;
+};
+
+
+struct pm_qos_object {
+        struct pm_qos_request_list requests;
+        struct blocking_notifier_head *notifiers;
+        struct miscdevice pm_qos_power_miscdev;
+        char *name;
+        s32 default_value;
+        atomic_t target_value;
+        s32 (*comparitor)(s32, s32);
+};
+
+
 int msm_pm_qos_add(struct pm_qos_object *class, char *request_name,
 		   s32 value, void **request_data)
 {
-	char *resource_name = class->plugin->data;
+	char *resource_name = class->name;
 
 	/* Non-default requirements are not allowed since, if the resource
 	 * isn't available yet, the request can't be honoured. */

@@ -246,6 +246,14 @@ config LGE_DIAG_WMC
 	help
 	  LGE diag WMC enable
 
+config LGE_ATCMD_TTY
+	bool "Support LGE atcmd bypassing tty"
+	default n
+	help
+	  Support LGE atcmd bypassing tty. "/dev/atcmd-tty0" is back-end tty,
+	  and "dev/atcmd-tty1" is front-end tty. Back-end tty will be interfaced
+	  with portbridge and front-end tty will be interfaced with parser/filter.
+
 config LGE_GRAM_REFRESH_PATCH
 	bool "LGE gram refresh patch"
 	default n
@@ -256,6 +264,18 @@ config LGE_GRAM_REFRESH_PATCH
 	  this can cause displaying broken screen in time of turning backlight on.
 	  for preventing this problem, add refreshing routine before turning 
 	  backlight on by using late resume mechanism.
+
+config LGE_SUSPEND_HIGH_PRIO_PATCH
+	bool "Make 'suspend' kernel thread get SCHED_FIFO policy"
+	default n
+	help
+	  This patch is added for guaranteeing instant scheduling of "suspend" kthread.
+	  Normally, "suspend" kthread is scheduled as soon as writing "on" to /sys/power/state.
+	  But, sometimes "suspend" kthread can't be scheduled in 5~6 second. 
+	  This causes black screen in spite of pushing power button.
+	  For prevent this, raise scheduling policy of "suspend" kthread to SCHED_FIFO when
+	  entering early suspend state, and lower to SCHED_NORMAL when escaping late resume 
+	  state
 endmenu
 
 endmenu

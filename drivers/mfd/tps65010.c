@@ -531,7 +531,6 @@ static int __exit tps65010_remove(struct i2c_client *client)
 	flush_scheduled_work();
 	debugfs_remove(tps->file);
 	kfree(tps);
-	i2c_set_clientdata(client, NULL);
 	the_tps = NULL;
 	return 0;
 }
@@ -637,7 +636,7 @@ static int tps65010_probe(struct i2c_client *client,
 				tps, DEBUG_FOPS);
 
 	/* optionally register GPIOs */
-	if (board && board->base > 0) {
+	if (board && board->base != 0) {
 		tps->outmask = board->outmask;
 
 		tps->chip.label = client->name;
@@ -963,6 +962,34 @@ int tps65010_config_vregs1(unsigned value)
 	return status;
 }
 EXPORT_SYMBOL(tps65010_config_vregs1);
+
+int tps65010_config_vdcdc2(unsigned value)
+{
+	struct i2c_client *c;
+	int	 status;
+
+	if (!the_tps)
+		return -ENODEV;
+
+	c = the_tps->client;
+	mutex_lock(&the_tps->lock);
+
+	pr_debug("%s: vdcdc2 0x%02x\n", DRIVER_NAME,
+		 i2c_smbus_read_byte_data(c, TPS_VDCDC2));
+
+	status = i2c_smbus_write_byte_data(c, TPS_VDCDC2, value);
+
+	if (status != 0)
+		printk(KERN_ERR "%s: Failed to write vdcdc2 register\n",
+			DRIVER_NAME);
+	else
+		pr_debug("%s: vregs1 0x%02x\n", DRIVER_NAME,
+			 i2c_smbus_read_byte_data(c, TPS_VDCDC2));
+
+	mutex_unlock(&the_tps->lock);
+	return status;
+}
+EXPORT_SYMBOL(tps65010_config_vdcdc2);
 
 /*-------------------------------------------------------------------------*/
 /* tps65013_set_low_pwr parameter:

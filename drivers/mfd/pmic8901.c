@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -17,9 +17,12 @@
 
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
+#include <linux/slab.h>
+#include <linux/ratelimit.h>
 #include <linux/mfd/core.h>
 #include <linux/mfd/pmic8901.h>
 #include <linux/platform_device.h>
+#include <linux/debugfs.h>
 
 /* PMIC8901 Revision */
 #define SSBI_REG_REV			0x002  /* PMIC4 revision */
@@ -57,6 +60,15 @@
 
 #define MPP_IRQ_BLOCK			1
 
+/* FTS regulator PMR registers */
+#define SSBI_REG_ADDR_S1_PMR		(0xA7)
+#define SSBI_REG_ADDR_S2_PMR		(0xA8)
+#define SSBI_REG_ADDR_S3_PMR		(0xA9)
+#define SSBI_REG_ADDR_S4_PMR		(0xAA)
+
+#define REGULATOR_PMR_STATE_MASK	0x60
+#define REGULATOR_PMR_STATE_OFF		0x20
+
 struct pm8901_chip {
 	struct pm8901_platform_data	pdata;
 
@@ -77,6 +89,17 @@ struct pm8901_chip {
 
 	spinlock_t	pm_lock;
 };
+
+#if defined(CONFIG_DEBUG_FS)
+struct pm8901_dbg_device {
+	struct mutex		dbg_mutex;
+	struct pm8901_chip	*pm_chip;
+	struct dentry		*dent;
+	int			addr;
+};
+
+static struct pm8901_dbg_device *pmic_dbg_device;
+#endif
 
 static struct pm8901_chip *pmic_chip;
 
@@ -119,6 +142,19 @@ ssbi_read(struct i2c_client *client, u16 addr, u8 *buf, size_t len)
 }
 
 /* External APIs */
+int pm8901_rev(struct pm8901_chip *chip)
+{
+	if (chip == NULL) {
+		if (pmic_chip != NULL)
+			return pmic_chip->revision;
+		else
+			return -EINVAL;
+	}
+
+	return chip->revision;
+}
+EXPORT_SYMBOL(pm8901_rev);
+
 int pm8901_read(struct pm8901_chip *chip, u16 addr, u8 *values,
 		unsigned int len)
 {
@@ -178,6 +214,47 @@ bail_out:
 	return rc;
 }
 EXPORT_SYMBOL(pm8901_irq_get_rt_status);
+
+int pm8901_reset_pwr_off(int reset)
+{
+	int rc = 0, i;
+	u8 pmr;
+	u8 pmr_addr[4] = {
+		SSBI_REG_ADDR_S2_PMR,
+		SSBI_REG_ADDR_S3_PMR,
+		SSBI_REG_ADDR_S4_PMR,
+		SSBI_REG_ADDR_S1_PMR,
+	};
+
+	if (pmic_chip == NULL)
+		return -ENODEV;
+
+	/* Turn off regulators S1, S2, S3, S4 when shutting down. */
+	if (!reset) {
+		for (i = 0; i < 4; i++) {
+			rc = ssbi_read(pmic_chip->dev, pmr_addr[i], &pmr, 1);
+			if (rc) {
+				pr_err("%s: FAIL ssbi_read(0x%x): rc=%d\n",
+				       __func__, pmr_addr[i], rc);
+				goto get_out;
+			}
+
+			pmr &= ~REGULATOR_PMR_STATE_MASK;
+			pmr |= REGULATOR_PMR_STATE_OFF;
+
+			rc = ssbi_write(pmic_chip->dev, pmr_addr[i], &pmr, 1);
+			if (rc) {
+				pr_err("%s: FAIL ssbi_write(0x%x)=0x%x: rc=%d"
+				       "\n", __func__, pmr_addr[i], pmr, rc);
+				goto get_out;
+			}
+		}
+	}
+
+get_out:
+	return rc;
+}
+EXPORT_SYMBOL(pm8901_reset_pwr_off);
 
 /* Internal functions */
 static inline int
@@ -498,6 +575,184 @@ bail_out:
 	return IRQ_HANDLED;
 }
 
+#if defined(CONFIG_DEBUG_FS)
+
+static int check_addr(int addr, const char *func_name)
+{
+	if (addr < 0 || addr > 0x3FF) {
+		pr_err("%s: PMIC 8901 register address is invalid: %d\n",
+			func_name, addr);
+		return -EINVAL;
+	}
+	return 0;
+}
+
+static int data_set(void *data, u64 val)
+{
+	struct pm8901_dbg_device *dbgdev = data;
+	u8 reg = val;
+	int rc;
+
+	mutex_lock(&dbgdev->dbg_mutex);
+
+	rc = check_addr(dbgdev->addr, __func__);
+	if (rc)
+		goto done;
+
+	rc = pm8901_write(dbgdev->pm_chip, dbgdev->addr, &reg, 1);
+
+	if (rc)
+		pr_err("%s: FAIL pm8901_write(0x%03X)=0x%02X: rc=%d\n",
+			__func__, dbgdev->addr, reg, rc);
+done:
+	mutex_unlock(&dbgdev->dbg_mutex);
+	return rc;
+}
+
+static int data_get(void *data, u64 *val)
+{
+	struct pm8901_dbg_device *dbgdev = data;
+	int rc;
+	u8 reg;
+
+	mutex_lock(&dbgdev->dbg_mutex);
+
+	rc = check_addr(dbgdev->addr, __func__);
+	if (rc)
+		goto done;
+
+	rc = pm8901_read(dbgdev->pm_chip, dbgdev->addr, &reg, 1);
+
+	if (rc) {
+		pr_err("%s: FAIL pm8901_read(0x%03X)=0x%02X: rc=%d\n",
+			__func__, dbgdev->addr, reg, rc);
+		goto done;
+	}
+
+	*val = reg;
+done:
+	mutex_unlock(&dbgdev->dbg_mutex);
+	return rc;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(dbg_data_fops, data_get, data_set, "0x%02llX\n");
+
+static int addr_set(void *data, u64 val)
+{
+	struct pm8901_dbg_device *dbgdev = data;
+	int rc;
+
+	rc = check_addr(val, __func__);
+	if (rc)
+		return rc;
+
+	mutex_lock(&dbgdev->dbg_mutex);
+	dbgdev->addr = val;
+	mutex_unlock(&dbgdev->dbg_mutex);
+
+	return 0;
+}
+
+static int addr_get(void *data, u64 *val)
+{
+	struct pm8901_dbg_device *dbgdev = data;
+	int rc;
+
+	mutex_lock(&dbgdev->dbg_mutex);
+
+	rc = check_addr(dbgdev->addr, __func__);
+	if (rc) {
+		mutex_unlock(&dbgdev->dbg_mutex);
+		return rc;
+	}
+	*val = dbgdev->addr;
+
+	mutex_unlock(&dbgdev->dbg_mutex);
+
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(dbg_addr_fops, addr_get, addr_set, "0x%03llX\n");
+
+static int __devinit pmic8901_dbg_probe(struct pm8901_chip *chip)
+{
+	struct pm8901_dbg_device *dbgdev;
+	struct dentry *dent;
+	struct dentry *temp;
+
+	if (chip == NULL) {
+		pr_err("%s: no parent data passed in.\n", __func__);
+		return -EINVAL;
+	}
+
+	dbgdev = kzalloc(sizeof *dbgdev, GFP_KERNEL);
+	if (dbgdev == NULL) {
+		pr_err("%s: kzalloc() failed.\n", __func__);
+		return -ENOMEM;
+	}
+
+	mutex_init(&dbgdev->dbg_mutex);
+
+	dbgdev->pm_chip = chip;
+	dbgdev->addr = -1;
+
+	dent = debugfs_create_dir("pm8901-dbg", NULL);
+	if (dent == NULL || IS_ERR(dent)) {
+		pr_err("%s: ERR debugfs_create_dir: dent=0x%X\n",
+					__func__, (unsigned)dent);
+		return -ENOMEM;
+	}
+
+	temp = debugfs_create_file("addr", S_IRUSR | S_IWUSR, dent,
+					dbgdev, &dbg_addr_fops);
+	if (temp == NULL || IS_ERR(temp)) {
+		pr_err("%s: ERR debugfs_create_file: dent=0x%X\n",
+					__func__, (unsigned)temp);
+		goto debug_error;
+	}
+
+	temp = debugfs_create_file("data", S_IRUSR | S_IWUSR, dent,
+					dbgdev, &dbg_data_fops);
+	if (temp == NULL || IS_ERR(temp)) {
+		pr_err("%s: ERR debugfs_create_file: dent=0x%X\n",
+					__func__, (unsigned)temp);
+		goto debug_error;
+	}
+
+	dbgdev->dent = dent;
+
+	pmic_dbg_device = dbgdev;
+
+	return 0;
+
+debug_error:
+	debugfs_remove_recursive(dent);
+	return -ENOMEM;
+}
+
+static int __devexit pmic8901_dbg_remove(void)
+{
+	if (pmic_dbg_device) {
+		debugfs_remove_recursive(pmic_dbg_device->dent);
+		kfree(pmic_dbg_device);
+	}
+	return 0;
+}
+
+#else
+
+static int __devinit pmic8901_dbg_probe(struct pm8901_chip *chip)
+{
+	return 0;
+}
+
+static int __devexit pmic8901_dbg_remove(void)
+{
+	return 0;
+}
+
+#endif
+
 static struct irq_chip pm8901_irq_chip = {
 	.name      = "pm8901",
 	.ack       = pm8901_irq_ack,
@@ -573,11 +828,15 @@ static int pm8901_probe(struct i2c_client *client,
 	}
 
 	rc = request_threaded_irq(chip->dev->irq, NULL, pm8901_isr_thread,
-			IRQF_ONESHOT | IRQF_DISABLED | IRQF_TRIGGER_LOW,
+			IRQF_ONESHOT | IRQF_DISABLED | pdata->irq_trigger_flags,
 			"pm8901-irq", chip);
 	if (rc)
 		pr_err("%s: could not request irq %d: %d\n", __func__,
 				chip->dev->irq, rc);
+
+	rc = pmic8901_dbg_probe(chip);
+	if (rc < 0)
+		pr_err("%s: could not set up debugfs: %d\n", __func__, rc);
 
 	return rc;
 }
@@ -599,6 +858,8 @@ static int __devexit pm8901_remove(struct i2c_client *client)
 
 		kfree(chip);
 	}
+
+	pmic8901_dbg_remove();
 
 	return 0;
 }

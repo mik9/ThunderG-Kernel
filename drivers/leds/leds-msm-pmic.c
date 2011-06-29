@@ -31,8 +31,8 @@ struct msm_pmic_leds_pdata *leds_pdata = 0;
 #endif
 
 /*LED has 15 steps (10mA per step). LED's  max power capacity is 150mA. (0~255 level)*/
-#define MAX_KEYPAD_BL_LEVEL		16	// 150mA
-#define TUNED_MAX_KEYPAD_BL_LEVEL	80	// 30mA ==> 2400 / 30 = 80
+#define MAX_KEYPAD_BL_LEVEL	16	// 150mA
+#define TUNED_MAX_KEYPAD_BL_LEVEL	40	// 60mA
 
 
 static void msm_keypad_bl_led_set(struct led_classdev *led_cdev,

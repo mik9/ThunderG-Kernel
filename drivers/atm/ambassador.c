@@ -36,6 +36,7 @@
 #include <linux/mutex.h>
 #include <linux/firmware.h>
 #include <linux/ihex.h>
+#include <linux/slab.h>
 
 #include <asm/atomic.h>
 #include <asm/io.h>
@@ -2351,6 +2352,7 @@ static void __init amb_check_args (void) {
 MODULE_AUTHOR(maintainer_string);
 MODULE_DESCRIPTION(description_string);
 MODULE_LICENSE("GPL");
+MODULE_FIRMWARE("atmsar11.fw");
 module_param(debug,   ushort, 0644);
 module_param(cmds,    uint, 0);
 module_param(txs,     uint, 0);

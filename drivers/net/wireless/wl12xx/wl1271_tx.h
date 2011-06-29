@@ -26,7 +26,7 @@
 #define __WL1271_TX_H__
 
 #define TX_HW_BLOCK_SPARE                2
-#define TX_HW_BLOCK_SHIFT_DIV            8
+#define TX_HW_BLOCK_SIZE                 252
 
 #define TX_HW_MGMT_PKT_LIFETIME_TU       2000
 /* The chipset reference driver states, that the "aid" value 1
@@ -58,7 +58,7 @@
 
 struct wl1271_tx_hw_descr {
 	/* Length of packet in words, including descriptor+header+data */
-	u16 length;
+	__le16 length;
 	/* Number of extra memory blocks to allocate for this packet in
 	   addition to the number of blocks derived from the packet length */
 	u8 extra_mem_blocks;
@@ -67,12 +67,12 @@ struct wl1271_tx_hw_descr {
 	   HW!! */
 	u8 total_mem_blocks;
 	/* Device time (in us) when the packet arrived to the driver */
-	u32 start_time;
+	__le32 start_time;
 	/* Max delay in TUs until transmission. The last device time the
 	   packet can be transmitted is: startTime+(1024*LifeTime) */
-	u16 life_time;
+	__le16 life_time;
 	/* Bitwise fields - see TX_ATTR... definitions above. */
-	u16 tx_attr;
+	__le16 tx_attr;
 	/* Packet identifier used also in the Tx-Result. */
 	u8 id;
 	/* The packet TID value (as User-Priority) */
@@ -100,12 +100,12 @@ struct wl1271_tx_hw_res_descr {
 	   several possible reasons for failure. */
 	u8 status;
 	/* Total air access duration including all retrys and overheads.*/
-	u16 medium_usage;
+	__le16 medium_usage;
 	/* The time passed from host xfer to Tx-complete.*/
-	u32 fw_handling_time;
+	__le32 fw_handling_time;
 	/* Total media delay
 	   (from 1st EDCA AIFS counter until TX Complete). */
-	u32 medium_delay;
+	__le32 medium_delay;
 	/* LS-byte of last TKIP seq-num (saved per AC for recovery). */
 	u8 lsb_security_sequence_number;
 	/* Retry count - number of transmissions without successful ACK.*/
@@ -118,13 +118,48 @@ struct wl1271_tx_hw_res_descr {
 } __attribute__ ((packed));
 
 struct wl1271_tx_hw_res_if {
-	u32 tx_result_fw_counter;
-	u32 tx_result_host_counter;
+	__le32 tx_result_fw_counter;
+	__le32 tx_result_host_counter;
 	struct wl1271_tx_hw_res_descr tx_results_queue[TX_HW_RESULT_QUEUE_LEN];
 } __attribute__ ((packed));
 
+static inline int wl1271_tx_get_queue(int queue)
+{
+	switch (queue) {
+	case 0:
+		return CONF_TX_AC_VO;
+	case 1:
+		return CONF_TX_AC_VI;
+	case 2:
+		return CONF_TX_AC_BE;
+	case 3:
+		return CONF_TX_AC_BK;
+	default:
+		return CONF_TX_AC_BE;
+	}
+}
+
+/* wl1271 tx descriptor needs the tid and we need to convert it from ac */
+static inline int wl1271_tx_ac_to_tid(int ac)
+{
+	switch (ac) {
+	case 0:
+		return 0;
+	case 1:
+		return 2;
+	case 2:
+		return 4;
+	case 3:
+		return 6;
+	default:
+		return 0;
+	}
+}
+
 void wl1271_tx_work(struct work_struct *work);
-void wl1271_tx_complete(struct wl1271 *wl, u32 count);
+void wl1271_tx_complete(struct wl1271 *wl);
 void wl1271_tx_flush(struct wl1271 *wl);
+u8 wl1271_rate_to_idx(struct wl1271 *wl, int rate);
+u32 wl1271_tx_enabled_rates_get(struct wl1271 *wl, u32 rate_set);
 
 #endif

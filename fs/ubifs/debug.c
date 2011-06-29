@@ -34,6 +34,7 @@
 #include <linux/moduleparam.h>
 #include <linux/debugfs.h>
 #include <linux/math64.h>
+#include <linux/slab.h>
 
 #ifdef CONFIG_UBIFS_FS_DEBUG
 
@@ -350,13 +351,8 @@ void dbg_dump_node(const struct ubifs_info *c, const void *node)
 		       le32_to_cpu(sup->fmt_version));
 		printk(KERN_DEBUG "\ttime_gran      %u\n",
 		       le32_to_cpu(sup->time_gran));
-		printk(KERN_DEBUG "\tUUID           %02X%02X%02X%02X-%02X%02X"
-		       "-%02X%02X-%02X%02X-%02X%02X%02X%02X%02X%02X\n",
-		       sup->uuid[0], sup->uuid[1], sup->uuid[2], sup->uuid[3],
-		       sup->uuid[4], sup->uuid[5], sup->uuid[6], sup->uuid[7],
-		       sup->uuid[8], sup->uuid[9], sup->uuid[10], sup->uuid[11],
-		       sup->uuid[12], sup->uuid[13], sup->uuid[14],
-		       sup->uuid[15]);
+		printk(KERN_DEBUG "\tUUID           %pUB\n",
+		       sup->uuid);
 		break;
 	}
 	case UBIFS_MST_NODE:
@@ -965,39 +961,11 @@ void dbg_dump_index(struct ubifs_info *c)
 void dbg_save_space_info(struct ubifs_info *c)
 {
 	struct ubifs_debug_info *d = c->dbg;
-	int freeable_cnt;
+
+	ubifs_get_lp_stats(c, &d->saved_lst);
 
 	spin_lock(&c->space_lock);
-	memcpy(&d->saved_lst, &c->lst, sizeof(struct ubifs_lp_stats));
-
-	/*
-	 * We use a dirty hack here and zero out @c->freeable_cnt, because it
-	 * affects the free space calculations, and UBIFS might not know about
-	 * all freeable eraseblocks. Indeed, we know about freeable eraseblocks
-	 * only when we read their lprops, and we do this only lazily, upon the
-	 * need. So at any given point of time @c->freeable_cnt might be not
-	 * exactly accurate.
-	 *
-	 * Just one example about the issue we hit when we did not zero
-	 * @c->freeable_cnt.
-	 * 1. The file-system is mounted R/O, c->freeable_cnt is %0. We save the
-	 *    amount of free space in @d->saved_free
-	 * 2. We re-mount R/W, which makes UBIFS to read the "lsave"
-	 *    information from flash, where we cache LEBs from various
-	 *    categories ('ubifs_remount_fs()' -> 'ubifs_lpt_init()'
-	 *    -> 'lpt_init_wr()' -> 'read_lsave()' -> 'ubifs_lpt_lookup()'
-	 *    -> 'ubifs_get_pnode()' -> 'update_cats()'
-	 *    -> 'ubifs_add_to_cat()').
-	 * 3. Lsave contains a freeable eraseblock, and @c->freeable_cnt
-	 *    becomes %1.
-	 * 4. We calculate the amount of free space when the re-mount is
-	 *    finished in 'dbg_check_space_info()' and it does not match
-	 *    @d->saved_free.
-	 */
-	freeable_cnt = c->freeable_cnt;
-	c->freeable_cnt = 0;
 	d->saved_free = ubifs_get_free_space_nolock(c);
-	c->freeable_cnt = freeable_cnt;
 	spin_unlock(&c->space_lock);
 }
 
@@ -1014,15 +982,12 @@ int dbg_check_space_info(struct ubifs_info *c)
 {
 	struct ubifs_debug_info *d = c->dbg;
 	struct ubifs_lp_stats lst;
-	long long free;
-	int freeable_cnt;
+	long long avail, free;
 
 	spin_lock(&c->space_lock);
-	freeable_cnt = c->freeable_cnt;
-	c->freeable_cnt = 0;
-	free = ubifs_get_free_space_nolock(c);
-	c->freeable_cnt = freeable_cnt;
+	avail = ubifs_calc_available(c, c->min_idx_lebs);
 	spin_unlock(&c->space_lock);
+	free = ubifs_get_free_space(c);
 
 	if (free != d->saved_free) {
 		ubifs_err("free space changed from %lld to %lld",
@@ -2045,7 +2010,7 @@ static int check_leaf(struct ubifs_info *c, struct ubifs_zbranch *zbr,
 		inum = key_inum_flash(c, &dent->key);
 		fscki1 = read_add_inode(c, priv, inum);
 		if (IS_ERR(fscki1)) {
-			err = PTR_ERR(fscki);
+			err = PTR_ERR(fscki1);
 			ubifs_err("error %d while processing entry node and "
 				  "trying to find parent inode node %lu",
 				  err, (unsigned long)inum);
@@ -2691,19 +2656,19 @@ int dbg_debugfs_init_fs(struct ubifs_info *c)
 	}
 
 	fname = "dump_lprops";
-	dent = debugfs_create_file(fname, S_IWUSR, d->dfs_dir, c, &dfs_fops);
+	dent = debugfs_create_file(fname, S_IWUGO, d->dfs_dir, c, &dfs_fops);
 	if (IS_ERR(dent))
 		goto out_remove;
 	d->dfs_dump_lprops = dent;
 
 	fname = "dump_budg";
-	dent = debugfs_create_file(fname, S_IWUSR, d->dfs_dir, c, &dfs_fops);
+	dent = debugfs_create_file(fname, S_IWUGO, d->dfs_dir, c, &dfs_fops);
 	if (IS_ERR(dent))
 		goto out_remove;
 	d->dfs_dump_budg = dent;
 
 	fname = "dump_tnc";
-	dent = debugfs_create_file(fname, S_IWUSR, d->dfs_dir, c, &dfs_fops);
+	dent = debugfs_create_file(fname, S_IWUGO, d->dfs_dir, c, &dfs_fops);
 	if (IS_ERR(dent))
 		goto out_remove;
 	d->dfs_dump_tnc = dent;

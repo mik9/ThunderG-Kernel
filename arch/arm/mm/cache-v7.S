@@ -91,7 +91,11 @@ ENTRY(v7_flush_kern_cache_all)
  THUMB(	stmfd	sp!, {r4-r7, r9-r11, lr}	)
 	bl	v7_flush_dcache_all
 	mov	r0, #0
+#ifdef CONFIG_SMP
+	mcr	p15, 0, r0, c7, c1, 0		@ invalidate I-cache inner shareable
+#else
 	mcr	p15, 0, r0, c7, c5, 0		@ I+BTB cache invalidate
+#endif
  ARM(	ldmfd	sp!, {r4-r5, r7, r9-r11, lr}	)
  THUMB(	ldmfd	sp!, {r4-r7, r9-r11, lr}	)
 	mov	pc, lr
@@ -158,6 +162,20 @@ ENTRY(v7_coherent_user_range)
 	dcache_line_size r2, r3
 	sub	r3, r2, #1
 	bic	r0, r0, r3
+#ifdef CONFIG_SCORPION_Uni_45nm_BUG
+1:
+ USER(	mcr	p15, 0, r0, c7, c11, 1	)	@ clean D line to PoU (DCCMVAU)
+	add	r0, r0, r2
+2:
+	cmp	r0, r1
+	blo	1b
+	dsb
+	mov	r0, #0
+	mcr	p15, 0, r0, c7, c5, 0		@ invalidate I-Cache and BTB
+	dsb
+	isb
+	mov	pc, lr
+#else
 1:
  USER(	mcr	p15, 0, r0, c7, c11, 1	)	@ clean D line to the point of unification
 	dsb
@@ -167,10 +185,15 @@ ENTRY(v7_coherent_user_range)
 	cmp	r0, r1
 	blo	1b
 	mov	r0, #0
+#ifdef CONFIG_SMP
+	mcr	p15, 0, r0, c7, c1, 6		@ invalidate BTB Inner Shareable
+#else
 	mcr	p15, 0, r0, c7, c5, 6		@ invalidate BTB
+#endif
 	dsb
 	isb
 	mov	pc, lr
+#endif
 
 /*
  * Fault handling for the cache operation above. If the virtual address in r0
@@ -186,16 +209,17 @@ ENDPROC(v7_coherent_kern_range)
 ENDPROC(v7_coherent_user_range)
 
 /*
- *	v7_flush_kern_dcache_page(kaddr)
+ *	v7_flush_kern_dcache_area(void *addr, size_t size)
  *
  *	Ensure that the data held in the page kaddr is written back
  *	to the page in question.
  *
- *	- kaddr   - kernel address (guaranteed to be page aligned)
+ *	- addr	- kernel address
+ *	- size	- region size
  */
-ENTRY(v7_flush_kern_dcache_page)
+ENTRY(v7_flush_kern_dcache_area)
 	dcache_line_size r2, r3
-	add	r1, r0, #PAGE_SZ
+	add	r1, r0, r1
 1:
 	mcr	p15, 0, r0, c7, c14, 1		@ clean & invalidate D line / unified line
 	add	r0, r0, r2
@@ -203,7 +227,7 @@ ENTRY(v7_flush_kern_dcache_page)
 	blo	1b
 	dsb
 	mov	pc, lr
-ENDPROC(v7_flush_kern_dcache_page)
+ENDPROC(v7_flush_kern_dcache_area)
 
 /*
  *	v7_dma_inv_range(start,end)
@@ -270,6 +294,32 @@ ENTRY(v7_dma_flush_range)
 	mov	pc, lr
 ENDPROC(v7_dma_flush_range)
 
+/*
+ *	dma_map_area(start, size, dir)
+ *	- start	- kernel virtual start address
+ *	- size	- size of region
+ *	- dir	- DMA direction
+ */
+ENTRY(v7_dma_map_area)
+	add	r1, r1, r0
+	teq	r2, #DMA_FROM_DEVICE
+	beq	v7_dma_inv_range
+	b	v7_dma_clean_range
+ENDPROC(v7_dma_map_area)
+
+/*
+ *	dma_unmap_area(start, size, dir)
+ *	- start	- kernel virtual start address
+ *	- size	- size of region
+ *	- dir	- DMA direction
+ */
+ENTRY(v7_dma_unmap_area)
+	add	r1, r1, r0
+	teq	r2, #DMA_TO_DEVICE
+	bne	v7_dma_inv_range
+	mov	pc, lr
+ENDPROC(v7_dma_unmap_area)
+
 	__INITDATA
 
 	.type	v7_cache_fns, #object
@@ -279,7 +329,9 @@ ENTRY(v7_cache_fns)
 	.long	v7_flush_user_cache_range
 	.long	v7_coherent_kern_range
 	.long	v7_coherent_user_range
-	.long	v7_flush_kern_dcache_page
+	.long	v7_flush_kern_dcache_area
+	.long	v7_dma_map_area
+	.long	v7_dma_unmap_area
 	.long	v7_dma_inv_range
 	.long	v7_dma_clean_range
 	.long	v7_dma_flush_range

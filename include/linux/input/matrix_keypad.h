@@ -4,11 +4,11 @@
 #include <linux/types.h>
 #include <linux/input.h>
 
-#define MATRIX_MAX_ROWS		16
-#define MATRIX_MAX_COLS		16
+#define MATRIX_MAX_ROWS		18
+#define MATRIX_MAX_COLS		18
 
-#define KEY(row, col, val)	((((row) & (MATRIX_MAX_ROWS - 1)) << 24) |\
-				 (((col) & (MATRIX_MAX_COLS - 1)) << 16) |\
+#define KEY(row, col, val)	((((row) % (MATRIX_MAX_ROWS)) << 24) |\
+				 (((col) % (MATRIX_MAX_COLS)) << 16) |\
 				 (val & 0xffff))
 
 #define KEY_ROW(k)		(((k) >> 24) & 0xff)
@@ -41,6 +41,10 @@ struct matrix_keymap_data {
  * @col_scan_delay_us: delay, measured in microseconds, that is
  *	needed before we can keypad after activating column gpio
  * @debounce_ms: debounce interval in milliseconds
+ * @active_low: gpio polarity
+ * @wakeup: controls whether the device should be set up as wakeup
+ *	source
+ * @no_autorepeat: disable key autorepeat
  *
  * This structure represents platform-specific data that use used by
  * matrix_keypad driver to perform proper initialization.
@@ -61,6 +65,7 @@ struct matrix_keypad_platform_data {
 
 	bool		active_low;
 	bool		wakeup;
+	bool		no_autorepeat;
 };
 
 /**

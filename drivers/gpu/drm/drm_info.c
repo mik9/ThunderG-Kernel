@@ -53,9 +53,9 @@ int drm_name_info(struct seq_file *m, void *data)
 
 	if (drm_core_check_feature(dev, DRIVER_USE_PLATFORM_DEVICE)) {
 		if (master->unique) {
-			seq_printf(m, "%s %s\n",
+			seq_printf(m, "%s %s %s\n",
 					dev->driver->platform_device->name,
-					master->unique);
+					dev_name(dev->dev), master->unique);
 		} else {
 			seq_printf(m, "%s\n",
 				dev->driver->platform_device->name);
@@ -64,10 +64,10 @@ int drm_name_info(struct seq_file *m, void *data)
 		if (master->unique) {
 			seq_printf(m, "%s %s %s\n",
 				dev->driver->pci_driver.name,
-				pci_name(dev->pdev), master->unique);
+				dev_name(dev->dev), master->unique);
 		} else {
 			seq_printf(m, "%s %s\n", dev->driver->pci_driver.name,
-				pci_name(dev->pdev));
+				dev_name(dev->dev));
 		}
 	}
 

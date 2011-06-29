@@ -31,6 +31,7 @@
 #include <linux/string.h>
 #include <linux/init.h>
 #include <linux/seq_file.h>
+#include <linux/slab.h>
 
 #include <asm/byteorder.h>
 #include <asm/unaligned.h>
@@ -655,16 +656,10 @@ static void iriap_getvaluebyclass_indication(struct iriap_cb *self,
 	n = 1;
 
 	name_len = fp[n++];
-
-	IRDA_ASSERT(name_len < IAS_MAX_CLASSNAME + 1, return;);
-
 	memcpy(name, fp+n, name_len); n+=name_len;
 	name[name_len] = '\0';
 
 	attr_len = fp[n++];
-
-	IRDA_ASSERT(attr_len < IAS_MAX_ATTRIBNAME + 1, return;);
-
 	memcpy(attr, fp+n, attr_len); n+=attr_len;
 	attr[attr_len] = '\0';
 
@@ -691,8 +686,6 @@ static void iriap_getvaluebyclass_indication(struct iriap_cb *self,
 	/* We have a match; send the value.  */
 	iriap_getvaluebyclass_response(self, obj->id, IAS_SUCCESS,
 				       attrib->value);
-
-	return;
 }
 
 /*

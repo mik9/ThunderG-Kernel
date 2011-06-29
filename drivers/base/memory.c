@@ -22,6 +22,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/stat.h>
+#include <linux/slab.h>
 
 #include <asm/atomic.h>
 #include <asm/uaccess.h>
@@ -44,12 +45,15 @@ static int memory_uevent(struct kset *kset, struct kobject *obj, struct kobj_uev
 	return retval;
 }
 
-static struct kset_uevent_ops memory_uevent_ops = {
+static const struct kset_uevent_ops memory_uevent_ops = {
 	.name		= memory_uevent_name,
 	.uevent		= memory_uevent,
 };
 
 static BLOCKING_NOTIFIER_HEAD(memory_chain);
+
+unsigned long movable_reserved_start, movable_reserved_size;
+unsigned long low_power_memory_start, low_power_memory_size;
 
 int register_memory_notifier(struct notifier_block *nb)
 {
@@ -62,6 +66,20 @@ void unregister_memory_notifier(struct notifier_block *nb)
         blocking_notifier_chain_unregister(&memory_chain, nb);
 }
 EXPORT_SYMBOL(unregister_memory_notifier);
+
+static ATOMIC_NOTIFIER_HEAD(memory_isolate_chain);
+
+int register_memory_isolate_notifier(struct notifier_block *nb)
+{
+	return atomic_notifier_chain_register(&memory_isolate_chain, nb);
+}
+EXPORT_SYMBOL(register_memory_isolate_notifier);
+
+void unregister_memory_isolate_notifier(struct notifier_block *nb)
+{
+	atomic_notifier_chain_unregister(&memory_isolate_chain, nb);
+}
+EXPORT_SYMBOL(unregister_memory_isolate_notifier);
 
 /*
  * register_memory - Setup a sysfs device for a memory block
@@ -155,6 +173,11 @@ static ssize_t show_mem_state(struct sys_device *dev,
 int memory_notify(unsigned long val, void *v)
 {
 	return blocking_notifier_call_chain(&memory_chain, val, v);
+}
+
+int memory_isolate_notify(unsigned long val, void *v)
+{
+	return atomic_notifier_call_chain(&memory_isolate_chain, val, v);
 }
 
 /*
@@ -290,17 +313,76 @@ static SYSDEV_ATTR(removable, 0444, show_mem_removable, NULL);
  * Block size attribute stuff
  */
 static ssize_t
-print_block_size(struct class *class, char *buf)
+print_block_size(struct sysdev_class *class, struct sysdev_class_attribute *attr,
+		 char *buf)
 {
 	return sprintf(buf, "%lx\n", (unsigned long)PAGES_PER_SECTION * PAGE_SIZE);
 }
 
-static CLASS_ATTR(block_size_bytes, 0444, print_block_size, NULL);
+static SYSDEV_CLASS_ATTR(block_size_bytes, 0444, print_block_size, NULL);
 
 static int block_size_init(void)
 {
 	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
-				&class_attr_block_size_bytes.attr);
+				&attr_block_size_bytes.attr);
+}
+
+static ssize_t
+print_movable_size(struct class *class, struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lx\n", movable_reserved_size);
+}
+
+static CLASS_ATTR(movable_size_bytes, 0444, print_movable_size, NULL);
+
+static int movable_size_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_movable_size_bytes.attr);
+}
+
+static ssize_t
+print_movable_start(struct class *class, struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lx\n", movable_reserved_start);
+}
+
+static CLASS_ATTR(movable_start_bytes, 0444, print_movable_start, NULL);
+
+static int movable_start_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_movable_start_bytes.attr);
+}
+
+static ssize_t
+print_low_power_memory_size(struct class *class, struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lx\n", low_power_memory_size);
+}
+
+static CLASS_ATTR(low_power_memory_size_bytes, 0444,
+	print_low_power_memory_size, NULL);
+
+static int low_power_memory_size_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_low_power_memory_size_bytes.attr);
+}
+
+static ssize_t
+print_low_power_memory_start(struct class *class, struct class_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lx\n", low_power_memory_start);
+}
+
+static CLASS_ATTR(low_power_memory_start_bytes, 0444,
+	print_low_power_memory_start, NULL);
+
+static int low_power_memory_start_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_low_power_memory_start_bytes.attr);
 }
 
 /*
@@ -311,7 +393,8 @@ static int block_size_init(void)
  */
 #ifdef CONFIG_ARCH_MEMORY_PROBE
 static ssize_t
-memory_probe_store(struct class *class, const char *buf, size_t count)
+memory_probe_store(struct class *class, struct class_attribute *attr,
+		   const char *buf, size_t count)
 {
 	u64 phys_addr;
 	int nid;
@@ -341,17 +424,173 @@ static inline int memory_probe_init(void)
 }
 #endif
 
+#ifdef CONFIG_MEMORY_FAILURE
+/*
+ * Support for offlining pages of memory
+ */
+
+/* Soft offline a page */
+static ssize_t
+store_soft_offline_page(struct class *class,
+			struct class_attribute *attr,
+			const char *buf, size_t count)
+{
+	int ret;
+	u64 pfn;
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (strict_strtoull(buf, 0, &pfn) < 0)
+		return -EINVAL;
+	pfn >>= PAGE_SHIFT;
+	if (!pfn_valid(pfn))
+		return -ENXIO;
+	ret = soft_offline_page(pfn_to_page(pfn), 0);
+	return ret == 0 ? count : ret;
+}
+
+/* Forcibly offline a page, including killing processes. */
+static ssize_t
+store_hard_offline_page(struct class *class,
+			struct class_attribute *attr,
+			const char *buf, size_t count)
+{
+	int ret;
+	u64 pfn;
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+	if (strict_strtoull(buf, 0, &pfn) < 0)
+		return -EINVAL;
+	pfn >>= PAGE_SHIFT;
+	ret = __memory_failure(pfn, 0, 0);
+	return ret ? ret : count;
+}
+
+static CLASS_ATTR(soft_offline_page, 0644, NULL, store_soft_offline_page);
+static CLASS_ATTR(hard_offline_page, 0644, NULL, store_hard_offline_page);
+
+static __init int memory_fail_init(void)
+{
+	int err;
+
+	err = sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_soft_offline_page.attr);
+	if (!err)
+		err = sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_hard_offline_page.attr);
+	return err;
+}
+#else
+static inline int memory_fail_init(void)
+{
+	return 0;
+}
+#endif
+
+#ifdef CONFIG_ARCH_MEMORY_REMOVE
+static ssize_t
+memory_remove_store(struct class *class, struct class_attribute *attr,
+		    const char *buf, size_t count)
+{
+	u64 phys_addr;
+	int ret;
+
+	phys_addr = simple_strtoull(buf, NULL, 0);
+
+	ret = physical_remove_memory(phys_addr,
+		PAGES_PER_SECTION << PAGE_SHIFT);
+
+	if (ret)
+		count = ret;
+
+	return count;
+}
+static CLASS_ATTR(remove, S_IWUSR, NULL, memory_remove_store);
+
+static int memory_remove_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_remove.attr);
+}
+
+static ssize_t
+memory_active_store(struct class *class, struct class_attribute *attr,
+		    const char *buf, size_t count)
+{
+	u64 phys_addr;
+	int ret;
+
+	phys_addr = simple_strtoull(buf, NULL, 0);
+
+	ret = physical_active_memory(phys_addr,
+		PAGES_PER_SECTION << PAGE_SHIFT);
+
+	if (ret)
+		count = ret;
+
+	return count;
+}
+static CLASS_ATTR(active, S_IWUSR, NULL, memory_active_store);
+
+static int memory_active_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_active.attr);
+}
+
+static ssize_t
+memory_low_power_store(struct class *class, struct class_attribute *attr,
+		       const char *buf, size_t count)
+{
+	u64 phys_addr;
+	int ret;
+
+	phys_addr = simple_strtoull(buf, NULL, 0);
+
+	ret = physical_low_power_memory(phys_addr,
+		PAGES_PER_SECTION << PAGE_SHIFT);
+
+	if (ret)
+		count = ret;
+
+	return count;
+}
+static CLASS_ATTR(low_power, S_IWUSR, NULL, memory_low_power_store);
+
+static int memory_low_power_init(void)
+{
+	return sysfs_create_file(&memory_sysdev_class.kset.kobj,
+				&class_attr_low_power.attr);
+}
+#else
+static inline int memory_remove_init(void)
+{
+	return 0;
+}
+static inline int memory_active_init(void)
+{
+	return 0;
+}
+static inline int memory_low_power_init(void)
+{
+	return 0;
+}
+#endif
+
 /*
  * Note that phys_device is optional.  It is here to allow for
  * differentiation between which *physical* devices each
  * section belongs to...
  */
+int __weak arch_get_memory_phys_device(unsigned long start_pfn)
+{
+	return 0;
+}
 
 static int add_memory_block(int nid, struct mem_section *section,
-			unsigned long state, int phys_device,
-			enum mem_add_context context)
+			unsigned long state, enum mem_add_context context)
 {
 	struct memory_block *mem = kzalloc(sizeof(*mem), GFP_KERNEL);
+	unsigned long start_pfn;
 	int ret = 0;
 
 	if (!mem)
@@ -360,7 +599,8 @@ static int add_memory_block(int nid, struct mem_section *section,
 	mem->phys_index = __section_nr(section);
 	mem->state = state;
 	mutex_init(&mem->state_mutex);
-	mem->phys_device = phys_device;
+	start_pfn = section_nr_to_pfn(mem->phys_index);
+	mem->phys_device = arch_get_memory_phys_device(start_pfn);
 
 	ret = register_memory(mem, section);
 	if (!ret)
@@ -432,7 +672,7 @@ int remove_memory_block(unsigned long node_id, struct mem_section *section,
  */
 int register_new_memory(int nid, struct mem_section *section)
 {
-	return add_memory_block(nid, section, MEM_OFFLINE, 0, HOTPLUG);
+	return add_memory_block(nid, section, MEM_OFFLINE, HOTPLUG);
 }
 
 int unregister_memory_section(struct mem_section *section)
@@ -465,7 +705,7 @@ int __init memory_dev_init(void)
 		if (!present_section_nr(i))
 			continue;
 		err = add_memory_block(0, __nr_to_section(i), MEM_ONLINE,
-					0, BOOT);
+				       BOOT);
 		if (!ret)
 			ret = err;
 	}
@@ -473,7 +713,31 @@ int __init memory_dev_init(void)
 	err = memory_probe_init();
 	if (!ret)
 		ret = err;
+	err = memory_fail_init();
+	if (!ret)
+		ret = err;
+	err = memory_remove_init();
+	if (!ret)
+		ret = err;
+	err = memory_active_init();
+	if (!ret)
+		ret = err;
+	err = memory_low_power_init();
+	if (!ret)
+		ret = err;
 	err = block_size_init();
+	if (!ret)
+		ret = err;
+	err = movable_size_init();
+	if (!ret)
+		ret = err;
+	err = movable_start_init();
+	if (!ret)
+		ret = err;
+	err = low_power_memory_size_init();
+	if (!ret)
+		ret = err;
+	err = low_power_memory_start_init();
 	if (!ret)
 		ret = err;
 out:

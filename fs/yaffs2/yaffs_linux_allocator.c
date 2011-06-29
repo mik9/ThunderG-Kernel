@@ -11,9 +11,7 @@
  * published by the Free Software Foundation.
  *
  * Note: Only YAFFS headers are LGPL, YAFFS C code is covered by GPL.
- */
-
-/*
+ *
  * Note: Tis code is currently unused. Being checked in in case it becomes useful.
  */
 

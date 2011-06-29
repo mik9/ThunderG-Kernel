@@ -9,6 +9,7 @@
  */
 
 #include <linux/netfilter.h>
+#include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/moduleparam.h>
 
@@ -30,7 +31,6 @@ MODULE_PARM_DESC(acct, "Enable connection tracking flow accounting.");
 #ifdef CONFIG_SYSCTL
 static struct ctl_table acct_sysctl_table[] = {
 	{
-		.ctl_name	= CTL_UNNUMBERED,
 		.procname	= "nf_conntrack_acct",
 		.data		= &init_net.ct.sysctl_acct,
 		.maxlen		= sizeof(unsigned int),

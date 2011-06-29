@@ -26,6 +26,7 @@
 #ifdef __KERNEL__
 #include <linux/device.h>
 #include <pcmcia/ss.h>
+#include <asm/atomic.h>
 
 /*
  * PCMCIA device drivers (16-bit cards only; 32-bit cards require CardBus
@@ -34,12 +35,13 @@
 struct pcmcia_socket;
 struct pcmcia_device;
 struct config_t;
+struct net_device;
 
 /* dynamic device IDs for PCMCIA device drivers. See
  * Documentation/pcmcia/driver.txt for details.
 */
 struct pcmcia_dynids {
-	spinlock_t		lock;
+	struct mutex		lock;
 	struct list_head	list;
 };
 
@@ -60,15 +62,6 @@ struct pcmcia_driver {
 int pcmcia_register_driver(struct pcmcia_driver *driver);
 void pcmcia_unregister_driver(struct pcmcia_driver *driver);
 
-/* Some drivers use dev_node_t to store char or block device information.
- * Don't use this in new drivers, though.
- */
-typedef struct dev_node_t {
-	char			dev_name[DEV_NAME_LEN];
-	u_short			major, minor;
-	struct dev_node_t	*next;
-} dev_node_t;
-
 struct pcmcia_device {
 	/* the socket and the device_no [for multifunction devices]
 	   uniquely define a pcmcia_device */
@@ -81,22 +74,21 @@ struct pcmcia_device {
 	/* the hardware "function" device; certain subdevices can
 	 * share one hardware "function" device. */
 	u8			func;
-	struct config_t*	function_config;
+	struct config_t		*function_config;
 
 	struct list_head	socket_device_list;
 
 	/* deprecated, will be cleaned up soon */
-	dev_node_t		*dev_node;
 	u_int			open;
 	io_req_t		io;
-	irq_req_t		irq;
 	config_req_t		conf;
 	window_handle_t		win;
 
-	/* Is the device suspended, or in the process of
-	 * being removed? */
+	/* device setup */
+	unsigned int		irq;
+
+	/* Is the device suspended? */
 	u16			suspended:1;
-	u16			_removed:1;
 
 	/* Flags whether io, irq, win configurations were
 	 * requested, and whether the configuration is "locked" */
@@ -114,20 +106,20 @@ struct pcmcia_device {
 	u16			has_card_id:1;
 	u16			has_func_id:1;
 
-	u16			reserved:3;
+	u16			reserved:4;
 
 	u8			func_id;
 	u16			manf_id;
 	u16			card_id;
 
-	char *			prod_id[4];
+	char			*prod_id[4];
 
 	u64			dma_mask;
 	struct device		dev;
 
 #ifdef CONFIG_PCMCIA_IOCTL
 	/* device driver wanted by cardmgr */
-	struct pcmcia_driver *	cardmgr;
+	struct pcmcia_driver	*cardmgr;
 #endif
 
 	/* data private to drivers */
@@ -137,64 +129,38 @@ struct pcmcia_device {
 #define to_pcmcia_dev(n) container_of(n, struct pcmcia_device, dev)
 #define to_pcmcia_drv(n) container_of(n, struct pcmcia_driver, drv)
 
-/* deprecated -- don't use! */
-#define handle_to_dev(handle) (handle->dev)
 
-
-/* (deprecated) error reporting by PCMCIA devices. Use dev_printk()
- * or dev_dbg() directly in the driver, without referring to pcmcia_error_func()
- * and/or pcmcia_error_ret() for those functions will go away soon.
+/*
+ * CIS access.
+ *
+ * Please use the following functions to access CIS tuples:
+ * - pcmcia_get_tuple()
+ * - pcmcia_loop_tuple()
+ * - pcmcia_get_mac_from_cis()
+ *
+ * To parse a tuple_t, pcmcia_parse_tuple() exists. Its interface
+ * might change in future.
  */
-enum service {
-    AccessConfigurationRegister, AddSocketServices,
-    AdjustResourceInfo, CheckEraseQueue, CloseMemory, CopyMemory,
-    DeregisterClient, DeregisterEraseQueue, GetCardServicesInfo,
-    GetClientInfo, GetConfigurationInfo, GetEventMask,
-    GetFirstClient, GetFirstPartion, GetFirstRegion, GetFirstTuple,
-    GetNextClient, GetNextPartition, GetNextRegion, GetNextTuple,
-    GetStatus, GetTupleData, MapLogSocket, MapLogWindow, MapMemPage,
-    MapPhySocket, MapPhyWindow, ModifyConfiguration, ModifyWindow,
-    OpenMemory, ParseTuple, ReadMemory, RegisterClient,
-    RegisterEraseQueue, RegisterMTD, RegisterTimer,
-    ReleaseConfiguration, ReleaseExclusive, ReleaseIO, ReleaseIRQ,
-    ReleaseSocketMask, ReleaseWindow, ReplaceSocketServices,
-    RequestConfiguration, RequestExclusive, RequestIO, RequestIRQ,
-    RequestSocketMask, RequestWindow, ResetCard, ReturnSSEntry,
-    SetEventMask, SetRegion, ValidateCIS, VendorSpecific,
-    WriteMemory, BindDevice, BindMTD, ReportError,
-    SuspendCard, ResumeCard, EjectCard, InsertCard, ReplaceCIS,
-    GetFirstWindow, GetNextWindow, GetMemPage
-};
-const char *pcmcia_error_func(int func);
-const char *pcmcia_error_ret(int ret);
 
-#define cs_error(p_dev, func, ret)			\
-	{						\
-		dev_printk(KERN_NOTICE, &p_dev->dev,	\
-			   "%s : %s\n",			\
-			   pcmcia_error_func(func),	\
-			   pcmcia_error_ret(ret));	\
-	}
+/* get the very first CIS entry of type @code. Note that buf is pointer
+ * to u8 *buf; and that you need to kfree(buf) afterwards. */
+size_t pcmcia_get_tuple(struct pcmcia_device *p_dev, cisdata_t code,
+			u8 **buf);
 
-/* CIS access.
- * Use the pcmcia_* versions in PCMCIA drivers
- */
+/* loop over CIS entries */
+int pcmcia_loop_tuple(struct pcmcia_device *p_dev, cisdata_t code,
+		      int (*loop_tuple) (struct pcmcia_device *p_dev,
+					 tuple_t *tuple,
+					 void *priv_data),
+		      void *priv_data);
+
+/* get the MAC address from CISTPL_FUNCE */
+int pcmcia_get_mac_from_cis(struct pcmcia_device *p_dev,
+			    struct net_device *dev);
+
+
+/* parse a tuple_t */
 int pcmcia_parse_tuple(tuple_t *tuple, cisparse_t *parse);
-
-int pccard_get_first_tuple(struct pcmcia_socket *s, unsigned int function,
-			   tuple_t *tuple);
-#define pcmcia_get_first_tuple(p_dev, tuple) \
-		pccard_get_first_tuple(p_dev->socket, p_dev->func, tuple)
-
-int pccard_get_next_tuple(struct pcmcia_socket *s, unsigned int function,
-			  tuple_t *tuple);
-#define pcmcia_get_next_tuple(p_dev, tuple) \
-		pccard_get_next_tuple(p_dev->socket, p_dev->func, tuple)
-
-int pccard_get_tuple_data(struct pcmcia_socket *s, tuple_t *tuple);
-#define pcmcia_get_tuple_data(p_dev, tuple) \
-		pccard_get_tuple_data(p_dev->socket, tuple)
-
 
 /* loop CIS entries for valid configuration */
 int pcmcia_loop_config(struct pcmcia_device *p_dev,
@@ -217,16 +183,28 @@ int pcmcia_access_configuration_register(struct pcmcia_device *p_dev,
 
 /* device configuration */
 int pcmcia_request_io(struct pcmcia_device *p_dev, io_req_t *req);
-int pcmcia_request_irq(struct pcmcia_device *p_dev, irq_req_t *req);
+
+int __must_check
+__pcmcia_request_exclusive_irq(struct pcmcia_device *p_dev,
+				irq_handler_t handler);
+static inline __must_check __deprecated int
+pcmcia_request_exclusive_irq(struct pcmcia_device *p_dev,
+				irq_handler_t handler)
+{
+	return __pcmcia_request_exclusive_irq(p_dev, handler);
+}
+
+int __must_check pcmcia_request_irq(struct pcmcia_device *p_dev,
+				irq_handler_t handler);
+
 int pcmcia_request_configuration(struct pcmcia_device *p_dev,
 				 config_req_t *req);
 
-int pcmcia_request_window(struct pcmcia_device **p_dev, win_req_t *req,
+int pcmcia_request_window(struct pcmcia_device *p_dev, win_req_t *req,
 			  window_handle_t *wh);
-int pcmcia_release_window(window_handle_t win);
-
-int pcmcia_get_mem_page(window_handle_t win, memreq_t *req);
-int pcmcia_map_mem_page(window_handle_t win, memreq_t *req);
+int pcmcia_release_window(struct pcmcia_device *p_dev, window_handle_t win);
+int pcmcia_map_mem_page(struct pcmcia_device *p_dev, window_handle_t win,
+			memreq_t *req);
 
 int pcmcia_modify_configuration(struct pcmcia_device *p_dev, modconf_t *mod);
 void pcmcia_disable_device(struct pcmcia_device *p_dev);

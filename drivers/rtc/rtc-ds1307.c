@@ -556,7 +556,8 @@ static const struct rtc_class_ops ds13xx_rtc_ops = {
 #define NVRAM_SIZE	56
 
 static ssize_t
-ds1307_nvram_read(struct kobject *kobj, struct bin_attribute *attr,
+ds1307_nvram_read(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *attr,
 		char *buf, loff_t off, size_t count)
 {
 	struct i2c_client	*client;
@@ -580,7 +581,8 @@ ds1307_nvram_read(struct kobject *kobj, struct bin_attribute *attr,
 }
 
 static ssize_t
-ds1307_nvram_write(struct kobject *kobj, struct bin_attribute *attr,
+ds1307_nvram_write(struct file *filp, struct kobject *kobj,
+		struct bin_attribute *attr,
 		char *buf, loff_t off, size_t count)
 {
 	struct i2c_client	*client;
@@ -874,13 +876,15 @@ read_rtc:
 	}
 
 	if (want_irq) {
-		err = request_irq(client->irq, ds1307_irq, 0,
+		err = request_irq(client->irq, ds1307_irq, IRQF_SHARED,
 			  ds1307->rtc->name, client);
 		if (err) {
 			dev_err(&client->dev,
 				"unable to request IRQ!\n");
 			goto exit_irq;
 		}
+
+		device_set_wakeup_capable(&client->dev, 1);
 		set_bit(HAS_ALARM, &ds1307->flags);
 		dev_dbg(&client->dev, "got IRQ %d\n", client->irq);
 	}

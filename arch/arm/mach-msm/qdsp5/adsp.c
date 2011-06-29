@@ -33,6 +33,7 @@
 #include <linux/uaccess.h>
 #include <linux/wait.h>
 #include <linux/wakelock.h>
+#include <linux/slab.h>
 #include <mach/debug_mm.h>
 
 static struct wake_lock adsp_wake_lock;
@@ -550,7 +551,7 @@ int msm_adsp_write(struct msm_adsp_module *module, unsigned dsp_queue_addr,
 								cmd_size);
 		if (rc == -EAGAIN)
 			udelay(10);
-	} while (rc == -EAGAIN && retries++ < 100);
+	} while (rc == -EAGAIN && retries++ < 300);
 	if (retries > 50)
 		MM_ERR("adsp: %s command took %d attempts: rc %d\n",
 			module->name, retries, rc);
@@ -1173,6 +1174,7 @@ static int msm_adsp_probe(struct platform_device *pdev)
 	}
 
 	msm_adsp_publish_cdevs(adsp_modules, count);
+	rmtask_init();
 
 	return 0;
 

@@ -47,7 +47,7 @@
 #define DBG(fmt...)
 #endif
 
-#define IS_G4DA (machine_is_compatible("PowerMac3,4"))
+#define IS_G4DA (of_machine_is_compatible("PowerMac3,4"))
 
 /* i2c address for tumbler */
 #define TAS_I2C_ADDR	0x34
@@ -246,6 +246,7 @@ static int tumbler_set_master_volume(struct pmac_tumbler *mix)
 		snd_printk(KERN_ERR "failed to set volume \n");
 		return -EINVAL;
 	}
+	DBG("(I) succeeded to set volume (%u, %u)\n", left_vol, right_vol);
 	return 0;
 }
 
@@ -356,6 +357,7 @@ static int tumbler_set_drc(struct pmac_tumbler *mix)
 		snd_printk(KERN_ERR "failed to set DRC\n");
 		return -EINVAL;
 	}
+	DBG("(I) succeeded to set DRC (%u, %u)\n", val[0], val[1]);
 	return 0;
 }
 
@@ -392,6 +394,7 @@ static int snapper_set_drc(struct pmac_tumbler *mix)
 		snd_printk(KERN_ERR "failed to set DRC\n");
 		return -EINVAL;
 	}
+	DBG("(I) succeeded to set DRC (%u, %u)\n", val[0], val[1]);
 	return 0;
 }
 
@@ -908,7 +911,7 @@ static struct snd_kcontrol_new tumbler_hp_sw __devinitdata = {
 };
 static struct snd_kcontrol_new tumbler_speaker_sw __devinitdata = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
-	.name = "PC Speaker Playback Switch",
+	.name = "Speaker Playback Switch",
 	.info = snd_pmac_boolean_mono_info,
 	.get = tumbler_get_mute_switch,
 	.put = tumbler_put_mute_switch,

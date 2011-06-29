@@ -46,6 +46,7 @@
 #include "ubifs.h"
 #include <linux/crc16.h>
 #include <linux/math64.h>
+#include <linux/slab.h>
 
 /**
  * do_calc_lpt_geom - calculate sizes for the LPT area.
@@ -1269,9 +1270,10 @@ static int read_pnode(struct ubifs_info *c, struct ubifs_nnode *parent, int iip)
 	lnum = branch->lnum;
 	offs = branch->offs;
 	pnode = kzalloc(sizeof(struct ubifs_pnode), GFP_NOFS);
-	if (!pnode)
-		return -ENOMEM;
-
+	if (!pnode) {
+		err = -ENOMEM;
+		goto out;
+	}
 	if (lnum == 0) {
 		/*
 		 * This pnode was not written which just means that the LEB

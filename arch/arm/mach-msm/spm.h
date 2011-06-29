@@ -37,6 +37,7 @@ enum {
 };
 
 enum {
+	MSM_SPM_REG_SAW_AVS_CTL,
 	MSM_SPM_REG_SAW_CFG,
 	MSM_SPM_REG_SAW_SPM_CTL,
 	MSM_SPM_REG_SAW_SPM_SLP_TMR_DLY,
@@ -71,8 +72,9 @@ struct msm_spm_platform_data {
 #if defined(CONFIG_ARCH_MSM7X30) || defined(CONFIG_ARCH_MSM8X60)
 
 int msm_spm_set_low_power_mode(unsigned int mode, bool notify_rpm);
-int msm_spm_set_vdd(unsigned int vlevel);
+int msm_spm_set_vdd(unsigned int cpu, unsigned int vlevel);
 void msm_spm_reinit(void);
+void msm_spm_allow_x_cpu_set_vdd(bool allowed);
 int msm_spm_init(struct msm_spm_platform_data *data, int nr_devs);
 
 #else
@@ -82,12 +84,17 @@ static inline int msm_spm_set_low_power_mode(unsigned int mode, bool notify_rpm)
 	return -ENOSYS;
 }
 
-static inline int msm_spm_set_vdd(unsigned int vlevel)
+static inline int msm_spm_set_vdd(unsigned int cpu, unsigned int vlevel)
 {
 	return -ENOSYS;
 }
 
 static inline void msm_spm_reinit(void)
+{
+	/* empty */
+}
+
+static inline void msm_spm_allow_x_cpu_set_vdd(bool allowed)
 {
 	/* empty */
 }

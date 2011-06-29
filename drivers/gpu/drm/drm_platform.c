@@ -3,7 +3,7 @@
  *
  * Copyright 2003 José Fonseca.
  * Copyright 2003 Leif Delgass.
- * Copyright (c) 2010, Code Aurora Forum.
+ * Copyright (c) 2009, Code Aurora Forum.
  * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
@@ -51,6 +51,7 @@ int drm_get_platform_dev(struct platform_device *platdev,
 		return -ENOMEM;
 
 	dev->platformdev = platdev;
+	dev->dev = &platdev->dev;
 
 	ret = drm_fill_in_dev(dev, NULL, driver);
 

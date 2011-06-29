@@ -19,6 +19,7 @@
  *  along with this program; if not, you can find it at http://www.fsf.org
  */
 
+#include <linux/slab.h>
 #include <linux/platform_device.h>
 #include <linux/input.h>
 #include <linux/workqueue.h>
@@ -29,7 +30,6 @@
 static struct input_dev *ats_input_dev;
 
 /* add ETA  key event logging for vs660 [younchan.kim 2010-05-31]*/
-static struct input_handler input_handler;
 static struct work_struct event_log_work;
 struct ats_mtc_key_log_type ats_mtc_key_log1;
 
@@ -214,20 +214,25 @@ static void ats_event_log_event(struct input_handle *handle, unsigned int type,u
 	}
 }
 
+static int is_log_started = 0;
+static struct input_handler input_handler = {
+	.name = "key_log",
+	.connect = ats_event_log_connect,
+	.disconnect = ats_event_log_disconnect,
+	.event = ats_event_log_event,
+	.id_table = ats_event_log_ids,
+};
+
 int event_log_start(void)
 {
 	int ret = 0;
 
-	input_handler.name = "key_log";
-	input_handler.connect = ats_event_log_connect;
-	input_handler.disconnect = ats_event_log_disconnect;
-	input_handler.event = ats_event_log_event;
-	input_handler.id_table = ats_event_log_ids;
 	ret = input_register_handler(&input_handler);
 	if (ret != 0)
 		printk("%s:fail to registers input handler\n", __func__);
 
-	INIT_WORK(&event_log_work,event_log_work_func);
+	INIT_WORK(&event_log_work, event_log_work_func);
+	is_log_started = 1;
 
 	return 0;
 }
@@ -235,7 +240,10 @@ EXPORT_SYMBOL(event_log_start);
 
 int event_log_end(void)
 {
-	input_unregister_handler(&input_handler);
+	if(is_log_started) {
+		input_unregister_handler(&input_handler);
+		is_log_started = 0;
+	}
 	return 0 ;
 }
 EXPORT_SYMBOL(event_log_end);
@@ -255,7 +263,7 @@ static int ats_event_log_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct platform_driver ats_input_driver = {
+static struct platform_driver ats_input_driver __refdata = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.owner = THIS_MODULE,

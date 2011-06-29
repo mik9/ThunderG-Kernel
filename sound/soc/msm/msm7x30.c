@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2008-2011, Code Aurora Forum. All rights reserved.
  *
  * All source code in this file is licensed under the following license except
  * where indicated.
@@ -210,7 +210,7 @@ static int msm_voice_info(struct snd_kcontrol *kcontrol,
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 	uinfo->count = 3; /* Device */
 
-	uinfo->value.integer.min = 1;
+	uinfo->value.integer.min = 0;
 	uinfo->value.integer.max = msm_snddev_devcount();
 	return 0;
 }
@@ -356,6 +356,9 @@ static int msm_device_put(struct snd_kcontrol *kcontrol,
 			dev_info->opened = 1;
 			broadcast_event(AUDDEV_EVT_DEV_RDY, route_cfg.dev_id,
 							SESSION_IGNORE);
+			/* Event to notify client for device info */
+			broadcast_event(AUDDEV_EVT_DEVICE_INFO,
+					route_cfg.dev_id, SESSION_IGNORE);
 		}
 	} else {
 		if (dev_info->opened) {
@@ -463,10 +466,15 @@ static int msm_route_put(struct snd_kcontrol *kcontrol,
 			dev_info->sessions &= ~(session_mask);
 		} else {
 			dev_info->sessions = dev_info->sessions | session_mask;
-			if (dev_info->opened)
+			if (dev_info->opened) {
 				broadcast_event(AUDDEV_EVT_DEV_RDY,
 							route_cfg.dev_id,
 							session_mask);
+				/* Event to notify client for device info */
+				broadcast_event(AUDDEV_EVT_DEVICE_INFO,
+							route_cfg.dev_id,
+							session_mask);
+			}
 		}
 	} else {
 		rc = msm_snddev_set_enc(session_id, dev_info->copp_id, set);
@@ -488,7 +496,7 @@ static int msm_route_put(struct snd_kcontrol *kcontrol,
 						SNDDEV_CAP_TX,
 						AUDDEV_CLNT_ENC);
 				MM_DBG("sample rate configured %d"
-					"sample rate requested %d \n",
+					"sample rate requested %d\n",
 					enc_freq, requested_freq);
 				if ((rc <= 0) || (enc_freq != requested_freq)) {
 					MM_DBG("msm_snddev_withdraw_freq\n");
@@ -500,10 +508,15 @@ static int msm_route_put(struct snd_kcontrol *kcontrol,
 							SESSION_IGNORE);
 				}
 			}
-			if (dev_info->opened)
+			if (dev_info->opened) {
 				broadcast_event(AUDDEV_EVT_DEV_RDY,
 							route_cfg.dev_id,
 							session_mask);
+				/* Event to notify client for device info */
+				broadcast_event(AUDDEV_EVT_DEVICE_INFO,
+							route_cfg.dev_id,
+							session_mask);
+			}
 		}
 	}
 
@@ -553,7 +566,7 @@ static int msm_device_volume_put(struct snd_kcontrol *kcontrol,
 
 	if (IS_ERR(dev_info)) {
 		rc = PTR_ERR(dev_info);
-		MM_ERR("audio_dev_ctrl_find_dev failed. %ld \n",
+		MM_ERR("audio_dev_ctrl_find_dev failed. %ld\n",
 				PTR_ERR(dev_info));
 		return rc;
 	}
@@ -572,6 +585,29 @@ static int msm_device_volume_put(struct snd_kcontrol *kcontrol,
 	return rc;
 }
 
+static int msm_reset_info(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = 0;
+	uinfo->value.integer.max = 0;
+	return 0;
+}
+
+static int msm_reset_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	ucontrol->value.integer.value[0] = 0;
+	return 0;
+}
+
+static int msm_reset_put(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	MM_DBG("Resetting all devices\n");
+	return msm_reset_all_device();
+}
 
 static struct snd_kcontrol_new snd_dev_controls[AUDIO_DEV_CTL_MAX_DEV];
 
@@ -579,7 +615,7 @@ static int snd_dev_ctl_index(int idx)
 {
 	struct msm_snddev_info *dev_info;
 
-	dev_info = audio_dev_ctrl_find_dev(idx + 0);
+	dev_info = audio_dev_ctrl_find_dev(idx);
 	if (IS_ERR(dev_info)) {
 		MM_ERR("pass invalid dev_id\n");
 		return PTR_ERR(dev_info);
@@ -590,7 +626,7 @@ static int snd_dev_ctl_index(int idx)
 	snd_dev_controls[idx].iface = SNDRV_CTL_ELEM_IFACE_MIXER;
 	snd_dev_controls[idx].access = SNDRV_CTL_ELEM_ACCESS_READWRITE;
 	snd_dev_controls[idx].name = &snddev_name[idx][0];
-	snd_dev_controls[idx].index = 5 + idx;
+	snd_dev_controls[idx].index = idx;
 	snd_dev_controls[idx].info = msm_device_info;
 	snd_dev_controls[idx].get = msm_device_get;
 	snd_dev_controls[idx].put = msm_device_put;
@@ -599,34 +635,36 @@ static int snd_dev_ctl_index(int idx)
 
 }
 
-#define MSM_EXT(xname, xindex, fp_info, fp_get, fp_put, addr) \
+#define MSM_EXT(xname, fp_info, fp_get, fp_put, addr) \
 { .iface = SNDRV_CTL_ELEM_IFACE_MIXER, \
   .access = SNDRV_CTL_ELEM_ACCESS_READWRITE, \
-  .name = xname, .index = xindex, \
+  .name = xname, \
   .info = fp_info,\
   .get = fp_get, .put = fp_put, \
   .private_value = addr, \
 }
 
 static struct snd_kcontrol_new snd_msm_controls[] = {
-	MSM_EXT("Count", 1, msm_scontrol_count_info, msm_scontrol_count_get, \
+	MSM_EXT("Count", msm_scontrol_count_info, msm_scontrol_count_get, \
 						NULL, 0),
-	MSM_EXT("Stream", 2, msm_route_info, msm_route_get, \
+	MSM_EXT("Stream", msm_route_info, msm_route_get, \
 						 msm_route_put, 0),
-	MSM_EXT("Record", 3, msm_route_info, msm_route_get, \
+	MSM_EXT("Record", msm_route_info, msm_route_get, \
 						 msm_route_put, 0),
-	MSM_EXT("Voice", 4, msm_voice_info, msm_voice_get, \
+	MSM_EXT("Voice", msm_voice_info, msm_voice_get, \
 						 msm_voice_put, 0),
-	MSM_EXT("Volume", 5, msm_volume_info, msm_volume_get, \
+	MSM_EXT("Volume", msm_volume_info, msm_volume_get, \
 						 msm_volume_put, 0),
-	MSM_EXT("VoiceVolume", 6, msm_v_volume_info, msm_v_volume_get, \
+	MSM_EXT("VoiceVolume", msm_v_volume_info, msm_v_volume_get, \
 						 msm_v_volume_put, 0),
-	MSM_EXT("VoiceMute", 7, msm_v_mute_info, msm_v_mute_get, \
+	MSM_EXT("VoiceMute", msm_v_mute_info, msm_v_mute_get, \
 						 msm_v_mute_put, 0),
-	MSM_EXT("Voice Call", 8, msm_v_call_info, msm_v_call_get, \
+	MSM_EXT("Voice Call", msm_v_call_info, msm_v_call_get, \
 						msm_v_call_put, 0),
-	MSM_EXT("Device_Volume", 9, msm_device_volume_info,
+	MSM_EXT("Device_Volume", msm_device_volume_info,
 			msm_device_volume_get, msm_device_volume_put, 0),
+	MSM_EXT("Reset", msm_reset_info,
+			msm_reset_get, msm_reset_put, 0),
 };
 
 static int msm_new_mixer(struct snd_card *card)
@@ -678,7 +716,7 @@ static struct snd_soc_dai_link msm_dai = {
 };
 
 struct snd_soc_card snd_soc_card_msm = {
-	.name 		= "msm-audio",
+	.name		= "msm-audio",
 	.dai_link	= &msm_dai,
 	.num_links = 1,
 	.platform = &msm_soc_platform,
@@ -695,7 +733,7 @@ static int __init msm_audio_init(void)
 {
 	int ret;
 
-	msm_audio_snd_device = platform_device_alloc("soc-audio", -1);
+	msm_audio_snd_device = platform_device_alloc("soc-audio", 0);
 	if (!msm_audio_snd_device)
 		return -ENOMEM;
 

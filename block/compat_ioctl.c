@@ -6,6 +6,7 @@
 #include <linux/elevator.h>
 #include <linux/fd.h>
 #include <linux/hdreg.h>
+#include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/smp_lock.h>
 #include <linux/types.h>
@@ -747,6 +748,8 @@ long compat_blkdev_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 		return compat_put_uint(arg, bdev_io_opt(bdev));
 	case BLKALIGNOFF:
 		return compat_put_int(arg, bdev_alignment_offset(bdev));
+	case BLKDISCARDZEROES:
+		return compat_put_uint(arg, bdev_discard_zeroes_data(bdev));
 	case BLKFLSBUF:
 	case BLKROSET:
 	case BLKDISCARD:

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2008, Intel Corp.
+ * Copyright (C) 2000 - 2010, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -225,7 +225,7 @@ acpi_ds_begin_method_execution(struct acpi_namespace_node *method_node,
 		    (walk_state->thread->current_sync_level >
 		     obj_desc->method.mutex->mutex.sync_level)) {
 			ACPI_ERROR((AE_INFO,
-				    "Cannot acquire Mutex for method [%4.4s], current SyncLevel is too large (%d)",
+				    "Cannot acquire Mutex for method [%4.4s], current SyncLevel is too large (%u)",
 				    acpi_ut_get_node_name(method_node),
 				    walk_state->thread->current_sync_level));
 
@@ -414,7 +414,7 @@ acpi_ds_call_control_method(struct acpi_thread_state *thread,
 	/* Invoke an internal method if necessary */
 
 	if (obj_desc->method.method_flags & AML_METHOD_INTERNAL_ONLY) {
-		status = obj_desc->method.implementation(next_walk_state);
+		status = obj_desc->method.extra.implementation(next_walk_state);
 		if (status == AE_OK) {
 			status = AE_CTRL_TERMINATE;
 		}

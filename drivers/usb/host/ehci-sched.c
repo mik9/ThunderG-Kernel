@@ -510,6 +510,8 @@ static int disable_periodic (struct ehci_hcd *ehci)
 	ehci_writel(ehci, cmd, &ehci->regs->command);
 	/* posted write ... */
 
+	free_cached_lists(ehci);
+
 	ehci->next_uframe = -1;
 	return 0;
 }
@@ -1385,7 +1387,7 @@ sitd_slot_ok (
  * given EHCI_TUNE_FLS and the slop).  Or, write a smarter scheduler!
  */
 
-#define SCHEDULE_SLOP	10	/* frames */
+#define SCHEDULE_SLOP	80	/* microframes */
 
 static int
 iso_stream_schedule (
@@ -1394,12 +1396,12 @@ iso_stream_schedule (
 	struct ehci_iso_stream	*stream
 )
 {
-	u32			now, start, max, period;
+	u32			now, next, start, period;
 	int			status;
 	unsigned		mod = ehci->periodic_size << 3;
 	struct ehci_iso_sched	*sched = urb->hcpriv;
 
-	if (sched->span > (mod - 8 * SCHEDULE_SLOP)) {
+	if (sched->span > (mod - SCHEDULE_SLOP)) {
 		ehci_dbg (ehci, "iso request %p too long\n", urb);
 		status = -EFBIG;
 		goto fail;
@@ -1418,9 +1420,6 @@ iso_stream_schedule (
 
 	now = ehci_readl(ehci, &ehci->regs->frame_index) % mod;
 
-	/* when's the last uframe this urb could start? */
-	max = now + mod;
-
 	/* Typical case: reuse current schedule, stream is still active.
 	 * Hopefully there are no gaps from the host falling behind
 	 * (irq delays etc), but if there are we'll take the next
@@ -1428,16 +1427,27 @@ iso_stream_schedule (
 	 */
 	if (likely (!list_empty (&stream->td_list))) {
 		start = stream->next_uframe;
-		if (start < now)
-			start += mod;
+
+		/* For high speed devices, allow scheduling within the
+		 * isochronous scheduling threshold.  For full speed devices
+		 * and Intel PCI-based controllers, don't (work around for
+		 * Intel ICH9 bug).
+		 */
+		if (!stream->highspeed && ehci->fs_i_thresh)
+			next = now + ehci->i_thresh;
+		else
+			next = now;
 
 		/* Fell behind (by up to twice the slop amount)? */
-		if (start >= max - 2 * 8 * SCHEDULE_SLOP)
+		if (((start - next) & (mod - 1)) >=
+				mod - 2 * SCHEDULE_SLOP)
 			start += period * DIV_ROUND_UP(
-					max - start, period) - mod;
+					(next - start) & (mod - 1),
+					period);
 
 		/* Tried to schedule too far into the future? */
-		if (unlikely((start + sched->span) >= max)) {
+		if (unlikely(((start - now) & (mod - 1)) + sched->span
+					>= mod - 2 * SCHEDULE_SLOP)) {
 			status = -EFBIG;
 			goto fail;
 		}
@@ -1451,7 +1461,7 @@ iso_stream_schedule (
 	 * can also help high bandwidth if the dma and irq loads don't
 	 * jump until after the queue is primed.
 	 */
-	start = SCHEDULE_SLOP * 8 + (now & ~0x07);
+	start = SCHEDULE_SLOP + (now & ~0x07);
 	start %= mod;
 	stream->next_uframe = start;
 
@@ -1482,7 +1492,7 @@ iso_stream_schedule (
 	/* no room in the schedule */
 	ehci_dbg (ehci, "iso %ssched full %p (now %d max %d)\n",
 		list_empty (&stream->td_list) ? "" : "re",
-		urb, now, max);
+		urb, now, now + mod);
 	status = -ENOSPC;
 
 fail:
@@ -1576,63 +1586,6 @@ itd_link (struct ehci_hcd *ehci, unsigned frame, struct ehci_itd *itd)
 	*hw_p = cpu_to_hc32(ehci, itd->itd_dma | Q_TYPE_ITD);
 }
 
-#define AB_REG_BAR_LOW 0xe0
-#define AB_REG_BAR_HIGH 0xe1
-#define AB_INDX(addr) ((addr) + 0x00)
-#define AB_DATA(addr) ((addr) + 0x04)
-#define NB_PCIE_INDX_ADDR 0xe0
-#define NB_PCIE_INDX_DATA 0xe4
-#define NB_PIF0_PWRDOWN_0 0x01100012
-#define NB_PIF0_PWRDOWN_1 0x01100013
-
-static void ehci_quirk_amd_L1(struct ehci_hcd *ehci, int disable)
-{
-	u32 addr, addr_low, addr_high, val;
-
-	outb_p(AB_REG_BAR_LOW, 0xcd6);
-	addr_low = inb_p(0xcd7);
-	outb_p(AB_REG_BAR_HIGH, 0xcd6);
-	addr_high = inb_p(0xcd7);
-	addr = addr_high << 8 | addr_low;
-	outl_p(0x30, AB_INDX(addr));
-	outl_p(0x40, AB_DATA(addr));
-	outl_p(0x34, AB_INDX(addr));
-	val = inl_p(AB_DATA(addr));
-
-	if (disable) {
-		val &= ~0x8;
-		val |= (1 << 4) | (1 << 9);
-	} else {
-		val |= 0x8;
-		val &= ~((1 << 4) | (1 << 9));
-	}
-	outl_p(val, AB_DATA(addr));
-
-	if (amd_nb_dev) {
-		addr = NB_PIF0_PWRDOWN_0;
-		pci_write_config_dword(amd_nb_dev, NB_PCIE_INDX_ADDR, addr);
-		pci_read_config_dword(amd_nb_dev, NB_PCIE_INDX_DATA, &val);
-		if (disable)
-			val &= ~(0x3f << 7);
-		else
-			val |= 0x3f << 7;
-
-		pci_write_config_dword(amd_nb_dev, NB_PCIE_INDX_DATA, val);
-
-		addr = NB_PIF0_PWRDOWN_1;
-		pci_write_config_dword(amd_nb_dev, NB_PCIE_INDX_ADDR, addr);
-		pci_read_config_dword(amd_nb_dev, NB_PCIE_INDX_DATA, &val);
-		if (disable)
-			val &= ~(0x3f << 7);
-		else
-			val |= 0x3f << 7;
-
-		pci_write_config_dword(amd_nb_dev, NB_PCIE_INDX_DATA, val);
-	}
-
-	return;
-}
-
 /* fit urb's itds into the selected schedule slot; activate as needed */
 static int
 itd_link_urb (
@@ -1660,12 +1613,6 @@ itd_link_urb (
 			next_uframe >> 3, next_uframe & 0x7);
 		stream->start = jiffies;
 	}
-
-	if (ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs == 0) {
-		if (ehci->amd_l1_fix == 1)
-			ehci_quirk_amd_L1(ehci, 1);
-	}
-
 	ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs++;
 
 	/* fill iTDs uframe by uframe */
@@ -1791,11 +1738,6 @@ itd_complete (
 	urb = NULL;
 	(void) disable_periodic(ehci);
 	ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs--;
-
-	if (ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs == 0) {
-		if (ehci->amd_l1_fix == 1)
-			ehci_quirk_amd_L1(ehci, 0);
-	}
 
 	if (unlikely(list_is_singular(&stream->td_list))) {
 		ehci_to_hcd(ehci)->self.bandwidth_allocated
@@ -2084,12 +2026,6 @@ sitd_link_urb (
 			stream->interval, hc32_to_cpu(ehci, stream->splits));
 		stream->start = jiffies;
 	}
-
-	if (ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs == 0) {
-		if (ehci->amd_l1_fix == 1)
-			ehci_quirk_amd_L1(ehci, 1);
-	}
-
 	ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs++;
 
 	/* fill sITDs frame by frame */
@@ -2191,11 +2127,6 @@ sitd_complete (
 	urb = NULL;
 	(void) disable_periodic(ehci);
 	ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs--;
-
-	if (ehci_to_hcd(ehci)->self.bandwidth_isoc_reqs == 0) {
-		if (ehci->amd_l1_fix == 1)
-			ehci_quirk_amd_L1(ehci, 0);
-	}
 
 	if (list_is_singular(&stream->td_list)) {
 		ehci_to_hcd(ehci)->self.bandwidth_allocated
@@ -2427,9 +2358,13 @@ restart:
 				 * No need to check for activity unless the
 				 * frame is current.
 				 */
-				if (frame == clock_frame && live &&
-						(q.sitd->hw_results &
-							SITD_ACTIVE(ehci))) {
+				if (((frame == clock_frame) ||
+				     (((frame + 1) % ehci->periodic_size)
+				      == clock_frame))
+				    && live
+				    && (q.sitd->hw_results &
+					SITD_ACTIVE(ehci))) {
+
 					incomplete = true;
 					q_p = &q.sitd->sitd_next;
 					hw_p = &q.sitd->hw_next;

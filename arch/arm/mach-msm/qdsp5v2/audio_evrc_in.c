@@ -72,6 +72,7 @@ struct audio_in {
 	uint32_t in_head; /* next buffer dsp will write */
 	uint32_t in_tail; /* next buffer read() will read */
 	uint32_t in_count; /* number of buffers available to read() */
+	uint32_t mode;
 
 	const char *module_name;
 	unsigned queue_ids;
@@ -361,7 +362,18 @@ static int audevrc_in_record_config(struct audio_in *audio, int enable)
 		cmd.destination_activity = AUDIO_RECORDING_TURN_OFF;
 
 	cmd.source_mix_mask = audio->source;
-
+	if (audio->enc_id == 2) {
+		if ((cmd.source_mix_mask &
+				INTERNAL_CODEC_TX_SOURCE_MIX_MASK) ||
+			(cmd.source_mix_mask & AUX_CODEC_TX_SOURCE_MIX_MASK) ||
+			(cmd.source_mix_mask & VOICE_UL_SOURCE_MIX_MASK) ||
+			(cmd.source_mix_mask & VOICE_DL_SOURCE_MIX_MASK)) {
+			cmd.pipe_id = SOURCE_PIPE_1;
+		}
+		if (cmd.source_mix_mask &
+				AUDPP_A2DP_PIPE_SOURCE_MIX_MASK)
+			cmd.pipe_id |= SOURCE_PIPE_0;
+	}
 	return audpreproc_send_audreccmdqueue(&cmd, sizeof(cmd));
 }
 
@@ -508,6 +520,7 @@ static long audevrc_in_ioctl(struct file *file,
 			else
 				rc = 0;
 		}
+		audio->stopped = 0;
 		break;
 	}
 	case AUDIO_STOP: {
@@ -737,12 +750,25 @@ static int audevrc_in_open(struct inode *inode, struct file *file)
 		rc = -EBUSY;
 		goto done;
 	}
+	if ((file->f_mode & FMODE_WRITE) &&
+			(file->f_mode & FMODE_READ)) {
+		rc = -EACCES;
+		MM_ERR("Non tunnel encoding is not supported\n");
+		goto done;
+	} else if (!(file->f_mode & FMODE_WRITE) &&
+					(file->f_mode & FMODE_READ)) {
+		audio->mode = MSM_AUD_ENC_MODE_TUNNEL;
+		MM_DBG("Opened for tunnel mode encoding\n");
+	} else {
+		rc = -EACCES;
+		goto done;
+	}
 
 	/* Settings will be re-config at AUDIO_SET_CONFIG,
 	 * but at least we need to have initial config
 	 */
 	audio->buffer_size = (FRAME_SIZE - 8);
-	audio->enc_type = ENC_TYPE_EVRC;
+	audio->enc_type = ENC_TYPE_EVRC | audio->mode;
 	audio->cfg.cdma_rate = CDMA_RATE_FULL;
 	audio->cfg.min_bit_rate = CDMA_RATE_FULL;
 	audio->cfg.max_bit_rate = CDMA_RATE_FULL;

@@ -12,7 +12,7 @@
  */
 #include "udp_impl.h"
 
-struct udp_table 	udplite_table;
+struct udp_table 	udplite_table __read_mostly;
 EXPORT_SYMBOL(udplite_table);
 
 static int udplite_rcv(struct sk_buff *skb)
@@ -64,7 +64,6 @@ static struct inet_protosw udplite4_protosw = {
 	.protocol	=  IPPROTO_UDPLITE,
 	.prot		=  &udplite_prot,
 	.ops		=  &inet_dgram_ops,
-	.capability	= -1,
 	.no_check	=  0,		/* must checksum (RFC 3828) */
 	.flags		=  INET_PROTOSW_PERMANENT,
 };
@@ -82,12 +81,12 @@ static struct udp_seq_afinfo udplite4_seq_afinfo = {
 	},
 };
 
-static int udplite4_proc_init_net(struct net *net)
+static int __net_init udplite4_proc_init_net(struct net *net)
 {
 	return udp_proc_register(net, &udplite4_seq_afinfo);
 }
 
-static void udplite4_proc_exit_net(struct net *net)
+static void __net_exit udplite4_proc_exit_net(struct net *net)
 {
 	udp_proc_unregister(net, &udplite4_seq_afinfo);
 }
@@ -110,7 +109,7 @@ static inline int udplite4_proc_init(void)
 
 void __init udplite4_register(void)
 {
-	udp_table_init(&udplite_table);
+	udp_table_init(&udplite_table, "UDP-Lite");
 	if (proto_register(&udplite_prot, 1))
 		goto out_register_err;
 

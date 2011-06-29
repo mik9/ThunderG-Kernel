@@ -1,7 +1,7 @@
 /*
  * TSIF Driver
  *
- * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -34,6 +34,8 @@
 #include <linux/clk.h>
 #include <linux/wakelock.h>
 #include <linux/tsif_api.h>
+#include <linux/pm_runtime.h>
+#include <linux/slab.h>          /* kfree, kzalloc */
 
 #include <mach/gpio.h>
 #include <mach/dma.h>
@@ -265,18 +267,115 @@ static void tsif_clock(struct msm_tsif_device *tsif_device, int on)
 /* ===clocks end=== */
 /* ===gpio begin=== */
 
+static void tsif_gpios_free(const struct msm_gpio *table, int size)
+{
+	int i;
+	const struct msm_gpio *g;
+	for (i = size-1; i >= 0; i--) {
+		g = table + i;
+		gpio_free(GPIO_PIN(g->gpio_cfg));
+	}
+}
+
+static int tsif_gpios_request(const struct msm_gpio *table, int size)
+{
+	int rc;
+	int i;
+	const struct msm_gpio *g;
+	for (i = 0; i < size; i++) {
+		g = table + i;
+		rc = gpio_request(GPIO_PIN(g->gpio_cfg), g->label);
+		if (rc) {
+			pr_err("gpio_request(%d) <%s> failed: %d\n",
+			       GPIO_PIN(g->gpio_cfg), g->label ?: "?", rc);
+			goto err;
+		}
+	}
+	return 0;
+err:
+	tsif_gpios_free(table, i);
+	return rc;
+}
+
+static int tsif_gpios_disable(const struct msm_gpio *table, int size)
+{
+	int rc = 0;
+	int i;
+	const struct msm_gpio *g;
+	for (i = size-1; i >= 0; i--) {
+		int tmp;
+		g = table + i;
+		tmp = gpio_tlmm_config(g->gpio_cfg, GPIO_CFG_DISABLE);
+		if (tmp) {
+			pr_err("gpio_tlmm_config(0x%08x, GPIO_CFG_DISABLE)"
+			       " <%s> failed: %d\n",
+			       g->gpio_cfg, g->label ?: "?", rc);
+			pr_err("pin %d func %d dir %d pull %d drvstr %d\n",
+			       GPIO_PIN(g->gpio_cfg), GPIO_FUNC(g->gpio_cfg),
+			       GPIO_DIR(g->gpio_cfg), GPIO_PULL(g->gpio_cfg),
+			       GPIO_DRVSTR(g->gpio_cfg));
+			if (!rc)
+				rc = tmp;
+		}
+	}
+
+	return rc;
+}
+
+static int tsif_gpios_enable(const struct msm_gpio *table, int size)
+{
+	int rc;
+	int i;
+	const struct msm_gpio *g;
+	for (i = 0; i < size; i++) {
+		g = table + i;
+		rc = gpio_tlmm_config(g->gpio_cfg, GPIO_CFG_ENABLE);
+		if (rc) {
+			pr_err("gpio_tlmm_config(0x%08x, GPIO_CFG_ENABLE)"
+			       " <%s> failed: %d\n",
+			       g->gpio_cfg, g->label ?: "?", rc);
+			pr_err("pin %d func %d dir %d pull %d drvstr %d\n",
+			       GPIO_PIN(g->gpio_cfg), GPIO_FUNC(g->gpio_cfg),
+			       GPIO_DIR(g->gpio_cfg), GPIO_PULL(g->gpio_cfg),
+			       GPIO_DRVSTR(g->gpio_cfg));
+			goto err;
+		}
+	}
+	return 0;
+err:
+	tsif_gpios_disable(table, i);
+	return rc;
+}
+
+static int tsif_gpios_request_enable(const struct msm_gpio *table, int size)
+{
+	int rc = tsif_gpios_request(table, size);
+	if (rc)
+		return rc;
+	rc = tsif_gpios_enable(table, size);
+	if (rc)
+		tsif_gpios_free(table, size);
+	return rc;
+}
+
+static void tsif_gpios_disable_free(const struct msm_gpio *table, int size)
+{
+	tsif_gpios_disable(table, size);
+	tsif_gpios_free(table, size);
+}
+
 static int tsif_start_gpios(struct msm_tsif_device *tsif_device)
 {
 	struct msm_tsif_platform_data *pdata =
 		tsif_device->pdev->dev.platform_data;
-	return msm_gpios_request_enable(pdata->gpios, pdata->num_gpios);
+	return tsif_gpios_request_enable(pdata->gpios, pdata->num_gpios);
 }
 
 static void tsif_stop_gpios(struct msm_tsif_device *tsif_device)
 {
 	struct msm_tsif_platform_data *pdata =
 		tsif_device->pdev->dev.platform_data;
-	msm_gpios_disable_free(pdata->gpios, pdata->num_gpios);
+	tsif_gpios_disable_free(pdata->gpios, pdata->num_gpios);
 }
 
 /* ===gpio end=== */
@@ -920,6 +1019,8 @@ struct dentry *debugfs_create_iomem_x32(const char *name, mode_t mode,
 static int action_open(struct msm_tsif_device *tsif_device)
 {
 	int rc = -EINVAL;
+	int result;
+
 	dev_info(&tsif_device->pdev->dev, "%s\n", __func__);
 	if (tsif_device->state != tsif_state_stopped)
 		return -EAGAIN;
@@ -933,6 +1034,7 @@ static int action_open(struct msm_tsif_device *tsif_device)
 	 * DMA should be scheduled prior to TSIF hardware initialization,
 	 * otherwise "bus error" will be reported by Data Mover
 	 */
+	enable_irq(tsif_device->irq);
 	tsif_clock(tsif_device, 1);
 	tsif_dma_schedule(tsif_device);
 	rc = tsif_start_hw(tsif_device);
@@ -942,6 +1044,15 @@ static int action_open(struct msm_tsif_device *tsif_device)
 		tsif_clock(tsif_device, 0);
 		return rc;
 	}
+
+	result = pm_runtime_get(&tsif_device->pdev->dev);
+	if (result < 0) {
+		dev_err(&tsif_device->pdev->dev,
+			"Runtime PM: Unable to wake up the device, rc = %d\n",
+			result);
+		return result;
+	}
+
 	wake_lock(&tsif_device->wake_lock);
 	return rc;
 }
@@ -957,6 +1068,9 @@ static int action_close(struct msm_tsif_device *tsif_device)
 	tsif_stop_hw(tsif_device);
 	tsif_dma_exit(tsif_device);
 	tsif_clock(tsif_device, 0);
+	disable_irq(tsif_device->irq);
+
+	pm_runtime_put(&tsif_device->pdev->dev);
 	wake_unlock(&tsif_device->wake_lock);
 	return 0;
 }
@@ -1138,7 +1252,7 @@ static struct msm_tsif_device *tsif_find_by_id(int id)
 	return NULL;
 }
 
-static int __init msm_tsif_probe(struct platform_device *pdev)
+static int __devinit msm_tsif_probe(struct platform_device *pdev)
 {
 	int rc = -ENODEV;
 	struct msm_tsif_platform_data *plat = pdev->dev.platform_data;
@@ -1200,12 +1314,17 @@ static int __init msm_tsif_probe(struct platform_device *pdev)
 	rc = tsif_start_gpios(tsif_device);
 	if (rc)
 		goto err_gpio;
+
+	pm_runtime_set_active(&pdev->dev);
+	pm_runtime_enable(&pdev->dev);
+
 	tsif_debugfs_init(tsif_device);
 	rc = platform_get_irq(pdev, 0);
 	if (rc > 0) {
 		tsif_device->irq = rc;
 		rc = request_irq(tsif_device->irq, tsif_irq, IRQF_SHARED,
 				 dev_name(&pdev->dev), tsif_device);
+		disable_irq(tsif_device->irq);
 	}
 	if (rc) {
 		dev_err(&pdev->dev, "failed to request IRQ %d : %d\n",
@@ -1255,15 +1374,37 @@ static int __devexit msm_tsif_remove(struct platform_device *pdev)
 	tsif_stop_gpios(tsif_device);
 	iounmap(tsif_device->base);
 	tsif_put_clocks(tsif_device);
+
+	pm_runtime_put(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 	kfree(tsif_device);
 	return 0;
 }
+
+static int tsif_runtime_suspend(struct device *dev)
+{
+	dev_dbg(dev, "pm_runtime: suspending...\n");
+	return 0;
+}
+
+static int tsif_runtime_resume(struct device *dev)
+{
+	dev_dbg(dev, "pm_runtime: resuming...\n");
+	return 0;
+}
+
+static const struct dev_pm_ops tsif_dev_pm_ops = {
+	.runtime_suspend = tsif_runtime_suspend,
+	.runtime_resume = tsif_runtime_resume,
+};
+
 
 static struct platform_driver msm_tsif_driver = {
 	.probe          = msm_tsif_probe,
 	.remove         = __exit_p(msm_tsif_remove),
 	.driver         = {
 		.name   = "msm_tsif",
+		.pm     = &tsif_dev_pm_ops,
 	},
 };
 

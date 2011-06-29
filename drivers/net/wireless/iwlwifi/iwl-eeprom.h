@@ -5,7 +5,7 @@
  *
  * GPL LICENSE SUMMARY
  *
- * Copyright(c) 2008 - 2009 Intel Corporation. All rights reserved.
+ * Copyright(c) 2008 - 2010 Intel Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -30,7 +30,7 @@
  *
  * BSD LICENSE
  *
- * Copyright(c) 2005 - 2009 Intel Corporation. All rights reserved.
+ * Copyright(c) 2005 - 2010 Intel Corporation. All rights reserved.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -62,6 +62,8 @@
 
 #ifndef __iwl_eeprom_h__
 #define __iwl_eeprom_h__
+
+#include <net/mac80211.h>
 
 struct iwl_priv;
 
@@ -125,9 +127,11 @@ struct iwl_eeprom_channel {
  *    Enhanced regulatory tx power portion of eeprom image can be broken down
  *    into individual structures; each one is 8 bytes in size and contain the
  *    following information
+ * @common: (desc + channel) not used by driver, should _NOT_ be "zero"
  * @chain_a_max_pwr: chain a max power in 1/2 dBm
  * @chain_b_max_pwr: chain b max power in 1/2 dBm
  * @chain_c_max_pwr: chain c max power in 1/2 dBm
+ * @reserved: not used, should be "zero"
  * @mimo2_max_pwr: mimo2 max power in 1/2 dBm
  * @mimo3_max_pwr: mimo3 max power in 1/2 dBm
  *
@@ -137,7 +141,7 @@ struct iwl_eeprom_enhanced_txpwr {
 	s8 chain_a_max;
 	s8 chain_b_max;
 	s8 chain_c_max;
-	s8 reserved1;
+	s8 reserved;
 	s8 mimo2_max;
 	s8 mimo3_max;
 } __attribute__ ((packed));
@@ -168,36 +172,40 @@ struct iwl_eeprom_enhanced_txpwr {
 #define EEPROM_5000_TX_POWER_VERSION    (4)
 #define EEPROM_5000_EEPROM_VERSION	(0x11A)
 
-/*5000 calibrations */
-#define EEPROM_5000_CALIB_ALL	(INDIRECT_ADDRESS | INDIRECT_CALIBRATION)
-#define EEPROM_5000_XTAL	((2*0x128) | EEPROM_5000_CALIB_ALL)
-#define EEPROM_5000_TEMPERATURE ((2*0x12A) | EEPROM_5000_CALIB_ALL)
+/* 5000 and up calibration */
+#define EEPROM_CALIB_ALL	(INDIRECT_ADDRESS | INDIRECT_CALIBRATION)
+#define EEPROM_XTAL		((2*0x128) | EEPROM_CALIB_ALL)
 
-/* 5000 links */
-#define EEPROM_5000_LINK_HOST             (2*0x64)
-#define EEPROM_5000_LINK_GENERAL          (2*0x65)
-#define EEPROM_5000_LINK_REGULATORY       (2*0x66)
-#define EEPROM_5000_LINK_CALIBRATION      (2*0x67)
-#define EEPROM_5000_LINK_PROCESS_ADJST    (2*0x68)
-#define EEPROM_5000_LINK_OTHERS           (2*0x69)
+/* 5000 temperature */
+#define EEPROM_5000_TEMPERATURE ((2*0x12A) | EEPROM_CALIB_ALL)
 
-/* 5000 regulatory - indirect access */
-#define EEPROM_5000_REG_SKU_ID ((0x02)\
-		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 4  bytes */
-#define EEPROM_5000_REG_BAND_1_CHANNELS       ((0x08)\
+/* agn links */
+#define EEPROM_LINK_HOST             (2*0x64)
+#define EEPROM_LINK_GENERAL          (2*0x65)
+#define EEPROM_LINK_REGULATORY       (2*0x66)
+#define EEPROM_LINK_CALIBRATION      (2*0x67)
+#define EEPROM_LINK_PROCESS_ADJST    (2*0x68)
+#define EEPROM_LINK_OTHERS           (2*0x69)
+
+/* agn regulatory - indirect access */
+#define EEPROM_REG_BAND_1_CHANNELS       ((0x08)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 28 bytes */
-#define EEPROM_5000_REG_BAND_2_CHANNELS       ((0x26)\
+#define EEPROM_REG_BAND_2_CHANNELS       ((0x26)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 26 bytes */
-#define EEPROM_5000_REG_BAND_3_CHANNELS       ((0x42)\
+#define EEPROM_REG_BAND_3_CHANNELS       ((0x42)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 24 bytes */
-#define EEPROM_5000_REG_BAND_4_CHANNELS       ((0x5C)\
+#define EEPROM_REG_BAND_4_CHANNELS       ((0x5C)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 22 bytes */
-#define EEPROM_5000_REG_BAND_5_CHANNELS       ((0x74)\
+#define EEPROM_REG_BAND_5_CHANNELS       ((0x74)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 12 bytes */
-#define EEPROM_5000_REG_BAND_24_HT40_CHANNELS  ((0x82)\
+#define EEPROM_REG_BAND_24_HT40_CHANNELS  ((0x82)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 14  bytes */
-#define EEPROM_5000_REG_BAND_52_HT40_CHANNELS  ((0x92)\
+#define EEPROM_REG_BAND_52_HT40_CHANNELS  ((0x92)\
 		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 22  bytes */
+
+/* 6000 regulatory - indirect access */
+#define EEPROM_6000_REG_BAND_24_HT40_CHANNELS  ((0x80)\
+		| INDIRECT_ADDRESS | INDIRECT_REGULATORY)   /* 14  bytes */
 
 /* 6000 and up regulatory tx power - indirect access */
 /* max. elements per section */
@@ -255,6 +263,22 @@ struct iwl_eeprom_enhanced_txpwr {
 /* 5050 Specific */
 #define EEPROM_5050_TX_POWER_VERSION    (4)
 #define EEPROM_5050_EEPROM_VERSION	(0x21E)
+
+/* 1000 Specific */
+#define EEPROM_1000_TX_POWER_VERSION    (4)
+#define EEPROM_1000_EEPROM_VERSION	(0x15C)
+
+/* 6x00 Specific */
+#define EEPROM_6000_TX_POWER_VERSION    (4)
+#define EEPROM_6000_EEPROM_VERSION	(0x434)
+
+/* 6x50 Specific */
+#define EEPROM_6050_TX_POWER_VERSION    (4)
+#define EEPROM_6050_EEPROM_VERSION	(0x532)
+
+/* 6x00g2 Specific */
+#define EEPROM_6000G2_TX_POWER_VERSION    (6)
+#define EEPROM_6000G2_EEPROM_VERSION	(0x709)
 
 /* OTP */
 /* lower blocks contain EEPROM image and calibration data */
@@ -370,12 +394,10 @@ struct iwl_eeprom_calib_info {
 #define EEPROM_BOARD_PBA_NUMBER             (2*0x3B+1)	/* 9  bytes */
 #define EEPROM_VERSION                      (2*0x44)	/* 2  bytes */
 #define EEPROM_SKU_CAP                      (2*0x45)	/* 1  bytes */
-#define EEPROM_LEDS_MODE                    (2*0x45+1)	/* 1  bytes */
 #define EEPROM_OEM_MODE                     (2*0x46)	/* 2  bytes */
 #define EEPROM_WOWLAN_MODE                  (2*0x47)	/* 2  bytes */
 #define EEPROM_RADIO_CONFIG                 (2*0x48)	/* 2  bytes */
 #define EEPROM_3945_M_VERSION               (2*0x4A)	/* 1  bytes */
-#define EEPROM_ANTENNA_SWITCH_TYPE          (2*0x4A+1)	/* 1  bytes */
 
 /* The following masks are to be applied on EEPROM_RADIO_CONFIG */
 #define EEPROM_RF_CFG_TYPE_MSK(x)   (x & 0x3)         /* bits 0-1   */
@@ -387,7 +409,12 @@ struct iwl_eeprom_calib_info {
 
 #define EEPROM_3945_RF_CFG_TYPE_MAX  0x0
 #define EEPROM_4965_RF_CFG_TYPE_MAX  0x1
-#define EEPROM_5000_RF_CFG_TYPE_MAX  0x3
+
+/* Radio Config for 5000 and up */
+#define EEPROM_RF_CONFIG_TYPE_R3x3	0x0
+#define EEPROM_RF_CONFIG_TYPE_R2x2	0x1
+#define EEPROM_RF_CONFIG_TYPE_R1x2	0x2
+#define EEPROM_RF_CONFIG_TYPE_MAX	0x3
 
 /*
  * Per-channel regulatory data.

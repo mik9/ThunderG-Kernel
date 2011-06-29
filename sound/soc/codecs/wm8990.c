@@ -18,6 +18,7 @@
 #include <linux/pm.h>
 #include <linux/i2c.h>
 #include <linux/platform_device.h>
+#include <linux/slab.h>
 #include <sound/core.h>
 #include <sound/pcm.h>
 #include <sound/pcm_params.h>
@@ -920,7 +921,6 @@ static int wm8990_add_widgets(struct snd_soc_codec *codec)
 	/* set up the WM8990 audio map */
 	snd_soc_dapm_add_routes(codec, audio_map, ARRAY_SIZE(audio_map));
 
-	snd_soc_dapm_new_widgets(codec);
 	return 0;
 }
 
@@ -972,8 +972,8 @@ static void pll_factors(struct _pll_div *pll_div, unsigned int target,
 	pll_div->k = K;
 }
 
-static int wm8990_set_dai_pll(struct snd_soc_dai *codec_dai,
-		int pll_id, unsigned int freq_in, unsigned int freq_out)
+static int wm8990_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
+		int source, unsigned int freq_in, unsigned int freq_out)
 {
 	u16 reg;
 	struct snd_soc_codec *codec = codec_dai->codec;
@@ -991,7 +991,7 @@ static int wm8990_set_dai_pll(struct snd_soc_dai *codec_dai,
 		reg = snd_soc_read(codec, WM8990_CLOCKING_2);
 		snd_soc_write(codec, WM8990_CLOCKING_2, reg | WM8990_SYSCLK_SRC);
 
-		/* set up N , fractional mode and pre-divisor if neccessary */
+		/* set up N , fractional mode and pre-divisor if necessary */
 		snd_soc_write(codec, WM8990_PLL1, pll_div.n | WM8990_SDM |
 			(pll_div.div2?WM8990_PRESCALE:0));
 		snd_soc_write(codec, WM8990_PLL2, (u8)(pll_div.k>>8));
@@ -1012,7 +1012,7 @@ static int wm8990_set_dai_sysclk(struct snd_soc_dai *codec_dai,
 		int clk_id, unsigned int freq, int dir)
 {
 	struct snd_soc_codec *codec = codec_dai->codec;
-	struct wm8990_priv *wm8990 = codec->private_data;
+	struct wm8990_priv *wm8990 = snd_soc_codec_get_drvdata(codec);
 
 	wm8990->sysclk = freq;
 	return 0;
@@ -1185,7 +1185,7 @@ static int wm8990_set_bias_level(struct snd_soc_codec *codec,
 				     WM8990_VMIDTOG);
 
 			/* Delay to allow output caps to discharge */
-			msleep(300);
+			msleep(msecs_to_jiffies(300));
 
 			/* Disable VMIDTOG */
 			snd_soc_write(codec, WM8990_ANTIPOP2, WM8990_SOFTST |
@@ -1197,17 +1197,17 @@ static int wm8990_set_bias_level(struct snd_soc_codec *codec,
 			/* Enable outputs */
 			snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1b00);
 
-			msleep(50);
+			msleep(msecs_to_jiffies(50));
 
 			/* Enable VMID at 2x50k */
 			snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1f02);
 
-			msleep(100);
+			msleep(msecs_to_jiffies(100));
 
 			/* Enable VREF */
 			snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1f03);
 
-			msleep(600);
+			msleep(msecs_to_jiffies(600));
 
 			/* Enable BUFIOEN */
 			snd_soc_write(codec, WM8990_ANTIPOP2, WM8990_SOFTST |
@@ -1252,7 +1252,7 @@ static int wm8990_set_bias_level(struct snd_soc_codec *codec,
 		/* Disable VMID */
 		snd_soc_write(codec, WM8990_POWER_MANAGEMENT_1, 0x1f01);
 
-		msleep(300);
+		msleep(msecs_to_jiffies(300));
 
 		/* Enable all output discharge bits */
 		snd_soc_write(codec, WM8990_ANTIPOP1, WM8990_DIS_LLINE |
@@ -1320,10 +1320,6 @@ static int wm8990_suspend(struct platform_device *pdev, pm_message_t state)
 	struct snd_soc_device *socdev = platform_get_drvdata(pdev);
 	struct snd_soc_codec *codec = socdev->card->codec;
 
-	/* we only need to suspend if we are a valid card */
-	if (!codec->card)
-		return 0;
-
 	wm8990_set_bias_level(codec, SND_SOC_BIAS_OFF);
 	return 0;
 }
@@ -1335,10 +1331,6 @@ static int wm8990_resume(struct platform_device *pdev)
 	int i;
 	u8 data[2];
 	u16 *cache = codec->reg_cache;
-
-	/* we only need to resume if we are a valid card */
-	if (!codec->card)
-		return 0;
 
 	/* Sync reg_cache with the hardware */
 	for (i = 0; i < ARRAY_SIZE(wm8990_reg); i++) {
@@ -1409,16 +1401,9 @@ static int wm8990_init(struct snd_soc_device *socdev)
 	snd_soc_add_controls(codec, wm8990_snd_controls,
 				ARRAY_SIZE(wm8990_snd_controls));
 	wm8990_add_widgets(codec);
-	ret = snd_soc_init_card(socdev);
-	if (ret < 0) {
-		printk(KERN_ERR "wm8990: failed to register card\n");
-		goto card_err;
-	}
+
 	return ret;
 
-card_err:
-	snd_soc_free_pcms(socdev);
-	snd_soc_dapm_free(socdev);
 pcm_err:
 	kfree(codec->reg_cache);
 	return ret;
@@ -1539,7 +1524,7 @@ static int wm8990_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	codec->private_data = wm8990;
+	snd_soc_codec_set_drvdata(codec, wm8990);
 	socdev->card->codec = codec;
 	mutex_init(&codec->mutex);
 	INIT_LIST_HEAD(&codec->dapm_widgets);
@@ -1556,7 +1541,7 @@ static int wm8990_probe(struct platform_device *pdev)
 #endif
 
 	if (ret != 0) {
-		kfree(codec->private_data);
+		kfree(snd_soc_codec_get_drvdata(codec));
 		kfree(codec);
 	}
 	return ret;
@@ -1576,7 +1561,7 @@ static int wm8990_remove(struct platform_device *pdev)
 	i2c_unregister_device(codec->control_data);
 	i2c_del_driver(&wm8990_i2c_driver);
 #endif
-	kfree(codec->private_data);
+	kfree(snd_soc_codec_get_drvdata(codec));
 	kfree(codec);
 
 	return 0;

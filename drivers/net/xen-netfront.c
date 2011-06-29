@@ -40,8 +40,10 @@
 #include <linux/udp.h>
 #include <linux/moduleparam.h>
 #include <linux/mm.h>
+#include <linux/slab.h>
 #include <net/ip.h>
 
+#include <xen/xen.h>
 #include <xen/xenbus.h>
 #include <xen/events.h>
 #include <xen/page.h>

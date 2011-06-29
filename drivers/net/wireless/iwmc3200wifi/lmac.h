@@ -187,6 +187,14 @@ struct iwm_coex_prio_table_cmd {
 				     COEX_EVT_FLAG_MEDIUM_ACTV_NTFY_MSK | \
 				     COEX_EVT_FLAG_DELAY_MEDIUM_FREE_NTFY_MSK)
 
+/* CT kill config command */
+struct iwm_ct_kill_cfg_cmd {
+	u32 exit_threshold;
+	u32 reserved;
+	u32 entry_threshold;
+} __attribute__ ((packed));
+
+
 /* LMAC OP CODES */
 #define REPLY_PAD			0x0
 #define REPLY_ALIVE			0x1
@@ -254,7 +262,7 @@ struct iwm_coex_prio_table_cmd {
 
 /* Power Management */
 #define POWER_TABLE_CMD			0x77
-#define SAVE_RESTORE_ADRESS_CMD		0x78
+#define SAVE_RESTORE_ADDRESS_CMD		0x78
 #define REPLY_WATERMARK_CMD		0x79
 #define PM_DEBUG_STATISTIC_NOTIFIC	0x7B
 #define PD_FLUSH_N_NOTIFICATION		0x7C

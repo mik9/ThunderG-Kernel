@@ -130,8 +130,6 @@ PACK (void *)LGF_KeyPress (
   const int rsp_len = sizeof( DIAG_HS_KEY_F_rsp_type );
 
   rsp_ptr = (DIAG_HS_KEY_F_rsp_type *) diagpkt_alloc( DIAG_HS_KEY_F, rsp_len );
-  if (!rsp_ptr)
-  	return 0;
 
   if((req_ptr->magic1 == 0xEA2B7BC0) && (req_ptr->magic2 == 0xA5B7E0DF))
   {

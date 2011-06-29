@@ -34,43 +34,20 @@
  */
 
 #include <linux/vmalloc.h>
+#include <linux/slab.h>
 #include <linux/log2.h>
 #include <asm/shmparam.h>
 #include "drmP.h"
 
 resource_size_t drm_get_resource_start(struct drm_device *dev, unsigned int resource)
 {
-	if (drm_core_check_feature(dev, DRIVER_USE_PLATFORM_DEVICE)) {
-		struct resource *r;
-		r = platform_get_resource(dev->platformdev, IORESOURCE_MEM,
-					     resource);
-
-		return r ? r->start : 0;
-	}
-
-#ifdef CONFIG_PCI
 	return pci_resource_start(dev->pdev, resource);
-#endif
-
-	return 0;
 }
 EXPORT_SYMBOL(drm_get_resource_start);
 
 resource_size_t drm_get_resource_len(struct drm_device *dev, unsigned int resource)
 {
-	if (drm_core_check_feature(dev, DRIVER_USE_PLATFORM_DEVICE)) {
-		struct resource *r;
-		r = platform_get_resource(dev->platformdev, IORESOURCE_MEM,
-			resource);
-
-		return r ? (r->end - r->start) : 0;
-	}
-
-#ifdef CONFIG_PCI
 	return pci_resource_len(dev->pdev, resource);
-#endif
-
-	return 0;
 }
 
 EXPORT_SYMBOL(drm_get_resource_len);
@@ -984,7 +961,7 @@ int drm_addbufs_pci(struct drm_device * dev, struct drm_buf_desc * request)
 		dma->buflist[i + dma->buf_count] = &entry->buflist[i];
 	}
 
-	/* No allocations failed, so now we can replace the orginal pagelist
+	/* No allocations failed, so now we can replace the original pagelist
 	 * with the new one.
 	 */
 	if (dma->page_count) {

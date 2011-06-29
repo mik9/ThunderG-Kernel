@@ -47,15 +47,20 @@ struct secondary_data secondary_data;
 
 /*
  * structures for inter-processor calls
+ * - A collection of single bit ipi messages.
  */
 struct ipi_data {
+	spinlock_t lock;
 	unsigned long ipi_count;
+	unsigned long bits;
 };
 
-static DEFINE_PER_CPU(struct ipi_data, ipi_data);
+static DEFINE_PER_CPU(struct ipi_data, ipi_data) = {
+	.lock	= SPIN_LOCK_UNLOCKED,
+};
 
 enum ipi_msg_type {
-	IPI_TIMER = 2,
+	IPI_TIMER,
 	IPI_RESCHEDULE,
 	IPI_CALL_FUNC,
 	IPI_CALL_FUNC_SINGLE,
@@ -81,6 +86,12 @@ int __cpuinit __cpu_up(unsigned int cpu)
 			return PTR_ERR(idle);
 		}
 		ci->idle = idle;
+	} else {
+		/*
+		 * Since this idle thread is being re-used, call
+		 * init_idle() to reinitialize the thread structure.
+		 */
+		init_idle(idle, cpu);
 	}
 
 	/*
@@ -94,6 +105,7 @@ int __cpuinit __cpu_up(unsigned int cpu)
 	*pmd = __pmd((PHYS_OFFSET & PGDIR_MASK) |
 		     PMD_TYPE_SECT | PMD_SECT_AP_WRITE);
 	flush_pmd_entry(pmd);
+	outer_clean_range(__pa(pmd), __pa(pmd + 1));
 
 	/*
 	 * We need to tell the secondary core where to find
@@ -101,7 +113,8 @@ int __cpuinit __cpu_up(unsigned int cpu)
 	 */
 	secondary_data.stack = task_stack_page(idle) + THREAD_START_SP;
 	secondary_data.pgdir = virt_to_phys(pgd);
-	wmb();
+	__cpuc_flush_dcache_area(&secondary_data, sizeof(secondary_data));
+	outer_clean_range(__pa(&secondary_data), __pa(&secondary_data + 1));
 
 	/*
 	 * Now bring the CPU into our world.
@@ -155,7 +168,7 @@ int __cpu_disable(void)
 	struct task_struct *p;
 	int ret;
 
-	ret = mach_cpu_disable(cpu);
+	ret = platform_cpu_disable(cpu);
 	if (ret)
 		return ret;
 
@@ -244,8 +257,6 @@ asmlinkage void __cpuinit secondary_start_kernel(void)
 	struct mm_struct *mm = &init_mm;
 	unsigned int cpu = smp_processor_id();
 
-	printk("CPU%u: Booted secondary processor\n", cpu);
-
 	/*
 	 * All kernel threads share the same mm context; grab a
 	 * reference and switch to it.
@@ -328,10 +339,25 @@ void __init smp_prepare_boot_cpu(void)
 
 static void send_ipi_message(const struct cpumask *mask, enum ipi_msg_type msg)
 {
+	unsigned long flags;
+	unsigned int cpu;
+
+	local_irq_save(flags);
+
+	for_each_cpu(cpu, mask) {
+		struct ipi_data *ipi = &per_cpu(ipi_data, cpu);
+
+		spin_lock(&ipi->lock);
+		ipi->bits |= 1 << msg;
+		spin_unlock(&ipi->lock);
+	}
+
 	/*
 	 * Call the platform specific cross-CPU call function.
 	 */
-	smp_cross_call(mask, msg);
+	smp_cross_call(mask);
+
+	local_irq_restore(flags);
 }
 
 void arch_send_call_function_ipi_mask(const struct cpumask *mask)
@@ -455,8 +481,14 @@ static void ipi_cpu_stop(unsigned int cpu)
 
 /*
  * Main handler for inter-processor interrupts
+ *
+ * For ARM, the ipimask now only identifies a single
+ * category of IPI (Bit 1 IPIs have been replaced by a
+ * different mechanism):
+ *
+ *  Bit 0 - Inter-processor function call
  */
-asmlinkage void __exception do_IPI(int ipinr, struct pt_regs *regs)
+asmlinkage void __exception do_IPI(struct pt_regs *regs)
 {
 	unsigned int cpu = smp_processor_id();
 	struct ipi_data *ipi = &per_cpu(ipi_data, cpu);
@@ -464,35 +496,56 @@ asmlinkage void __exception do_IPI(int ipinr, struct pt_regs *regs)
 
 	ipi->ipi_count++;
 
-	switch (ipinr) {
-	case IPI_TIMER:
-		ipi_timer();
-		break;
+	for (;;) {
+		unsigned long msgs;
 
-	case IPI_RESCHEDULE:
-		/*
-		 * nothing more to do - eveything is
-		 * done on the interrupt return path
-		 */
-		break;
+		spin_lock(&ipi->lock);
+		msgs = ipi->bits;
+		ipi->bits = 0;
+		spin_unlock(&ipi->lock);
 
-	case IPI_CALL_FUNC:
-		generic_smp_call_function_interrupt();
-		break;
+		if (!msgs)
+			break;
 
-	case IPI_CALL_FUNC_SINGLE:
-		generic_smp_call_function_single_interrupt();
-		break;
+		do {
+			unsigned nextmsg;
 
-	case IPI_CPU_STOP:
-		ipi_cpu_stop(cpu);
-		break;
+			nextmsg = msgs & -msgs;
+			msgs &= ~nextmsg;
+			nextmsg = ffz(~nextmsg);
 
-	default:
-		printk(KERN_CRIT "CPU%u: Unknown IPI message 0x%x\n",
-				cpu, ipinr);
-		break;
+			switch (nextmsg) {
+			case IPI_TIMER:
+				ipi_timer();
+				break;
+
+			case IPI_RESCHEDULE:
+				/*
+				 * nothing more to do - eveything is
+				 * done on the interrupt return path
+				 */
+				break;
+
+			case IPI_CALL_FUNC:
+				generic_smp_call_function_interrupt();
+				break;
+
+			case IPI_CALL_FUNC_SINGLE:
+				generic_smp_call_function_single_interrupt();
+				break;
+
+			case IPI_CPU_STOP:
+				ipi_cpu_stop(cpu);
+				break;
+
+			default:
+				printk(KERN_CRIT "CPU%u: Unknown IPI message 0x%x\n",
+				       cpu, nextmsg);
+				break;
+			}
+		} while (msgs);
 	}
+
 	set_irq_regs(old_regs);
 }
 

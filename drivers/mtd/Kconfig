@@ -53,18 +53,6 @@ config MTD_PARTITIONS
 	  devices. Partitioning on NFTL 'devices' is a different - that's the
 	  'normal' form of partitioning used on a block device.
 
-config MTD_LAZYECCSTATS
-	bool "MTD Lazy ECC Stats collection support"
-	depends on MTD_PARTITIONS
-	default n
-	help
-	  Normally bad block counts for ECC stats are collected at boot time.
-	  This option delays the badblock stats collection until ECCGETSTATS
-	  ioctl is invoked on the partition.
-
-	  This can significantly decrease boot times depending on the size of
-	  the partition.  If unsure, say 'N'.
-
 config MTD_REDBOOT_PARTS
 	tristate "RedBoot partition table parsing"
 	depends on MTD_PARTITIONS
@@ -315,6 +303,19 @@ config SSFDC
 	help
 	  This enables read only access to SmartMedia formatted NAND
 	  flash. You can mount it with FAT file system.
+
+
+config SM_FTL
+	tristate "SmartMedia/xD new translation layer"
+	depends on EXPERIMENTAL && BLOCK
+	select MTD_BLKDEVS
+	select MTD_NAND_ECC
+	help
+	  This enables new and very EXPERMENTAL support for SmartMedia/xD
+	  FTL (Flash translation layer).
+	  Write support isn't yet well tested, therefore this code IS likely to
+	  eat your card, so please don't use it together with valuable data.
+	  Use readonly driver (CONFIG_SSFDC) instead.
 
 config MTD_OOPS
 	tristate "Log panic/oops to an MTD buffer"

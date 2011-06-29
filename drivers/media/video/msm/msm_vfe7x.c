@@ -1,4 +1,4 @@
-/* Copyright (c) 2009, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2009-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,6 +20,7 @@
 #include <linux/uaccess.h>
 #include <linux/fs.h>
 #include <linux/android_pmem.h>
+#include <linux/slab.h>
 #include <mach/msm_adsp.h>
 #include <mach/clk.h>
 #include <linux/delay.h>
@@ -189,12 +190,17 @@ static struct msm_adsp_ops vfe_7x_sync = {
 static int vfe_7x_enable(struct camera_enable_cmd *enable)
 {
 	int rc = -EFAULT;
+	static int cnt;
 
 	if (!strcmp(enable->name, "QCAMTASK"))
 		rc = msm_adsp_enable(qcam_mod);
 	else if (!strcmp(enable->name, "VFETASK"))
 		rc = msm_adsp_enable(vfe_mod);
 
+	if (!cnt) {
+		add_axi_qos();
+		cnt++;
+	}
 	return rc;
 }
 
@@ -715,4 +721,13 @@ void msm_camvfe_fn_init(struct msm_camvfe_fn *fptr, void *data)
 	fptr->vfe_disable = vfe_7x_disable;
 	fptr->vfe_release = vfe_7x_release;
 	vfe_syncdata = data;
+}
+
+void msm_camvpe_fn_init(struct msm_camvpe_fn *fptr, void *data)
+{
+	fptr->vpe_reg		= NULL;
+	fptr->send_frame_to_vpe	= NULL;
+	fptr->vpe_config	= NULL;
+	fptr->vpe_cfg_update	= NULL;
+	fptr->dis		= NULL;
 }

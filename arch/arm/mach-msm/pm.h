@@ -19,8 +19,16 @@
 #define __ARCH_ARM_MACH_MSM_PM_H
 
 #include <linux/types.h>
+#include <linux/cpuidle.h>
 
-enum {
+#ifdef CONFIG_HOTPLUG_CPU
+extern int pen_release;
+extern void msm_secondary_startup(void);
+#else
+#define msm_secondary_startup NULL
+#endif
+
+enum msm_pm_sleep_mode {
 	MSM_PM_SLEEP_MODE_POWER_COLLAPSE_SUSPEND,
 	MSM_PM_SLEEP_MODE_POWER_COLLAPSE,
 	MSM_PM_SLEEP_MODE_APPS_SLEEP,
@@ -44,5 +52,11 @@ struct msm_pm_platform_data {
 };
 
 void msm_pm_set_platform_data(struct msm_pm_platform_data *data, int count);
+int msm_pm_idle_prepare(struct cpuidle_device *dev);
+int msm_pm_idle_enter(enum msm_pm_sleep_mode sleep_mode);
 
+#ifdef CONFIG_HOTPLUG_CPU
+int msm_pm_platform_secondary_init(unsigned int cpu);
 #endif
+
+#endif  /* __ARCH_ARM_MACH_MSM_PM_H */

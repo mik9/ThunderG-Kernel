@@ -1,7 +1,7 @@
 /*
  * This file is part of wl1271
  *
- * Copyright (C) 2009 Nokia Corporation
+ * Copyright (C) 2009-2010 Nokia Corporation
  *
  * Contact: Luciano Coelho <luciano.coelho@nokia.com>
  *
@@ -26,13 +26,18 @@
 #include <linux/crc7.h>
 #include <linux/spi/spi.h>
 #include <linux/etherdevice.h>
+#include <linux/ieee80211.h>
+#include <linux/slab.h>
 
 #include "wl1271.h"
 #include "wl1271_reg.h"
-#include "wl1271_spi.h"
+#include "wl1271_io.h"
 #include "wl1271_acx.h"
 #include "wl12xx_80211.h"
 #include "wl1271_cmd.h"
+#include "wl1271_event.h"
+
+#define WL1271_CMD_FAST_POLL_COUNT       50
 
 /*
  * send command to firmware
@@ -42,26 +47,29 @@
  * @buf: buffer containing the command, must work with dma
  * @len: length of the buffer
  */
-int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len)
+int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len,
+		    size_t res_len)
 {
 	struct wl1271_cmd_header *cmd;
 	unsigned long timeout;
 	u32 intr;
 	int ret = 0;
+	u16 status;
+	u16 poll_count = 0;
 
 	cmd = buf;
-	cmd->id = id;
+	cmd->id = cpu_to_le16(id);
 	cmd->status = 0;
 
 	WARN_ON(len % 4 != 0);
 
-	wl1271_spi_mem_write(wl, wl->cmd_box_addr, buf, len);
+	wl1271_write(wl, wl->cmd_box_addr, buf, len, false);
 
-	wl1271_reg_write32(wl, ACX_REG_INTERRUPT_TRIG, INTR_TRIG_CMD);
+	wl1271_write32(wl, ACX_REG_INTERRUPT_TRIG, INTR_TRIG_CMD);
 
 	timeout = jiffies + msecs_to_jiffies(WL1271_COMMAND_TIMEOUT);
 
-	intr = wl1271_reg_read32(wl, ACX_REG_INTERRUPT_NO_CLEAR);
+	intr = wl1271_read32(wl, ACX_REG_INTERRUPT_NO_CLEAR);
 	while (!(intr & WL1271_ACX_INTR_CMD_COMPLETE)) {
 		if (time_after(jiffies, timeout)) {
 			wl1271_error("command complete timeout");
@@ -69,19 +77,34 @@ int wl1271_cmd_send(struct wl1271 *wl, u16 id, void *buf, size_t len)
 			goto out;
 		}
 
-		msleep(1);
+		poll_count++;
+		if (poll_count < WL1271_CMD_FAST_POLL_COUNT)
+			udelay(10);
+		else
+			msleep(1);
 
-		intr = wl1271_reg_read32(wl, ACX_REG_INTERRUPT_NO_CLEAR);
+		intr = wl1271_read32(wl, ACX_REG_INTERRUPT_NO_CLEAR);
 	}
 
-	wl1271_reg_write32(wl, ACX_REG_INTERRUPT_ACK,
-			   WL1271_ACX_INTR_CMD_COMPLETE);
+	/* read back the status code of the command */
+	if (res_len == 0)
+		res_len = sizeof(struct wl1271_cmd_header);
+	wl1271_read(wl, wl->cmd_box_addr, cmd, res_len, false);
+
+	status = le16_to_cpu(cmd->status);
+	if (status != CMD_STATUS_SUCCESS) {
+		wl1271_error("command execute failure %d", status);
+		ret = -EIO;
+	}
+
+	wl1271_write32(wl, ACX_REG_INTERRUPT_ACK,
+		       WL1271_ACX_INTR_CMD_COMPLETE);
 
 out:
 	return ret;
 }
 
-int wl1271_cmd_cal_channel_tune(struct wl1271 *wl)
+static int wl1271_cmd_cal_channel_tune(struct wl1271 *wl)
 {
 	struct wl1271_cmd_cal_channel_tune *cmd;
 	int ret = 0;
@@ -104,7 +127,7 @@ int wl1271_cmd_cal_channel_tune(struct wl1271 *wl)
 	return ret;
 }
 
-int wl1271_cmd_cal_update_ref_point(struct wl1271 *wl)
+static int wl1271_cmd_cal_update_ref_point(struct wl1271 *wl)
 {
 	struct wl1271_cmd_cal_update_ref_point *cmd;
 	int ret = 0;
@@ -129,7 +152,7 @@ int wl1271_cmd_cal_update_ref_point(struct wl1271 *wl)
 	return ret;
 }
 
-int wl1271_cmd_cal_p2g(struct wl1271 *wl)
+static int wl1271_cmd_cal_p2g(struct wl1271 *wl)
 {
 	struct wl1271_cmd_cal_p2g *cmd;
 	int ret = 0;
@@ -150,7 +173,7 @@ int wl1271_cmd_cal_p2g(struct wl1271 *wl)
 	return ret;
 }
 
-int wl1271_cmd_cal(struct wl1271 *wl)
+static int wl1271_cmd_cal(struct wl1271 *wl)
 {
 	/*
 	 * FIXME: we must make sure that we're not sleeping when calibration
@@ -175,11 +198,97 @@ int wl1271_cmd_cal(struct wl1271 *wl)
 	return ret;
 }
 
-int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type, u8 dtim_interval,
-		    u16 beacon_interval, u8 wait)
+int wl1271_cmd_general_parms(struct wl1271 *wl)
+{
+	struct wl1271_general_parms_cmd *gen_parms;
+	int ret;
+
+	if (!wl->nvs)
+		return -ENODEV;
+
+	gen_parms = kzalloc(sizeof(*gen_parms), GFP_KERNEL);
+	if (!gen_parms)
+		return -ENOMEM;
+
+	gen_parms->test.id = TEST_CMD_INI_FILE_GENERAL_PARAM;
+
+	memcpy(gen_parms->params, wl->nvs->general_params,
+	       WL1271_NVS_GENERAL_PARAMS_SIZE);
+
+	ret = wl1271_cmd_test(wl, gen_parms, sizeof(*gen_parms), 0);
+	if (ret < 0)
+		wl1271_warning("CMD_INI_FILE_GENERAL_PARAM failed");
+
+	kfree(gen_parms);
+	return ret;
+}
+
+int wl1271_cmd_radio_parms(struct wl1271 *wl)
+{
+	struct wl1271_radio_parms_cmd *radio_parms;
+	struct conf_radio_parms *rparam = &wl->conf.init.radioparam;
+	int ret;
+
+	if (!wl->nvs)
+		return -ENODEV;
+
+	radio_parms = kzalloc(sizeof(*radio_parms), GFP_KERNEL);
+	if (!radio_parms)
+		return -ENOMEM;
+
+	radio_parms->test.id = TEST_CMD_INI_FILE_RADIO_PARAM;
+
+	memcpy(radio_parms->stat_radio_params, wl->nvs->stat_radio_params,
+	       WL1271_NVS_STAT_RADIO_PARAMS_SIZE);
+	memcpy(radio_parms->dyn_radio_params,
+	       wl->nvs->dyn_radio_params[rparam->fem],
+	       WL1271_NVS_DYN_RADIO_PARAMS_SIZE);
+
+	/* FIXME: current NVS is missing 5GHz parameters */
+
+	wl1271_dump(DEBUG_CMD, "TEST_CMD_INI_FILE_RADIO_PARAM: ",
+		    radio_parms, sizeof(*radio_parms));
+
+	ret = wl1271_cmd_test(wl, radio_parms, sizeof(*radio_parms), 0);
+	if (ret < 0)
+		wl1271_warning("CMD_INI_FILE_RADIO_PARAM failed");
+
+	kfree(radio_parms);
+	return ret;
+}
+
+/*
+ * Poll the mailbox event field until any of the bits in the mask is set or a
+ * timeout occurs (WL1271_EVENT_TIMEOUT in msecs)
+ */
+static int wl1271_cmd_wait_for_event(struct wl1271 *wl, u32 mask)
+{
+	u32 events_vector, event;
+	unsigned long timeout;
+
+	timeout = jiffies + msecs_to_jiffies(WL1271_EVENT_TIMEOUT);
+
+	do {
+		if (time_after(jiffies, timeout))
+			return -ETIMEDOUT;
+
+		msleep(1);
+
+		/* read from both event fields */
+		wl1271_read(wl, wl->mbox_ptr[0], &events_vector,
+			    sizeof(events_vector), false);
+		event = events_vector & mask;
+		wl1271_read(wl, wl->mbox_ptr[1], &events_vector,
+			    sizeof(events_vector), false);
+		event |= events_vector & mask;
+	} while (!event);
+
+	return 0;
+}
+
+int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type)
 {
 	static bool do_cal = true;
-	unsigned long timeout;
 	struct wl1271_cmd_join *join;
 	int ret, i;
 	u8 *bssid;
@@ -192,7 +301,6 @@ int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type, u8 dtim_interval,
 		else
 			do_cal = false;
 	}
-
 
 	join = kzalloc(sizeof(*join), GFP_KERNEL);
 	if (!join) {
@@ -207,15 +315,17 @@ int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type, u8 dtim_interval,
 	for (i = 0; i < ETH_ALEN; i++)
 		bssid[i] = wl->bssid[ETH_ALEN - i - 1];
 
-	join->rx_config_options = wl->rx_config;
-	join->rx_filter_options = wl->rx_filter;
-
-	join->basic_rate_set = RATE_MASK_1MBPS | RATE_MASK_2MBPS |
-		RATE_MASK_5_5MBPS | RATE_MASK_11MBPS;
-
-	join->beacon_interval = beacon_interval;
-	join->dtim_interval = dtim_interval;
+	join->rx_config_options = cpu_to_le32(wl->rx_config);
+	join->rx_filter_options = cpu_to_le32(wl->rx_filter);
 	join->bss_type = bss_type;
+	join->basic_rate_set = cpu_to_le32(wl->basic_rate_set);
+
+	if (wl->band == IEEE80211_BAND_5GHZ)
+		join->bss_type |= WL1271_JOIN_CMD_BSS_TYPE_5GHZ;
+
+	join->beacon_interval = cpu_to_le16(wl->beacon_int);
+	join->dtim_interval = WL1271_DEFAULT_DTIM_PERIOD;
+
 	join->channel = wl->channel;
 	join->ssid_len = wl->ssid_len;
 	memcpy(join->ssid, wl->ssid, wl->ssid_len);
@@ -228,21 +338,19 @@ int wl1271_cmd_join(struct wl1271 *wl, u8 bss_type, u8 dtim_interval,
 
 	join->ctrl |= wl->session_counter << WL1271_JOIN_CMD_TX_SESSION_OFFSET;
 
+	/* reset TX security counters */
+	wl->tx_security_last_seq = 0;
+	wl->tx_security_seq = 0;
 
-	ret = wl1271_cmd_send(wl, CMD_START_JOIN, join, sizeof(*join));
+	ret = wl1271_cmd_send(wl, CMD_START_JOIN, join, sizeof(*join), 0);
 	if (ret < 0) {
 		wl1271_error("failed to initiate cmd join");
 		goto out_free;
 	}
 
-	timeout = msecs_to_jiffies(JOIN_TIMEOUT);
-
-	/*
-	 * ugly hack: we should wait for JOIN_EVENT_COMPLETE_ID but to
-	 * simplify locking we just sleep instead, for now
-	 */
-	if (wait)
-		msleep(10);
+	ret = wl1271_cmd_wait_for_event(wl, JOIN_EVENT_COMPLETE_ID);
+	if (ret < 0)
+		wl1271_error("cmd join event completion error");
 
 out_free:
 	kfree(join);
@@ -262,34 +370,21 @@ out:
 int wl1271_cmd_test(struct wl1271 *wl, void *buf, size_t buf_len, u8 answer)
 {
 	int ret;
+	size_t res_len = 0;
 
 	wl1271_debug(DEBUG_CMD, "cmd test");
 
-	ret = wl1271_cmd_send(wl, CMD_TEST, buf, buf_len);
+	if (answer)
+		res_len = buf_len;
+
+	ret = wl1271_cmd_send(wl, CMD_TEST, buf, buf_len, res_len);
 
 	if (ret < 0) {
 		wl1271_warning("TEST command failed");
 		return ret;
 	}
 
-	if (answer) {
-		struct wl1271_command *cmd_answer;
-
-		/*
-		 * The test command got in, we can read the answer.
-		 * The answer would be a wl1271_command, where the
-		 * parameter array contains the actual answer.
-		 */
-		wl1271_spi_mem_read(wl, wl->cmd_box_addr, buf, buf_len);
-
-		cmd_answer = buf;
-
-		if (cmd_answer->header.status != CMD_STATUS_SUCCESS)
-			wl1271_error("TEST command answer error: %d",
-				     cmd_answer->header.status);
-	}
-
-	return 0;
+	return ret;
 }
 
 /**
@@ -307,26 +402,15 @@ int wl1271_cmd_interrogate(struct wl1271 *wl, u16 id, void *buf, size_t len)
 
 	wl1271_debug(DEBUG_CMD, "cmd interrogate");
 
-	acx->id = id;
+	acx->id = cpu_to_le16(id);
 
 	/* payload length, does not include any headers */
-	acx->len = len - sizeof(*acx);
+	acx->len = cpu_to_le16(len - sizeof(*acx));
 
-	ret = wl1271_cmd_send(wl, CMD_INTERROGATE, acx, sizeof(*acx));
-	if (ret < 0) {
+	ret = wl1271_cmd_send(wl, CMD_INTERROGATE, acx, sizeof(*acx), len);
+	if (ret < 0)
 		wl1271_error("INTERROGATE command failed");
-		goto out;
-	}
 
-	/* the interrogate command got in, we can read the answer */
-	wl1271_spi_mem_read(wl, wl->cmd_box_addr, buf, len);
-
-	acx = buf;
-	if (acx->cmd.status != CMD_STATUS_SUCCESS)
-		wl1271_error("INTERROGATE command error: %d",
-			     acx->cmd.status);
-
-out:
 	return ret;
 }
 
@@ -345,12 +429,12 @@ int wl1271_cmd_configure(struct wl1271 *wl, u16 id, void *buf, size_t len)
 
 	wl1271_debug(DEBUG_CMD, "cmd configure");
 
-	acx->id = id;
+	acx->id = cpu_to_le16(id);
 
 	/* payload length, does not include any headers */
-	acx->len = len - sizeof(*acx);
+	acx->len = cpu_to_le16(len - sizeof(*acx));
 
-	ret = wl1271_cmd_send(wl, CMD_CONFIGURE, acx, len);
+	ret = wl1271_cmd_send(wl, CMD_CONFIGURE, acx, len, 0);
 	if (ret < 0) {
 		wl1271_warning("CONFIGURE command NOK");
 		return ret;
@@ -359,7 +443,7 @@ int wl1271_cmd_configure(struct wl1271 *wl, u16 id, void *buf, size_t len)
 	return 0;
 }
 
-int wl1271_cmd_data_path(struct wl1271 *wl, u8 channel, bool enable)
+int wl1271_cmd_data_path(struct wl1271 *wl, bool enable)
 {
 	struct cmd_enabledisable_path *cmd;
 	int ret;
@@ -373,7 +457,8 @@ int wl1271_cmd_data_path(struct wl1271 *wl, u8 channel, bool enable)
 		goto out;
 	}
 
-	cmd->channel = channel;
+	/* the channel here is only used for calibration, so hardcoded to 1 */
+	cmd->channel = 1;
 
 	if (enable) {
 		cmd_rx = CMD_ENABLE_RX;
@@ -383,39 +468,38 @@ int wl1271_cmd_data_path(struct wl1271 *wl, u8 channel, bool enable)
 		cmd_tx = CMD_DISABLE_TX;
 	}
 
-	ret = wl1271_cmd_send(wl, cmd_rx, cmd, sizeof(*cmd));
+	ret = wl1271_cmd_send(wl, cmd_rx, cmd, sizeof(*cmd), 0);
 	if (ret < 0) {
 		wl1271_error("rx %s cmd for channel %d failed",
-			     enable ? "start" : "stop", channel);
+			     enable ? "start" : "stop", cmd->channel);
 		goto out;
 	}
 
 	wl1271_debug(DEBUG_BOOT, "rx %s cmd channel %d",
-		     enable ? "start" : "stop", channel);
+		     enable ? "start" : "stop", cmd->channel);
 
-	ret = wl1271_cmd_send(wl, cmd_tx, cmd, sizeof(*cmd));
+	ret = wl1271_cmd_send(wl, cmd_tx, cmd, sizeof(*cmd), 0);
 	if (ret < 0) {
 		wl1271_error("tx %s cmd for channel %d failed",
-			     enable ? "start" : "stop", channel);
-		return ret;
+			     enable ? "start" : "stop", cmd->channel);
+		goto out;
 	}
 
 	wl1271_debug(DEBUG_BOOT, "tx %s cmd channel %d",
-		     enable ? "start" : "stop", channel);
+		     enable ? "start" : "stop", cmd->channel);
 
 out:
 	kfree(cmd);
 	return ret;
 }
 
-int wl1271_cmd_ps_mode(struct wl1271 *wl, u8 ps_mode)
+int wl1271_cmd_ps_mode(struct wl1271 *wl, u8 ps_mode, bool send)
 {
 	struct wl1271_cmd_ps_params *ps_params = NULL;
 	int ret = 0;
 
 	/* FIXME: this should be in ps.c */
-	ret = wl1271_acx_wake_up_conditions(wl, WAKE_UP_EVENT_DTIM_BITMAP,
-					    wl->listen_int);
+	ret = wl1271_acx_wake_up_conditions(wl);
 	if (ret < 0) {
 		wl1271_error("couldn't set wake up conditions");
 		goto out;
@@ -430,13 +514,13 @@ int wl1271_cmd_ps_mode(struct wl1271 *wl, u8 ps_mode)
 	}
 
 	ps_params->ps_mode = ps_mode;
-	ps_params->send_null_data = 1;
+	ps_params->send_null_data = send;
 	ps_params->retries = 5;
-	ps_params->hang_over_period = 128;
-	ps_params->null_data_rate = 1; /* 1 Mbps */
+	ps_params->hang_over_period = 1;
+	ps_params->null_data_rate = cpu_to_le32(1); /* 1 Mbps */
 
 	ret = wl1271_cmd_send(wl, CMD_SET_PS_MODE, ps_params,
-			      sizeof(*ps_params));
+			      sizeof(*ps_params), 0);
 	if (ret < 0) {
 		wl1271_error("cmd set_ps_mode failed");
 		goto out;
@@ -464,22 +548,17 @@ int wl1271_cmd_read_memory(struct wl1271 *wl, u32 addr, void *answer,
 	WARN_ON(len > MAX_READ_SIZE);
 	len = min_t(size_t, len, MAX_READ_SIZE);
 
-	cmd->addr = addr;
-	cmd->size = len;
+	cmd->addr = cpu_to_le32(addr);
+	cmd->size = cpu_to_le32(len);
 
-	ret = wl1271_cmd_send(wl, CMD_READ_MEMORY, cmd, sizeof(*cmd));
+	ret = wl1271_cmd_send(wl, CMD_READ_MEMORY, cmd, sizeof(*cmd),
+			      sizeof(*cmd));
 	if (ret < 0) {
 		wl1271_error("read memory command failed: %d", ret);
 		goto out;
 	}
 
-	/* the read command got in, we can now read the answer */
-	wl1271_spi_mem_read(wl, wl->cmd_box_addr, cmd, sizeof(*cmd));
-
-	if (cmd->header.status != CMD_STATUS_SUCCESS)
-		wl1271_error("error in read command result: %d",
-			     cmd->header.status);
-
+	/* the read command got in */
 	memcpy(answer, cmd->value, len);
 
 out:
@@ -487,17 +566,38 @@ out:
 	return ret;
 }
 
-int wl1271_cmd_scan(struct wl1271 *wl, u8 *ssid, size_t len,
-		    u8 active_scan, u8 high_prio, u8 num_channels,
-		    u8 probe_requests)
+int wl1271_cmd_scan(struct wl1271 *wl, const u8 *ssid, size_t ssid_len,
+		    const u8 *ie, size_t ie_len, u8 active_scan,
+		    u8 high_prio, u8 band, u8 probe_requests)
 {
 
 	struct wl1271_cmd_trigger_scan_to *trigger = NULL;
 	struct wl1271_cmd_scan *params = NULL;
-	int i, ret;
+	struct ieee80211_channel *channels;
+	u32 rate;
+	int i, j, n_ch, ret;
 	u16 scan_options = 0;
+	u8 ieee_band;
 
-	if (wl->scanning)
+	if (band == WL1271_SCAN_BAND_2_4_GHZ) {
+		ieee_band = IEEE80211_BAND_2GHZ;
+		rate = wl->conf.tx.basic_rate;
+	} else if (band == WL1271_SCAN_BAND_DUAL && wl1271_11a_enabled()) {
+		ieee_band = IEEE80211_BAND_2GHZ;
+		rate = wl->conf.tx.basic_rate;
+	} else if (band == WL1271_SCAN_BAND_5_GHZ && wl1271_11a_enabled()) {
+		ieee_band = IEEE80211_BAND_5GHZ;
+		rate = wl->conf.tx.basic_rate_5;
+	} else
+		return -EINVAL;
+
+	if (wl->hw->wiphy->bands[ieee_band]->channels == NULL)
+		return -EINVAL;
+
+	channels = wl->hw->wiphy->bands[ieee_band]->channels;
+	n_ch = wl->hw->wiphy->bands[ieee_band]->n_channels;
+
+	if (test_bit(WL1271_FLAG_SCANNING, &wl->flags))
 		return -EINVAL;
 
 	params = kzalloc(sizeof(*params), GFP_KERNEL);
@@ -512,32 +612,43 @@ int wl1271_cmd_scan(struct wl1271 *wl, u8 *ssid, size_t len,
 		scan_options |= WL1271_SCAN_OPT_PASSIVE;
 	if (high_prio)
 		scan_options |= WL1271_SCAN_OPT_PRIORITY_HIGH;
-	params->params.scan_options = scan_options;
+	params->params.scan_options = cpu_to_le16(scan_options);
 
-	params->params.num_channels = num_channels;
 	params->params.num_probe_requests = probe_requests;
-	params->params.tx_rate = cpu_to_le32(RATE_MASK_2MBPS);
+	params->params.tx_rate = cpu_to_le32(rate);
 	params->params.tid_trigger = 0;
 	params->params.scan_tag = WL1271_SCAN_DEFAULT_TAG;
 
-	for (i = 0; i < num_channels; i++) {
-		params->channels[i].min_duration =
-			cpu_to_le32(WL1271_SCAN_CHAN_MIN_DURATION);
-		params->channels[i].max_duration =
-			cpu_to_le32(WL1271_SCAN_CHAN_MAX_DURATION);
-		memset(&params->channels[i].bssid_lsb, 0xff, 4);
-		memset(&params->channels[i].bssid_msb, 0xff, 2);
-		params->channels[i].early_termination = 0;
-		params->channels[i].tx_power_att = WL1271_SCAN_CURRENT_TX_PWR;
-		params->channels[i].channel = i + 1;
+	if (band == WL1271_SCAN_BAND_DUAL)
+		params->params.band = WL1271_SCAN_BAND_2_4_GHZ;
+	else
+		params->params.band = band;
+
+	for (i = 0, j = 0; i < n_ch && i < WL1271_SCAN_MAX_CHANNELS; i++) {
+		if (!(channels[i].flags & IEEE80211_CHAN_DISABLED)) {
+			params->channels[j].min_duration =
+				cpu_to_le32(WL1271_SCAN_CHAN_MIN_DURATION);
+			params->channels[j].max_duration =
+				cpu_to_le32(WL1271_SCAN_CHAN_MAX_DURATION);
+			memset(&params->channels[j].bssid_lsb, 0xff, 4);
+			memset(&params->channels[j].bssid_msb, 0xff, 2);
+			params->channels[j].early_termination = 0;
+			params->channels[j].tx_power_att =
+				WL1271_SCAN_CURRENT_TX_PWR;
+			params->channels[j].channel = channels[i].hw_value;
+			j++;
+		}
 	}
 
-	if (len && ssid) {
-		params->params.ssid_len = len;
-		memcpy(params->params.ssid, ssid, len);
+	params->params.num_channels = j;
+
+	if (ssid_len && ssid) {
+		params->params.ssid_len = ssid_len;
+		memcpy(params->params.ssid, ssid, ssid_len);
 	}
 
-	ret = wl1271_cmd_build_probe_req(wl, ssid, len);
+	ret = wl1271_cmd_build_probe_req(wl, ssid, ssid_len,
+					 ie, ie_len, ieee_band);
 	if (ret < 0) {
 		wl1271_error("PROBE request template failed");
 		goto out;
@@ -553,7 +664,7 @@ int wl1271_cmd_scan(struct wl1271 *wl, u8 *ssid, size_t len,
 	trigger->timeout = 0;
 
 	ret = wl1271_cmd_send(wl, CMD_TRIGGER_SCAN_TO, trigger,
-			      sizeof(*trigger));
+			      sizeof(*trigger), 0);
 	if (ret < 0) {
 		wl1271_error("trigger scan to failed for hw scan");
 		goto out;
@@ -561,31 +672,36 @@ int wl1271_cmd_scan(struct wl1271 *wl, u8 *ssid, size_t len,
 
 	wl1271_dump(DEBUG_SCAN, "SCAN: ", params, sizeof(*params));
 
-	wl->scanning = true;
-
-	ret = wl1271_cmd_send(wl, CMD_SCAN, params, sizeof(*params));
-	if (ret < 0) {
-		wl1271_error("SCAN failed");
-		goto out;
+	set_bit(WL1271_FLAG_SCANNING, &wl->flags);
+	if (wl1271_11a_enabled()) {
+		wl->scan.state = band;
+		if (band == WL1271_SCAN_BAND_DUAL) {
+			wl->scan.active = active_scan;
+			wl->scan.high_prio = high_prio;
+			wl->scan.probe_requests = probe_requests;
+			if (ssid_len && ssid) {
+				wl->scan.ssid_len = ssid_len;
+				memcpy(wl->scan.ssid, ssid, ssid_len);
+			} else
+				wl->scan.ssid_len = 0;
+		}
 	}
 
-	wl1271_spi_mem_read(wl, wl->cmd_box_addr, params, sizeof(*params));
-
-	if (params->header.status != CMD_STATUS_SUCCESS) {
-		wl1271_error("Scan command error: %d",
-			     params->header.status);
-		wl->scanning = false;
-		ret = -EIO;
+	ret = wl1271_cmd_send(wl, CMD_SCAN, params, sizeof(*params), 0);
+	if (ret < 0) {
+		wl1271_error("SCAN failed");
+		clear_bit(WL1271_FLAG_SCANNING, &wl->flags);
 		goto out;
 	}
 
 out:
 	kfree(params);
+	kfree(trigger);
 	return ret;
 }
 
 int wl1271_cmd_template_set(struct wl1271 *wl, u16 template_id,
-			    void *buf, size_t buf_len)
+			    void *buf, size_t buf_len, int index, u32 rates)
 {
 	struct wl1271_cmd_template_set *cmd;
 	int ret = 0;
@@ -603,14 +719,15 @@ int wl1271_cmd_template_set(struct wl1271 *wl, u16 template_id,
 
 	cmd->len = cpu_to_le16(buf_len);
 	cmd->template_type = template_id;
-	cmd->enabled_rates = ACX_RATE_MASK_UNSPECIFIED;
-	cmd->short_retry_limit = ACX_RATE_RETRY_LIMIT;
-	cmd->long_retry_limit = ACX_RATE_RETRY_LIMIT;
+	cmd->enabled_rates = cpu_to_le32(rates);
+	cmd->short_retry_limit = wl->conf.tx.rc_conf.short_retry_limit;
+	cmd->long_retry_limit = wl->conf.tx.rc_conf.long_retry_limit;
+	cmd->index = index;
 
 	if (buf)
 		memcpy(cmd->template_data, buf, buf_len);
 
-	ret = wl1271_cmd_send(wl, CMD_SET_TEMPLATE, cmd, sizeof(*cmd));
+	ret = wl1271_cmd_send(wl, CMD_SET_TEMPLATE, cmd, sizeof(*cmd), 0);
 	if (ret < 0) {
 		wl1271_warning("cmd set_template failed: %d", ret);
 		goto out_free;
@@ -623,110 +740,127 @@ out:
 	return ret;
 }
 
-static int wl1271_build_basic_rates(char *rates)
-{
-	u8 index = 0;
-
-	rates[index++] = IEEE80211_BASIC_RATE_MASK | IEEE80211_CCK_RATE_1MB;
-	rates[index++] = IEEE80211_BASIC_RATE_MASK | IEEE80211_CCK_RATE_2MB;
-	rates[index++] = IEEE80211_BASIC_RATE_MASK | IEEE80211_CCK_RATE_5MB;
-	rates[index++] = IEEE80211_BASIC_RATE_MASK | IEEE80211_CCK_RATE_11MB;
-
-	return index;
-}
-
-static int wl1271_build_extended_rates(char *rates)
-{
-	u8 index = 0;
-
-	rates[index++] = IEEE80211_OFDM_RATE_6MB;
-	rates[index++] = IEEE80211_OFDM_RATE_9MB;
-	rates[index++] = IEEE80211_OFDM_RATE_12MB;
-	rates[index++] = IEEE80211_OFDM_RATE_18MB;
-	rates[index++] = IEEE80211_OFDM_RATE_24MB;
-	rates[index++] = IEEE80211_OFDM_RATE_36MB;
-	rates[index++] = IEEE80211_OFDM_RATE_48MB;
-	rates[index++] = IEEE80211_OFDM_RATE_54MB;
-
-	return index;
-}
-
 int wl1271_cmd_build_null_data(struct wl1271 *wl)
 {
-	struct wl12xx_null_data_template template;
+	struct sk_buff *skb = NULL;
+	int size;
+	void *ptr;
+	int ret = -ENOMEM;
 
-	if (!is_zero_ether_addr(wl->bssid)) {
-		memcpy(template.header.da, wl->bssid, ETH_ALEN);
-		memcpy(template.header.bssid, wl->bssid, ETH_ALEN);
+
+	if (wl->bss_type == BSS_TYPE_IBSS) {
+		size = sizeof(struct wl12xx_null_data_template);
+		ptr = NULL;
 	} else {
-		memset(template.header.da, 0xff, ETH_ALEN);
-		memset(template.header.bssid, 0xff, ETH_ALEN);
+		skb = ieee80211_nullfunc_get(wl->hw, wl->vif);
+		if (!skb)
+			goto out;
+		size = skb->len;
+		ptr = skb->data;
 	}
 
-	memcpy(template.header.sa, wl->mac_addr, ETH_ALEN);
-	template.header.frame_ctl = cpu_to_le16(IEEE80211_FTYPE_DATA |
-						IEEE80211_STYPE_NULLFUNC);
+	ret = wl1271_cmd_template_set(wl, CMD_TEMPL_NULL_DATA, ptr, size, 0,
+				      WL1271_RATE_AUTOMATIC);
 
-	return wl1271_cmd_template_set(wl, CMD_TEMPL_NULL_DATA, &template,
-				       sizeof(template));
+out:
+	dev_kfree_skb(skb);
+	if (ret)
+		wl1271_warning("cmd buld null data failed %d", ret);
+
+	return ret;
+
+}
+
+int wl1271_cmd_build_klv_null_data(struct wl1271 *wl)
+{
+	struct sk_buff *skb = NULL;
+	int ret = -ENOMEM;
+
+	skb = ieee80211_nullfunc_get(wl->hw, wl->vif);
+	if (!skb)
+		goto out;
+
+	ret = wl1271_cmd_template_set(wl, CMD_TEMPL_KLV,
+				      skb->data, skb->len,
+				      CMD_TEMPL_KLV_IDX_NULL_DATA,
+				      WL1271_RATE_AUTOMATIC);
+
+out:
+	dev_kfree_skb(skb);
+	if (ret)
+		wl1271_warning("cmd build klv null data failed %d", ret);
+
+	return ret;
 
 }
 
 int wl1271_cmd_build_ps_poll(struct wl1271 *wl, u16 aid)
 {
-	struct wl12xx_ps_poll_template template;
+	struct sk_buff *skb;
+	int ret = 0;
 
-	memcpy(template.bssid, wl->bssid, ETH_ALEN);
-	memcpy(template.ta, wl->mac_addr, ETH_ALEN);
-	template.aid = aid;
-	template.fc = cpu_to_le16(IEEE80211_FTYPE_CTL | IEEE80211_STYPE_PSPOLL);
+	skb = ieee80211_pspoll_get(wl->hw, wl->vif);
+	if (!skb)
+		goto out;
 
-	return wl1271_cmd_template_set(wl, CMD_TEMPL_PS_POLL, &template,
-				       sizeof(template));
+	ret = wl1271_cmd_template_set(wl, CMD_TEMPL_PS_POLL, skb->data,
+				      skb->len, 0, wl->basic_rate);
 
+out:
+	dev_kfree_skb(skb);
+	return ret;
 }
 
-int wl1271_cmd_build_probe_req(struct wl1271 *wl, u8 *ssid, size_t ssid_len)
+int wl1271_cmd_build_probe_req(struct wl1271 *wl,
+			       const u8 *ssid, size_t ssid_len,
+			       const u8 *ie, size_t ie_len, u8 band)
 {
-	struct wl12xx_probe_req_template template;
-	struct wl12xx_ie_rates *rates;
-	char *ptr;
-	u16 size;
+	struct sk_buff *skb;
+	int ret;
 
-	ptr = (char *)&template;
-	size = sizeof(struct ieee80211_header);
+	skb = ieee80211_probereq_get(wl->hw, wl->vif, ssid, ssid_len,
+				     ie, ie_len);
+	if (!skb) {
+		ret = -ENOMEM;
+		goto out;
+	}
 
-	memset(template.header.da, 0xff, ETH_ALEN);
-	memset(template.header.bssid, 0xff, ETH_ALEN);
-	memcpy(template.header.sa, wl->mac_addr, ETH_ALEN);
-	template.header.frame_ctl = cpu_to_le16(IEEE80211_STYPE_PROBE_REQ);
+	wl1271_dump(DEBUG_SCAN, "PROBE REQ: ", skb->data, skb->len);
 
-	/* IEs */
-	/* SSID */
-	template.ssid.header.id = WLAN_EID_SSID;
-	template.ssid.header.len = ssid_len;
-	if (ssid_len && ssid)
-		memcpy(template.ssid.ssid, ssid, ssid_len);
-	size += sizeof(struct wl12xx_ie_header) + ssid_len;
-	ptr += size;
+	if (band == IEEE80211_BAND_2GHZ)
+		ret = wl1271_cmd_template_set(wl, CMD_TEMPL_CFG_PROBE_REQ_2_4,
+					      skb->data, skb->len, 0,
+					      wl->conf.tx.basic_rate);
+	else
+		ret = wl1271_cmd_template_set(wl, CMD_TEMPL_CFG_PROBE_REQ_5,
+					      skb->data, skb->len, 0,
+					      wl->conf.tx.basic_rate_5);
 
-	/* Basic Rates */
-	rates = (struct wl12xx_ie_rates *)ptr;
-	rates->header.id = WLAN_EID_SUPP_RATES;
-	rates->header.len = wl1271_build_basic_rates(rates->rates);
-	size += sizeof(struct wl12xx_ie_header) + rates->header.len;
-	ptr += sizeof(struct wl12xx_ie_header) + rates->header.len;
+out:
+	dev_kfree_skb(skb);
+	return ret;
+}
 
-	/* Extended rates */
-	rates = (struct wl12xx_ie_rates *)ptr;
-	rates->header.id = WLAN_EID_EXT_SUPP_RATES;
-	rates->header.len = wl1271_build_extended_rates(rates->rates);
-	size += sizeof(struct wl12xx_ie_header) + rates->header.len;
+int wl1271_build_qos_null_data(struct wl1271 *wl)
+{
+	struct ieee80211_qos_hdr template;
 
-	wl1271_dump(DEBUG_SCAN, "PROBE REQ: ", &template, size);
+	memset(&template, 0, sizeof(template));
 
-	return wl1271_cmd_template_set(wl, CMD_TEMPL_CFG_PROBE_REQ_2_4,
-				       &template, size);
+	memcpy(template.addr1, wl->bssid, ETH_ALEN);
+	memcpy(template.addr2, wl->mac_addr, ETH_ALEN);
+	memcpy(template.addr3, wl->bssid, ETH_ALEN);
+
+	template.frame_control = cpu_to_le16(IEEE80211_FTYPE_DATA |
+					     IEEE80211_STYPE_QOS_NULLFUNC |
+					     IEEE80211_FCTL_TODS);
+
+	/* FIXME: not sure what priority to use here */
+	template.qos_ctrl = cpu_to_le16(0);
+
+	return wl1271_cmd_template_set(wl, CMD_TEMPL_QOS_NULL_DATA, &template,
+				       sizeof(template), 0,
+				       WL1271_RATE_AUTOMATIC);
 }
 
 int wl1271_cmd_set_default_wep_key(struct wl1271 *wl, u8 id)
@@ -743,10 +877,10 @@ int wl1271_cmd_set_default_wep_key(struct wl1271 *wl, u8 id)
 	}
 
 	cmd->id = id;
-	cmd->key_action = KEY_SET_ID;
+	cmd->key_action = cpu_to_le16(KEY_SET_ID);
 	cmd->key_type = KEY_WEP;
 
-	ret = wl1271_cmd_send(wl, CMD_SET_KEYS, cmd, sizeof(*cmd));
+	ret = wl1271_cmd_send(wl, CMD_SET_KEYS, cmd, sizeof(*cmd), 0);
 	if (ret < 0) {
 		wl1271_warning("cmd set_default_wep_key failed: %d", ret);
 		goto out;
@@ -759,7 +893,8 @@ out:
 }
 
 int wl1271_cmd_set_key(struct wl1271 *wl, u16 action, u8 id, u8 key_type,
-		       u8 key_size, const u8 *key, const u8 *addr)
+		       u8 key_size, const u8 *key, const u8 *addr,
+		       u32 tx_seq_32, u16 tx_seq_16)
 {
 	struct wl1271_cmd_set_keys *cmd;
 	int ret = 0;
@@ -773,16 +908,18 @@ int wl1271_cmd_set_key(struct wl1271 *wl, u16 action, u8 id, u8 key_type,
 	if (key_type != KEY_WEP)
 		memcpy(cmd->addr, addr, ETH_ALEN);
 
-	cmd->key_action = action;
+	cmd->key_action = cpu_to_le16(action);
 	cmd->key_size = key_size;
 	cmd->key_type = key_type;
+
+	cmd->ac_seq_num16[0] = cpu_to_le16(tx_seq_16);
+	cmd->ac_seq_num32[0] = cpu_to_le32(tx_seq_32);
 
 	/* we have only one SSID profile */
 	cmd->ssid_profile = 0;
 
 	cmd->id = id;
 
-	/* FIXME: this is from wl1251, needs to be checked */
 	if (key_type == KEY_TKIP) {
 		/*
 		 * We get the key in the following form:
@@ -800,14 +937,49 @@ int wl1271_cmd_set_key(struct wl1271 *wl, u16 action, u8 id, u8 key_type,
 
 	wl1271_dump(DEBUG_CRYPT, "TARGET KEY: ", cmd, sizeof(*cmd));
 
-	ret = wl1271_cmd_send(wl, CMD_SET_KEYS, cmd, sizeof(*cmd));
+	ret = wl1271_cmd_send(wl, CMD_SET_KEYS, cmd, sizeof(*cmd), 0);
 	if (ret < 0) {
 		wl1271_warning("could not set keys");
-		goto out;
+	goto out;
 	}
 
 out:
 	kfree(cmd);
 
+	return ret;
+}
+
+int wl1271_cmd_disconnect(struct wl1271 *wl)
+{
+	struct wl1271_cmd_disconnect *cmd;
+	int ret = 0;
+
+	wl1271_debug(DEBUG_CMD, "cmd disconnect");
+
+	cmd = kzalloc(sizeof(*cmd), GFP_KERNEL);
+	if (!cmd) {
+		ret = -ENOMEM;
+		goto out;
+	}
+
+	cmd->rx_config_options = cpu_to_le32(wl->rx_config);
+	cmd->rx_filter_options = cpu_to_le32(wl->rx_filter);
+	/* disconnect reason is not used in immediate disconnections */
+	cmd->type = DISCONNECT_IMMEDIATE;
+
+	ret = wl1271_cmd_send(wl, CMD_DISCONNECT, cmd, sizeof(*cmd), 0);
+	if (ret < 0) {
+		wl1271_error("failed to send disconnect command");
+		goto out_free;
+	}
+
+	ret = wl1271_cmd_wait_for_event(wl, DISCONNECT_EVENT_COMPLETE_ID);
+	if (ret < 0)
+		wl1271_error("cmd disconnect event completion error");
+
+out_free:
+	kfree(cmd);
+
+out:
 	return ret;
 }

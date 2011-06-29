@@ -24,9 +24,11 @@
  */
 
 #include <linux/module.h>
+#include <linux/dmi.h>
 #include <linux/input.h>
 #include <linux/serio.h>
 #include <linux/libps2.h>
+#include <linux/slab.h>
 #include "psmouse.h"
 #include "synaptics.h"
 
@@ -34,6 +36,8 @@
  * The x/y limits are taken from the Synaptics TouchPad interfacing Guide,
  * section 2.3.2, which says that they should be valid regardless of the
  * actual size of the sensor.
+ * Note that newer firmware allows querying device for maximum useable
+ * coordinates.
  */
 #define XMIN_NOMINAL 1472
 #define XMAX_NOMINAL 5472
@@ -137,8 +141,13 @@ static int synaptics_capability(struct psmouse *psmouse)
 	priv->capabilities = (cap[0] << 16) | (cap[1] << 8) | cap[2];
 	priv->ext_cap = priv->ext_cap_0c = 0;
 
-	if (!SYN_CAP_VALID(priv->capabilities))
+	/*
+	 * Older firmwares had submodel ID fixed to 0x47
+	 */
+	if (SYN_ID_FULL(priv->identity) < 0x705 &&
+	    SYN_CAP_SUBMODEL_ID(priv->capabilities) != 0x47) {
 		return -1;
+	}
 
 	/*
 	 * Unless capExtended is set the rest of the flags should be ignored
@@ -192,23 +201,34 @@ static int synaptics_identify(struct psmouse *psmouse)
 }
 
 /*
- * Read touchpad resolution
+ * Read touchpad resolution and maximum reported coordinates
  * Resolution is left zero if touchpad does not support the query
  */
 static int synaptics_resolution(struct psmouse *psmouse)
 {
 	struct synaptics_data *priv = psmouse->private;
 	unsigned char res[3];
+	unsigned char max[3];
 
 	if (SYN_ID_MAJOR(priv->identity) < 4)
 		return 0;
 
-	if (synaptics_send_cmd(psmouse, SYN_QUE_RESOLUTION, res))
-		return 0;
+	if (synaptics_send_cmd(psmouse, SYN_QUE_RESOLUTION, res) == 0) {
+		if (res[0] != 0 && (res[1] & 0x80) && res[2] != 0) {
+			priv->x_res = res[0]; /* x resolution in units/mm */
+			priv->y_res = res[2]; /* y resolution in units/mm */
+		}
+	}
 
-	if ((res[0] != 0) && (res[1] & 0x80) && (res[2] != 0)) {
-		priv->x_res = res[0]; /* x resolution in units/mm */
-		priv->y_res = res[2]; /* y resolution in units/mm */
+	if (SYN_EXT_CAP_REQUESTS(priv->capabilities) >= 5 &&
+	    SYN_CAP_MAX_DIMENSIONS(priv->ext_cap_0c)) {
+		if (synaptics_send_cmd(psmouse, SYN_QUE_EXT_DIMENSIONS, max)) {
+			printk(KERN_ERR "Synaptics claims to have dimensions query,"
+			       " but I'm not able to read it.\n");
+		} else {
+			priv->x_max = (max[0] << 5) | ((max[1] & 0x0f) << 1);
+			priv->y_max = (max[2] << 5) | ((max[1] & 0xf0) >> 3);
+		}
 	}
 
 	return 0;
@@ -518,19 +538,20 @@ static int synaptics_validate_byte(unsigned char packet[], int idx, unsigned cha
 		return 0;
 
 	switch (pkt_type) {
-		case SYN_NEWABS:
-		case SYN_NEWABS_RELAXED:
-			return (packet[idx] & newabs_rel_mask[idx]) == newabs_rslt[idx];
 
-		case SYN_NEWABS_STRICT:
-			return (packet[idx] & newabs_mask[idx]) == newabs_rslt[idx];
+	case SYN_NEWABS:
+	case SYN_NEWABS_RELAXED:
+		return (packet[idx] & newabs_rel_mask[idx]) == newabs_rslt[idx];
 
-		case SYN_OLDABS:
-			return (packet[idx] & oldabs_mask[idx]) == oldabs_rslt[idx];
+	case SYN_NEWABS_STRICT:
+		return (packet[idx] & newabs_mask[idx]) == newabs_rslt[idx];
 
-		default:
-			printk(KERN_ERR "synaptics: unknown packet type %d\n", pkt_type);
-			return 0;
+	case SYN_OLDABS:
+		return (packet[idx] & oldabs_mask[idx]) == oldabs_rslt[idx];
+
+	default:
+		printk(KERN_ERR "synaptics: unknown packet type %d\n", pkt_type);
+		return 0;
 	}
 }
 
@@ -576,8 +597,10 @@ static void set_input_params(struct input_dev *dev, struct synaptics_data *priv)
 	int i;
 
 	__set_bit(EV_ABS, dev->evbit);
-	input_set_abs_params(dev, ABS_X, XMIN_NOMINAL, XMAX_NOMINAL, 0, 0);
-	input_set_abs_params(dev, ABS_Y, YMIN_NOMINAL, YMAX_NOMINAL, 0, 0);
+	input_set_abs_params(dev, ABS_X,
+			     XMIN_NOMINAL, priv->x_max ?: XMAX_NOMINAL, 0, 0);
+	input_set_abs_params(dev, ABS_Y,
+			     YMIN_NOMINAL, priv->y_max ?: YMAX_NOMINAL, 0, 0);
 	input_set_abs_params(dev, ABS_PRESSURE, 0, 255, 0, 0);
 	__set_bit(ABS_TOOL_WIDTH, dev->absbit);
 
@@ -654,25 +677,26 @@ static int synaptics_reconnect(struct psmouse *psmouse)
 	return 0;
 }
 
-#if defined(__i386__)
-#include <linux/dmi.h>
-static const struct dmi_system_id toshiba_dmi_table[] = {
+static bool impaired_toshiba_kbc;
+
+static const struct dmi_system_id __initconst toshiba_dmi_table[] = {
+#if defined(CONFIG_DMI) && defined(CONFIG_X86)
 	{
-		.ident = "Toshiba Satellite",
+		/* Toshiba Satellite */
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "TOSHIBA"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Satellite"),
 		},
 	},
 	{
-		.ident = "Toshiba Dynabook",
+		/* Toshiba Dynabook */
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "TOSHIBA"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "dynabook"),
 		},
 	},
 	{
-		.ident = "Toshiba Portege M300",
+		/* Toshiba Portege M300 */
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "TOSHIBA"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "PORTEGE M300"),
@@ -680,7 +704,7 @@ static const struct dmi_system_id toshiba_dmi_table[] = {
 
 	},
 	{
-		.ident = "Toshiba Portege M300",
+		/* Toshiba Portege M300 */
 		.matches = {
 			DMI_MATCH(DMI_SYS_VENDOR, "TOSHIBA"),
 			DMI_MATCH(DMI_PRODUCT_NAME, "Portable PC"),
@@ -689,8 +713,13 @@ static const struct dmi_system_id toshiba_dmi_table[] = {
 
 	},
 	{ }
-};
 #endif
+};
+
+void __init synaptics_module_init(void)
+{
+	impaired_toshiba_kbc = dmi_check_system(toshiba_dmi_table);
+}
 
 int synaptics_init(struct psmouse *psmouse)
 {
@@ -743,18 +772,16 @@ int synaptics_init(struct psmouse *psmouse)
 	if (SYN_CAP_PASS_THROUGH(priv->capabilities))
 		synaptics_pt_create(psmouse);
 
-#if defined(__i386__)
 	/*
 	 * Toshiba's KBC seems to have trouble handling data from
 	 * Synaptics as full rate, switch to lower rate which is roughly
 	 * thye same as rate of standard PS/2 mouse.
 	 */
-	if (psmouse->rate >= 80 && dmi_check_system(toshiba_dmi_table)) {
+	if (psmouse->rate >= 80 && impaired_toshiba_kbc) {
 		printk(KERN_INFO "synaptics: Toshiba %s detected, limiting rate to 40pps.\n",
 			dmi_get_system_info(DMI_PRODUCT_NAME));
 		psmouse->rate = 40;
 	}
-#endif
 
 	return 0;
 
@@ -763,11 +790,25 @@ int synaptics_init(struct psmouse *psmouse)
 	return -1;
 }
 
+bool synaptics_supported(void)
+{
+	return true;
+}
+
 #else /* CONFIG_MOUSE_PS2_SYNAPTICS */
+
+void __init synaptics_module_init(void)
+{
+}
 
 int synaptics_init(struct psmouse *psmouse)
 {
 	return -ENOSYS;
+}
+
+bool synaptics_supported(void)
+{
+	return false;
 }
 
 #endif /* CONFIG_MOUSE_PS2_SYNAPTICS */

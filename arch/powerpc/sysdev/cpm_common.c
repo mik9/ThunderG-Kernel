@@ -21,6 +21,7 @@
 #include <linux/of_device.h>
 #include <linux/spinlock.h>
 #include <linux/of.h>
+#include <linux/slab.h>
 
 #include <asm/udbg.h>
 #include <asm/io.h>
@@ -72,7 +73,7 @@ static phys_addr_t muram_pbase;
 /* Max address size we deal with */
 #define OF_MAX_ADDR_CELLS	4
 
-int __init cpm_muram_init(void)
+int cpm_muram_init(void)
 {
 	struct device_node *np;
 	struct resource r;
@@ -80,6 +81,9 @@ int __init cpm_muram_init(void)
 	resource_size_t max = 0;
 	int i = 0;
 	int ret = 0;
+
+	if (muram_pbase)
+		return 0;
 
 	spin_lock_init(&cpm_muram_lock);
 	/* initialize the info header */

@@ -1151,8 +1151,8 @@ static void __init mahimahi_fixup(struct machine_desc *desc, struct tag *tags,
 
 static void __init mahimahi_map_io(void)
 {
-	msm_map_common_io();
-	msm_clock_init();
+	msm_map_qsd8x50_io();
+	msm_clock_init(msm_clocks_8x50, msm_num_clocks_8x50);
 }
 
 extern struct sys_timer msm_timer;

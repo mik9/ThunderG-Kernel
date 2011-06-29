@@ -74,6 +74,7 @@
 #include <linux/netdevice.h>
 #include <linux/string.h>
 #include <linux/netfilter_ipv4.h>
+#include <linux/slab.h>
 #include <net/snmp.h>
 #include <net/ip.h>
 #include <net/route.h>
@@ -114,7 +115,7 @@ struct icmp_bxm {
 /* An array of errno for error messages from dest unreach. */
 /* RFC 1122: 3.2.2.1 States that NET_UNREACH, HOST_UNREACH and SR_FAILED MUST be considered 'transient errs'. */
 
-struct icmp_err icmp_err_convert[] = {
+const struct icmp_err icmp_err_convert[] = {
 	{
 		.errno = ENETUNREACH,	/* ICMP_NET_UNREACH */
 		.fatal = 0,
@@ -330,9 +331,10 @@ static void icmp_push_reply(struct icmp_bxm *icmp_param,
 	if (ip_append_data(sk, icmp_glue_bits, icmp_param,
 			   icmp_param->data_len+icmp_param->head_len,
 			   icmp_param->head_len,
-			   ipc, rt, MSG_DONTWAIT) < 0)
+			   ipc, rt, MSG_DONTWAIT) < 0) {
+		ICMP_INC_STATS_BH(sock_net(sk), ICMP_MIB_OUTERRORS);
 		ip_flush_pending_frames(sk);
-	else if ((skb = skb_peek(&sk->sk_write_queue)) != NULL) {
+	} else if ((skb = skb_peek(&sk->sk_write_queue)) != NULL) {
 		struct icmphdr *icmph = icmp_hdr(skb);
 		__wsum csum = 0;
 		struct sk_buff *skb1;
@@ -501,15 +503,16 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 	if (!(rt->rt_flags & RTCF_LOCAL)) {
 		struct net_device *dev = NULL;
 
+		rcu_read_lock();
 		if (rt->fl.iif &&
 			net->ipv4.sysctl_icmp_errors_use_inbound_ifaddr)
-			dev = dev_get_by_index(net, rt->fl.iif);
+			dev = dev_get_by_index_rcu(net, rt->fl.iif);
 
-		if (dev) {
+		if (dev)
 			saddr = inet_select_addr(dev, 0, RT_SCOPE_LINK);
-			dev_put(dev);
-		} else
+		else
 			saddr = 0;
+		rcu_read_unlock();
 	}
 
 	tos = icmp_pointers[type].error ? ((iph->tos & IPTOS_TOS_MASK) |
@@ -584,20 +587,20 @@ void icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 			err = __ip_route_output_key(net, &rt2, &fl);
 		else {
 			struct flowi fl2 = {};
-			struct dst_entry *odst;
+			unsigned long orefdst;
 
 			fl2.fl4_dst = fl.fl4_src;
 			if (ip_route_output_key(net, &rt2, &fl2))
 				goto relookup_failed;
 
 			/* Ugh! */
-			odst = skb_dst(skb_in);
+			orefdst = skb_in->_skb_refdst; /* save old refdst */
 			err = ip_route_input(skb_in, fl.fl4_dst, fl.fl4_src,
 					     RT_TOS(tos), rt2->u.dst.dev);
 
 			dst_release(&rt2->u.dst);
 			rt2 = skb_rtable(skb_in);
-			skb_dst_set(skb_in, odst);
+			skb_in->_skb_refdst = orefdst; /* restore old refdst */
 		}
 
 		if (err)
@@ -1165,6 +1168,10 @@ static int __net_init icmp_sk_init(struct net *net)
 		sk->sk_sndbuf =
 			(2 * ((64 * 1024) + sizeof(struct sk_buff)));
 
+		/*
+		 * Speedup sock_wfree()
+		 */
+		sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
 		inet_sk(sk)->pmtudisc = IP_PMTUDISC_DONT;
 	}
 

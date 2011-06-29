@@ -34,7 +34,6 @@
  * Function Prototypes
  */
 static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *);
-static void cp210x_cleanup(struct usb_serial_port *);
 static void cp210x_close(struct usb_serial_port *);
 static void cp210x_get_termios(struct tty_struct *,
 	struct usb_serial_port *port);
@@ -49,12 +48,12 @@ static int cp210x_tiocmset_port(struct usb_serial_port *port, struct file *,
 		unsigned int, unsigned int);
 static void cp210x_break_ctl(struct tty_struct *, int);
 static int cp210x_startup(struct usb_serial *);
-static void cp210x_disconnect(struct usb_serial *);
 static void cp210x_dtr_rts(struct usb_serial_port *p, int on);
+static int cp210x_carrier_raised(struct usb_serial_port *p);
 
 static int debug;
 
-static struct usb_device_id id_table [] = {
+static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(0x045B, 0x0053) }, /* Renesas RX610 RX-Stick */
 	{ USB_DEVICE(0x0471, 0x066A) }, /* AKTAKOM ACE-1001 cable */
 	{ USB_DEVICE(0x0489, 0xE000) }, /* Pirelli Broadband S.p.A, DP-L10 SIP/GSM Mobile */
@@ -87,6 +86,7 @@ static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(0x10C4, 0x8115) }, /* Arygon NFC/Mifare Reader */
 	{ USB_DEVICE(0x10C4, 0x813D) }, /* Burnside Telecom Deskmobile */
 	{ USB_DEVICE(0x10C4, 0x813F) }, /* Tams Master Easy Control */
+	{ USB_DEVICE(0x10C4, 0x8149) }, /* West Mountain Radio Computerized Battery Analyzer */
 	{ USB_DEVICE(0x10C4, 0x814A) }, /* West Mountain Radio RIGblaster P&P */
 	{ USB_DEVICE(0x10C4, 0x814B) }, /* West Mountain Radio RIGtalk */
 	{ USB_DEVICE(0x10C4, 0x8156) }, /* B&G H3000 link cable */
@@ -109,15 +109,9 @@ static struct usb_device_id id_table [] = {
 	{ USB_DEVICE(0x10C4, 0x8341) }, /* Siemens MC35PU GPRS Modem */
 	{ USB_DEVICE(0x10C4, 0x8382) }, /* Cygnal Integrated Products, Inc. */
 	{ USB_DEVICE(0x10C4, 0x83A8) }, /* Amber Wireless AMB2560 */
-	{ USB_DEVICE(0x10C4, 0x83D8) }, /* DekTec DTA Plus VHF/UHF Booster/Attenuator */
 	{ USB_DEVICE(0x10C4, 0x8411) }, /* Kyocera GPS Module */
-	{ USB_DEVICE(0x10C4, 0x8418) }, /* IRZ Automation Teleport SG-10 GSM/GPRS Modem */
 	{ USB_DEVICE(0x10C4, 0x846E) }, /* BEI USB Sensor Interface (VCP) */
 	{ USB_DEVICE(0x10C4, 0x8477) }, /* Balluff RFID */
-	{ USB_DEVICE(0x10C4, 0x85EA) }, /* AC-Services IBUS-IF */
-	{ USB_DEVICE(0x10C4, 0x85EB) }, /* AC-Services CIS-IBUS */
-	{ USB_DEVICE(0x10C4, 0x8664) }, /* AC-Services CAN-IF */
-	{ USB_DEVICE(0x10C4, 0x8665) }, /* AC-Services OBD-IF */
 	{ USB_DEVICE(0x10C4, 0xEA60) }, /* Silicon Labs factory default */
 	{ USB_DEVICE(0x10C4, 0xEA61) }, /* Silicon Labs factory default */
 	{ USB_DEVICE(0x10C4, 0xEA71) }, /* Infinity GPS-MIC-1 Radio Monophone */
@@ -161,6 +155,8 @@ static struct usb_serial_driver cp210x_device = {
 	.usb_driver		= &cp210x_driver,
 	.id_table		= id_table,
 	.num_ports		= 1,
+	.bulk_in_size		= 256,
+	.bulk_out_size		= 256,
 	.open			= cp210x_open,
 	.close			= cp210x_close,
 	.break_ctl		= cp210x_break_ctl,
@@ -168,8 +164,8 @@ static struct usb_serial_driver cp210x_device = {
 	.tiocmget 		= cp210x_tiocmget,
 	.tiocmset		= cp210x_tiocmset,
 	.attach			= cp210x_startup,
-	.disconnect		= cp210x_disconnect,
-	.dtr_rts		= cp210x_dtr_rts
+	.dtr_rts		= cp210x_dtr_rts,
+	.carrier_raised		= cp210x_carrier_raised
 };
 
 /* Config request types */
@@ -335,11 +331,6 @@ static int cp210x_set_config(struct usb_serial_port *port, u8 request,
 		return -EPROTO;
 	}
 
-	/* Single data value */
-	result = usb_control_msg(serial->dev,
-			usb_sndctrlpipe(serial->dev, 0),
-			request, REQTYPE_HOST_TO_DEVICE, data[0],
-			0, NULL, 0, 300);
 	return 0;
 }
 
@@ -397,7 +388,6 @@ static unsigned int cp210x_quantise_baudrate(unsigned int baud) {
 
 static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
-	struct usb_serial *serial = port->serial;
 	int result;
 
 	dbg("%s - port %d", __func__, port->number);
@@ -408,49 +398,20 @@ static int cp210x_open(struct tty_struct *tty, struct usb_serial_port *port)
 		return -EPROTO;
 	}
 
-	/* Start reading from the device */
-	usb_fill_bulk_urb(port->read_urb, serial->dev,
-			usb_rcvbulkpipe(serial->dev,
-			port->bulk_in_endpointAddress),
-			port->read_urb->transfer_buffer,
-			port->read_urb->transfer_buffer_length,
-			serial->type->read_bulk_callback,
-			port);
-	result = usb_submit_urb(port->read_urb, GFP_KERNEL);
-	if (result) {
-		dev_err(&port->dev, "%s - failed resubmitting read urb, "
-				"error %d\n", __func__, result);
+	result = usb_serial_generic_open(tty, port);
+	if (result)
 		return result;
-	}
 
 	/* Configure the termios structure */
 	cp210x_get_termios(tty, port);
 	return 0;
 }
 
-static void cp210x_cleanup(struct usb_serial_port *port)
-{
-	struct usb_serial *serial = port->serial;
-
-	dbg("%s - port %d", __func__, port->number);
-
-	if (serial->dev) {
-		/* shutdown any bulk reads that might be going on */
-		if (serial->num_bulk_out)
-			usb_kill_urb(port->write_urb);
-		if (serial->num_bulk_in)
-			usb_kill_urb(port->read_urb);
-	}
-}
-
 static void cp210x_close(struct usb_serial_port *port)
 {
 	dbg("%s - port %d", __func__, port->number);
 
-	/* shutdown our urbs */
-	dbg("%s - shutting down urbs", __func__);
-	usb_kill_urb(port->write_urb);
-	usb_kill_urb(port->read_urb);
+	usb_serial_generic_close(port);
 
 	mutex_lock(&port->serial->disc_mutex);
 	if (!port->serial->disconnected)
@@ -635,7 +596,7 @@ static void cp210x_set_termios(struct tty_struct *tty,
 				baud);
 		if (cp210x_set_config_single(port, CP210X_SET_BAUDDIV,
 					((BAUD_RATE_GEN_FREQ + baud/2) / baud))) {
-			dbg("Baud rate requested not supported by device\n");
+			dbg("Baud rate requested not supported by device");
 			baud = tty_termios_baud_rate(old_termios);
 		}
 	}
@@ -803,6 +764,15 @@ static int cp210x_tiocmget (struct tty_struct *tty, struct file *file)
 	return result;
 }
 
+static int cp210x_carrier_raised(struct usb_serial_port *p)
+{
+	unsigned int control;
+	cp210x_get_config(p, CP210X_GET_MDMSTS, &control, 1);
+	if (control & CONTROL_DCD)
+		return 1;
+	return 0;
+}
+
 static void cp210x_break_ctl (struct tty_struct *tty, int break_state)
 {
 	struct usb_serial_port *port = tty->driver_data;
@@ -823,17 +793,6 @@ static int cp210x_startup(struct usb_serial *serial)
 	/* cp210x buffers behave strangely unless device is reset */
 	usb_reset_device(serial->dev);
 	return 0;
-}
-
-static void cp210x_disconnect(struct usb_serial *serial)
-{
-	int i;
-
-	dbg("%s", __func__);
-
-	/* Stop reads and writes on all ports */
-	for (i = 0; i < serial->num_ports; ++i)
-		cp210x_cleanup(serial->port[i]);
 }
 
 static int __init cp210x_init(void)

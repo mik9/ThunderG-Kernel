@@ -21,6 +21,7 @@
 #include <linux/mtd/mtd.h>
 #include <linux/sched.h>
 
+#include <linux/slab.h>
 //#if defined(CONFIG_MACH_MSM7X27_THUNDERC)
 #if 1
 #define MISC_PART_NUM 6
@@ -116,7 +117,7 @@ static int test_write_block(const char *val, struct kernel_param *kp)
 
 	test_init();
 	test_erase_block();
-	printk(KERN_INFO"%s: writing block: flag = %d\n", __func__,flag);
+	printk(KERN_INFO"%s: writing block: flag = %ld\n", __func__,flag);
 
 	for (i = 0; i < ebcnt; ++i) {
 		if (bbt[i])
@@ -137,7 +138,6 @@ static int test_write_block(const char *val, struct kernel_param *kp)
 	return 0;
 }
 module_param_call(write_block, test_write_block, param_get_bool, &dummy_arg,S_IWUSR | S_IRUGO);
-
 #define FACTORY_RESET_STR_SIZE 11
 #define FACTORY_RESET_STR "FACT_RESET_"
 static int test_read_block(char *buf, struct kernel_param *kp)
@@ -180,7 +180,8 @@ error:
 	}
 	
 }
-module_param_call(read_block, param_get_bool, test_read_block, &dummy_arg, S_IWUSR | S_IRUGO);
+
+module_param_call(read_block, param_set_bool, test_read_block, &dummy_arg, S_IWUSR | S_IRUGO);
 
 int lge_erase_block(int ebnum)
 {

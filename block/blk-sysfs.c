@@ -2,6 +2,7 @@
  * Functions related to sysfs handling
  */
 #include <linux/kernel.h>
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/bio.h>
 #include <linux/blkdev.h>
@@ -106,6 +107,19 @@ static ssize_t queue_max_sectors_show(struct request_queue *q, char *page)
 	return queue_var_show(max_sectors_kb, (page));
 }
 
+static ssize_t queue_max_segments_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(queue_max_segments(q), (page));
+}
+
+static ssize_t queue_max_segment_size_show(struct request_queue *q, char *page)
+{
+	if (test_bit(QUEUE_FLAG_CLUSTER, &q->queue_flags))
+		return queue_var_show(queue_max_segment_size(q), (page));
+
+	return queue_var_show(PAGE_CACHE_SIZE, (page));
+}
+
 static ssize_t queue_logical_block_size_show(struct request_queue *q, char *page)
 {
 	return queue_var_show(queue_logical_block_size(q), page);
@@ -124,6 +138,21 @@ static ssize_t queue_io_min_show(struct request_queue *q, char *page)
 static ssize_t queue_io_opt_show(struct request_queue *q, char *page)
 {
 	return queue_var_show(queue_io_opt(q), page);
+}
+
+static ssize_t queue_discard_granularity_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(q->limits.discard_granularity, page);
+}
+
+static ssize_t queue_discard_max_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(q->limits.max_discard_sectors << 9, page);
+}
+
+static ssize_t queue_discard_zeroes_data_show(struct request_queue *q, char *page)
+{
+	return queue_var_show(queue_discard_zeroes_data(q), page);
 }
 
 static ssize_t
@@ -174,7 +203,8 @@ static ssize_t queue_nonrot_store(struct request_queue *q, const char *page,
 
 static ssize_t queue_nomerges_show(struct request_queue *q, char *page)
 {
-	return queue_var_show(blk_queue_nomerges(q), page);
+	return queue_var_show((blk_queue_nomerges(q) << 1) |
+			       blk_queue_noxmerges(q), page);
 }
 
 static ssize_t queue_nomerges_store(struct request_queue *q, const char *page,
@@ -184,10 +214,12 @@ static ssize_t queue_nomerges_store(struct request_queue *q, const char *page,
 	ssize_t ret = queue_var_store(&nm, page, count);
 
 	spin_lock_irq(q->queue_lock);
-	if (nm)
+	queue_flag_clear(QUEUE_FLAG_NOMERGES, q);
+	queue_flag_clear(QUEUE_FLAG_NOXMERGES, q);
+	if (nm == 2)
 		queue_flag_set(QUEUE_FLAG_NOMERGES, q);
-	else
-		queue_flag_clear(QUEUE_FLAG_NOMERGES, q);
+	else if (nm)
+		queue_flag_set(QUEUE_FLAG_NOXMERGES, q);
 	spin_unlock_irq(q->queue_lock);
 
 	return ret;
@@ -262,6 +294,16 @@ static struct queue_sysfs_entry queue_max_hw_sectors_entry = {
 	.show = queue_max_hw_sectors_show,
 };
 
+static struct queue_sysfs_entry queue_max_segments_entry = {
+	.attr = {.name = "max_segments", .mode = S_IRUGO },
+	.show = queue_max_segments_show,
+};
+
+static struct queue_sysfs_entry queue_max_segment_size_entry = {
+	.attr = {.name = "max_segment_size", .mode = S_IRUGO },
+	.show = queue_max_segment_size_show,
+};
+
 static struct queue_sysfs_entry queue_iosched_entry = {
 	.attr = {.name = "scheduler", .mode = S_IRUGO | S_IWUSR },
 	.show = elv_iosched_show,
@@ -293,6 +335,21 @@ static struct queue_sysfs_entry queue_io_opt_entry = {
 	.show = queue_io_opt_show,
 };
 
+static struct queue_sysfs_entry queue_discard_granularity_entry = {
+	.attr = {.name = "discard_granularity", .mode = S_IRUGO },
+	.show = queue_discard_granularity_show,
+};
+
+static struct queue_sysfs_entry queue_discard_max_entry = {
+	.attr = {.name = "discard_max_bytes", .mode = S_IRUGO },
+	.show = queue_discard_max_show,
+};
+
+static struct queue_sysfs_entry queue_discard_zeroes_data_entry = {
+	.attr = {.name = "discard_zeroes_data", .mode = S_IRUGO },
+	.show = queue_discard_zeroes_data_show,
+};
+
 static struct queue_sysfs_entry queue_nonrot_entry = {
 	.attr = {.name = "rotational", .mode = S_IRUGO | S_IWUSR },
 	.show = queue_nonrot_show,
@@ -322,12 +379,17 @@ static struct attribute *default_attrs[] = {
 	&queue_ra_entry.attr,
 	&queue_max_hw_sectors_entry.attr,
 	&queue_max_sectors_entry.attr,
+	&queue_max_segments_entry.attr,
+	&queue_max_segment_size_entry.attr,
 	&queue_iosched_entry.attr,
 	&queue_hw_sector_size_entry.attr,
 	&queue_logical_block_size_entry.attr,
 	&queue_physical_block_size_entry.attr,
 	&queue_io_min_entry.attr,
 	&queue_io_opt_entry.attr,
+	&queue_discard_granularity_entry.attr,
+	&queue_discard_max_entry.attr,
+	&queue_discard_zeroes_data_entry.attr,
 	&queue_nonrot_entry.attr,
 	&queue_nomerges_entry.attr,
 	&queue_rq_affinity_entry.attr,
@@ -414,7 +476,7 @@ static void blk_release_queue(struct kobject *kobj)
 	kmem_cache_free(blk_requestq_cachep, q);
 }
 
-static struct sysfs_ops queue_sysfs_ops = {
+static const struct sysfs_ops queue_sysfs_ops = {
 	.show	= queue_attr_show,
 	.store	= queue_attr_store,
 };
@@ -440,10 +502,8 @@ int blk_register_queue(struct gendisk *disk)
 		return ret;
 
 	ret = kobject_add(&q->kobj, kobject_get(&dev->kobj), "%s", "queue");
-	if (ret < 0) {
-		blk_trace_remove_sysfs(dev);
+	if (ret < 0)
 		return ret;
-	}
 
 	kobject_uevent(&q->kobj, KOBJ_ADD);
 

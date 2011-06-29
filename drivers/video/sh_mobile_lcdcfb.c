@@ -19,6 +19,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
 #include <linux/vmalloc.h>
+#include <linux/ioctl.h>
+#include <linux/slab.h>
 #include <video/sh_mobile_lcdc.h>
 #include <asm/atomic.h>
 
@@ -106,6 +108,7 @@ static unsigned long lcdc_offs_sublcd[NR_CH_REGS] = {
 #define LDRCNTR_SRC	0x00010000
 #define LDRCNTR_MRS	0x00000002
 #define LDRCNTR_MRC	0x00000001
+#define LDSR_MRS	0x00000100
 
 struct sh_mobile_lcdc_priv;
 struct sh_mobile_lcdc_chan {
@@ -122,8 +125,8 @@ struct sh_mobile_lcdc_chan {
 	struct scatterlist *sglist;
 	unsigned long frame_end;
 	unsigned long pan_offset;
-	unsigned long new_pan_offset;
 	wait_queue_head_t frame_end_wait;
+	struct completion vsync_completion;
 };
 
 struct sh_mobile_lcdc_priv {
@@ -281,18 +284,42 @@ static void sh_mobile_lcdc_deferred_io(struct fb_info *info,
 				       struct list_head *pagelist)
 {
 	struct sh_mobile_lcdc_chan *ch = info->par;
-	unsigned int nr_pages;
+	struct sh_mobile_lcdc_board_cfg	*bcfg = &ch->cfg.board_cfg;
 
 	/* enable clocks before accessing hardware */
 	sh_mobile_lcdc_clk_on(ch->lcdc);
 
-	nr_pages = sh_mobile_lcdc_sginit(info, pagelist);
-	dma_map_sg(info->dev, ch->sglist, nr_pages, DMA_TO_DEVICE);
+	/*
+	 * It's possible to get here without anything on the pagelist via
+	 * sh_mobile_lcdc_deferred_io_touch() or via a userspace fsync()
+	 * invocation. In the former case, the acceleration routines are
+	 * stepped in to when using the framebuffer console causing the
+	 * workqueue to be scheduled without any dirty pages on the list.
+	 *
+	 * Despite this, a panel update is still needed given that the
+	 * acceleration routines have their own methods for writing in
+	 * that still need to be updated.
+	 *
+	 * The fsync() and empty pagelist case could be optimized for,
+	 * but we don't bother, as any application exhibiting such
+	 * behaviour is fundamentally broken anyways.
+	 */
+	if (!list_empty(pagelist)) {
+		unsigned int nr_pages = sh_mobile_lcdc_sginit(info, pagelist);
 
-	/* trigger panel update */
-	lcdc_write_chan(ch, LDSM2R, 1);
-
-	dma_unmap_sg(info->dev, ch->sglist, nr_pages, DMA_TO_DEVICE);
+		/* trigger panel update */
+		dma_map_sg(info->dev, ch->sglist, nr_pages, DMA_TO_DEVICE);
+		if (bcfg->start_transfer)
+			bcfg->start_transfer(bcfg->board_data, ch,
+					     &sh_mobile_lcdc_sys_bus_ops);
+		lcdc_write_chan(ch, LDSM2R, 1);
+		dma_unmap_sg(info->dev, ch->sglist, nr_pages, DMA_TO_DEVICE);
+	} else {
+		if (bcfg->start_transfer)
+			bcfg->start_transfer(bcfg->board_data, ch,
+					     &sh_mobile_lcdc_sys_bus_ops);
+		lcdc_write_chan(ch, LDSM2R, 1);
+	}
 }
 
 static void sh_mobile_lcdc_deferred_io_touch(struct fb_info *info)
@@ -342,19 +369,8 @@ static irqreturn_t sh_mobile_lcdc_irq(int irq, void *data)
 		}
 
 		/* VSYNC End */
-		if (ldintr & LDINTR_VES) {
-			unsigned long ldrcntr = lcdc_read(priv, _LDRCNTR);
-			/* Set the source address for the next refresh */
-			lcdc_write_chan_mirror(ch, LDSA1R, ch->dma_handle +
-					       ch->new_pan_offset);
-			if (lcdc_chan_is_sublcd(ch))
-				lcdc_write(ch->lcdc, _LDRCNTR,
-					   ldrcntr ^ LDRCNTR_SRS);
-			else
-				lcdc_write(ch->lcdc, _LDRCNTR,
-					   ldrcntr ^ LDRCNTR_MRS);
-			ch->pan_offset = ch->new_pan_offset;
-		}
+		if (ldintr & LDINTR_VES)
+			complete(&ch->vsync_completion);
 	}
 
 	return IRQ_HANDLED;
@@ -679,6 +695,7 @@ static int sh_mobile_lcdc_setup_clocks(struct platform_device *pdev,
 	 * 1) Enable Runtime PM
 	 * 2) Force Runtime PM Resume since hardware is accessed from probe()
 	 */
+	priv->dev = &pdev->dev;
 	pm_runtime_enable(priv->dev);
 	pm_runtime_resume(priv->dev);
 	return 0;
@@ -743,24 +760,68 @@ static int sh_mobile_fb_pan_display(struct fb_var_screeninfo *var,
 				     struct fb_info *info)
 {
 	struct sh_mobile_lcdc_chan *ch = info->par;
+	struct sh_mobile_lcdc_priv *priv = ch->lcdc;
+	unsigned long ldrcntr;
+	unsigned long new_pan_offset;
 
-	if (info->var.xoffset == var->xoffset &&
-	    info->var.yoffset == var->yoffset)
-		return 0;	/* No change, do nothing */
-
-	ch->new_pan_offset = (var->yoffset * info->fix.line_length) +
+	new_pan_offset = (var->yoffset * info->fix.line_length) +
 		(var->xoffset * (info->var.bits_per_pixel / 8));
 
-	if (ch->new_pan_offset != ch->pan_offset) {
-		unsigned long ldintr;
-		ldintr = lcdc_read(ch->lcdc, _LDINTR);
-		ldintr |= LDINTR_VEE;
-		lcdc_write(ch->lcdc, _LDINTR, ldintr);
-		sh_mobile_lcdc_deferred_io_touch(info);
-	}
+	if (new_pan_offset == ch->pan_offset)
+		return 0;	/* No change, do nothing */
+
+	ldrcntr = lcdc_read(priv, _LDRCNTR);
+
+	/* Set the source address for the next refresh */
+	lcdc_write_chan_mirror(ch, LDSA1R, ch->dma_handle + new_pan_offset);
+	if (lcdc_chan_is_sublcd(ch))
+		lcdc_write(ch->lcdc, _LDRCNTR, ldrcntr ^ LDRCNTR_SRS);
+	else
+		lcdc_write(ch->lcdc, _LDRCNTR, ldrcntr ^ LDRCNTR_MRS);
+
+	ch->pan_offset = new_pan_offset;
+
+	sh_mobile_lcdc_deferred_io_touch(info);
 
 	return 0;
 }
+
+static int sh_mobile_wait_for_vsync(struct fb_info *info)
+{
+	struct sh_mobile_lcdc_chan *ch = info->par;
+	unsigned long ldintr;
+	int ret;
+
+	/* Enable VSync End interrupt */
+	ldintr = lcdc_read(ch->lcdc, _LDINTR);
+	ldintr |= LDINTR_VEE;
+	lcdc_write(ch->lcdc, _LDINTR, ldintr);
+
+	ret = wait_for_completion_interruptible_timeout(&ch->vsync_completion,
+							msecs_to_jiffies(100));
+	if (!ret)
+		return -ETIMEDOUT;
+
+	return 0;
+}
+
+static int sh_mobile_ioctl(struct fb_info *info, unsigned int cmd,
+		       unsigned long arg)
+{
+	int retval;
+
+	switch (cmd) {
+	case FBIO_WAITFORVSYNC:
+		retval = sh_mobile_wait_for_vsync(info);
+		break;
+
+	default:
+		retval = -ENOIOCTLCMD;
+		break;
+	}
+	return retval;
+}
+
 
 static struct fb_ops sh_mobile_lcdc_ops = {
 	.owner          = THIS_MODULE,
@@ -771,6 +832,7 @@ static struct fb_ops sh_mobile_lcdc_ops = {
 	.fb_copyarea	= sh_mobile_lcdc_copyarea,
 	.fb_imageblit	= sh_mobile_lcdc_imageblit,
 	.fb_pan_display = sh_mobile_fb_pan_display,
+	.fb_ioctl       = sh_mobile_ioctl,
 };
 
 static int sh_mobile_lcdc_set_bpp(struct fb_var_screeninfo *var, int bpp)
@@ -874,7 +936,7 @@ static int sh_mobile_lcdc_runtime_resume(struct device *dev)
 	return 0;
 }
 
-static struct dev_pm_ops sh_mobile_lcdc_dev_pm_ops = {
+static const struct dev_pm_ops sh_mobile_lcdc_dev_pm_ops = {
 	.suspend = sh_mobile_lcdc_suspend,
 	.resume = sh_mobile_lcdc_resume,
 	.runtime_suspend = sh_mobile_lcdc_runtime_suspend,
@@ -883,7 +945,7 @@ static struct dev_pm_ops sh_mobile_lcdc_dev_pm_ops = {
 
 static int sh_mobile_lcdc_remove(struct platform_device *pdev);
 
-static int __init sh_mobile_lcdc_probe(struct platform_device *pdev)
+static int __devinit sh_mobile_lcdc_probe(struct platform_device *pdev)
 {
 	struct fb_info *info;
 	struct sh_mobile_lcdc_priv *priv;
@@ -896,24 +958,23 @@ static int __init sh_mobile_lcdc_probe(struct platform_device *pdev)
 
 	if (!pdev->dev.platform_data) {
 		dev_err(&pdev->dev, "no platform data defined\n");
-		error = -EINVAL;
-		goto err0;
+		return -EINVAL;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	i = platform_get_irq(pdev, 0);
 	if (!res || i < 0) {
 		dev_err(&pdev->dev, "cannot get platform resources\n");
-		error = -ENOENT;
-		goto err0;
+		return -ENOENT;
 	}
 
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv) {
 		dev_err(&pdev->dev, "cannot allocate device data\n");
-		error = -ENOMEM;
-		goto err0;
+		return -ENOMEM;
 	}
+
+	platform_set_drvdata(pdev, priv);
 
 	error = request_irq(i, sh_mobile_lcdc_irq, IRQF_DISABLED,
 			    dev_name(&pdev->dev), priv);
@@ -923,8 +984,6 @@ static int __init sh_mobile_lcdc_probe(struct platform_device *pdev)
 	}
 
 	priv->irq = i;
-	priv->dev = &pdev->dev;
-	platform_set_drvdata(pdev, priv);
 	pdata = pdev->dev.platform_data;
 
 	j = 0;
@@ -932,14 +991,14 @@ static int __init sh_mobile_lcdc_probe(struct platform_device *pdev)
 		priv->ch[j].lcdc = priv;
 		memcpy(&priv->ch[j].cfg, &pdata->ch[i], sizeof(pdata->ch[i]));
 
-		error = sh_mobile_lcdc_check_interface(&priv->ch[i]);
+		error = sh_mobile_lcdc_check_interface(&priv->ch[j]);
 		if (error) {
 			dev_err(&pdev->dev, "unsupported interface type\n");
 			goto err1;
 		}
-		init_waitqueue_head(&priv->ch[i].frame_end_wait);
+		init_waitqueue_head(&priv->ch[j].frame_end_wait);
+		init_completion(&priv->ch[j].vsync_completion);
 		priv->ch[j].pan_offset = 0;
-		priv->ch[j].new_pan_offset = 0;
 
 		switch (pdata->ch[i].chan) {
 		case LCDC_CHAN_MAINLCD:
@@ -1038,9 +1097,9 @@ static int __init sh_mobile_lcdc_probe(struct platform_device *pdev)
 		info = ch->info;
 
 		if (info->fbdefio) {
-			priv->ch->sglist = vmalloc(sizeof(struct scatterlist) *
+			ch->sglist = vmalloc(sizeof(struct scatterlist) *
 					info->fix.smem_len >> PAGE_SHIFT);
-			if (!priv->ch->sglist) {
+			if (!ch->sglist) {
 				dev_err(&pdev->dev, "cannot allocate sglist\n");
 				goto err1;
 			}
@@ -1065,9 +1124,9 @@ static int __init sh_mobile_lcdc_probe(struct platform_device *pdev)
 	}
 
 	return 0;
- err1:
+err1:
 	sh_mobile_lcdc_remove(pdev);
- err0:
+
 	return error;
 }
 
@@ -1078,7 +1137,7 @@ static int sh_mobile_lcdc_remove(struct platform_device *pdev)
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(priv->ch); i++)
-		if (priv->ch[i].info->dev)
+		if (priv->ch[i].info && priv->ch[i].info->dev)
 			unregister_framebuffer(priv->ch[i].info);
 
 	sh_mobile_lcdc_stop(priv);
@@ -1101,7 +1160,8 @@ static int sh_mobile_lcdc_remove(struct platform_device *pdev)
 	if (priv->dot_clk)
 		clk_put(priv->dot_clk);
 
-	pm_runtime_disable(priv->dev);
+	if (priv->dev)
+		pm_runtime_disable(priv->dev);
 
 	if (priv->base)
 		iounmap(priv->base);

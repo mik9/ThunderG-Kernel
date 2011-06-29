@@ -3,6 +3,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/if.h>
+#include <linux/slab.h>
 #include <linux/wait.h>
 #include <linux/timer.h>
 #include <linux/skbuff.h>
@@ -38,7 +39,6 @@ MODULE_PARM_DESC(ignore_cis_vcc, "Ignore broken CIS VCC entry");
 
 /* struct local_info::hw_priv */
 struct hostap_cs_priv {
-	dev_node_t node;
 	struct pcmcia_device *link;
 	int sandisk_connectplus;
 };
@@ -274,9 +274,6 @@ static int sandisk_enable_wireless(struct net_device *dev)
 	conf_reg_t reg;
 	struct hostap_interface *iface = netdev_priv(dev);
 	local_info_t *local = iface->local;
-	tuple_t tuple;
-	cisparse_t *parse = NULL;
-	u_char buf[64];
 	struct hostap_cs_priv *hw_priv = local->hw_priv;
 
 	if (hw_priv->link->io.NumPorts1 < 0x42) {
@@ -285,28 +282,13 @@ static int sandisk_enable_wireless(struct net_device *dev)
 		goto done;
 	}
 
-	parse = kmalloc(sizeof(cisparse_t), GFP_KERNEL);
-	if (parse == NULL) {
-		ret = -ENOMEM;
-		goto done;
-	}
-
-	tuple.Attributes = TUPLE_RETURN_COMMON;
-	tuple.TupleData = buf;
-	tuple.TupleDataMax = sizeof(buf);
-	tuple.TupleOffset = 0;
-
 	if (hw_priv->link->manf_id != 0xd601 || hw_priv->link->card_id != 0x0101) {
 		/* No SanDisk manfid found */
 		ret = -ENODEV;
 		goto done;
 	}
 
-	tuple.DesiredTuple = CISTPL_LONGLINK_MFC;
-	if (pcmcia_get_first_tuple(hw_priv->link, &tuple) ||
-	    pcmcia_get_tuple_data(hw_priv->link, &tuple) ||
-	    pcmcia_parse_tuple(&tuple, parse) ||
-		parse->longlink_mfc.nfn < 2) {
+	if (hw_priv->link->socket->functions < 2) {
 		/* No multi-function links found */
 		ret = -ENODEV;
 		goto done;
@@ -354,7 +336,6 @@ static int sandisk_enable_wireless(struct net_device *dev)
 	udelay(10);
 
 done:
-	kfree(parse);
 	return ret;
 }
 
@@ -529,10 +510,6 @@ static void prism2_detach(struct pcmcia_device *link)
 }
 
 
-#define CS_CHECK(fn, ret) \
-do { last_fn = (fn); if ((last_ret = (ret)) != 0) goto cs_failed; } while (0)
-
-
 /* run after a CARD_INSERTION event is received to configure the PCMCIA
  * socket and make the device available to the system */
 
@@ -578,15 +555,7 @@ static int prism2_config_check(struct pcmcia_device *p_dev,
 		p_dev->conf.Vpp = dflt->vpp1.param[CISTPL_POWER_VNOM] / 10000;
 
 	/* Do we need to allocate an interrupt? */
-	if (cfg->irq.IRQInfo1 || dflt->irq.IRQInfo1)
-		p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
-	else if (!(p_dev->conf.Attributes & CONF_ENABLE_IRQ)) {
-		/* At least Compaq WL200 does not have IRQInfo1 set,
-		 * but it does not work without interrupts.. */
-		printk(KERN_WARNING "Config has no IRQ info, but trying to "
-		       "enable IRQ anyway..\n");
-		p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
-	}
+	p_dev->conf.Attributes |= CONF_ENABLE_IRQ;
 
 	/* IO window settings */
 	PDEBUG(DEBUG_EXTRA, "IO window settings: cfg->io.nwin=%d "
@@ -624,7 +593,6 @@ static int prism2_config(struct pcmcia_device *link)
 	struct hostap_interface *iface;
 	local_info_t *local;
 	int ret = 1;
-	int last_fn, last_ret;
 	struct hostap_cs_priv *hw_priv;
 	unsigned long flags;
 
@@ -637,19 +605,18 @@ static int prism2_config(struct pcmcia_device *link)
 	}
 
 	/* Look for an appropriate configuration table entry in the CIS */
-	last_ret = pcmcia_loop_config(link, prism2_config_check, NULL);
-	if (last_ret) {
+	ret = pcmcia_loop_config(link, prism2_config_check, NULL);
+	if (ret) {
 		if (!ignore_cis_vcc)
 			printk(KERN_ERR "GetNextTuple(): No matching "
 			       "CIS configuration.  Maybe you need the "
 			       "ignore_cis_vcc=1 parameter.\n");
-		cs_error(link, RequestIO, last_ret);
 		goto failed;
 	}
 
 	/* Need to allocate net_device before requesting IRQ handler */
 	dev = prism2_init_local_data(&prism2_pccard_funcs, 0,
-				     &handle_to_dev(link));
+				     &link->dev);
 	if (dev == NULL)
 		goto failed;
 	link->priv = dev;
@@ -658,36 +625,29 @@ static int prism2_config(struct pcmcia_device *link)
 	local = iface->local;
 	local->hw_priv = hw_priv;
 	hw_priv->link = link;
-	strcpy(hw_priv->node.dev_name, dev->name);
-	link->dev_node = &hw_priv->node;
 
 	/*
-	 * Allocate an interrupt line.  Note that this does not assign a
-	 * handler to the interrupt, unless the 'Handler' member of the
-	 * irq structure is initialized.
+	 * Make sure the IRQ handler cannot proceed until at least
+	 * dev->base_addr is initialized.
 	 */
-	if (link->conf.Attributes & CONF_ENABLE_IRQ) {
-		link->irq.Attributes = IRQ_TYPE_DYNAMIC_SHARING |
-				       IRQ_HANDLE_PRESENT;
-		link->irq.IRQInfo1 = IRQ_LEVEL_ID;
-		link->irq.Handler = prism2_interrupt;
-		link->irq.Instance = dev;
-		CS_CHECK(RequestIRQ,
-			 pcmcia_request_irq(link, &link->irq));
-	}
+	spin_lock_irqsave(&local->irq_init_lock, flags);
+
+	ret = pcmcia_request_irq(link, prism2_interrupt);
+	if (ret)
+		goto failed_unlock;
 
 	/*
 	 * This actually configures the PCMCIA socket -- setting up
 	 * the I/O windows and the interrupt mapping, and putting the
 	 * card and host interface into "Memory and IO" mode.
 	 */
-	CS_CHECK(RequestConfiguration,
-		 pcmcia_request_configuration(link, &link->conf));
+	ret = pcmcia_request_configuration(link, &link->conf);
+	if (ret)
+		goto failed_unlock;
 
-	/* IRQ handler cannot proceed until at dev->base_addr is initialized */
-	spin_lock_irqsave(&local->irq_init_lock, flags);
-	dev->irq = link->irq.AssignedIRQ;
+	dev->irq = link->irq;
 	dev->base_addr = link->io.BasePort1;
+
 	spin_unlock_irqrestore(&local->irq_init_lock, flags);
 
 	/* Finally, report what we've done */
@@ -697,7 +657,7 @@ static int prism2_config(struct pcmcia_device *link)
 		printk(", Vpp %d.%d", link->conf.Vpp / 10,
 		       link->conf.Vpp % 10);
 	if (link->conf.Attributes & CONF_ENABLE_IRQ)
-		printk(", irq %d", link->irq.AssignedIRQ);
+		printk(", irq %d", link->irq);
 	if (link->io.NumPorts1)
 		printk(", io 0x%04x-0x%04x", link->io.BasePort1,
 		       link->io.BasePort1+link->io.NumPorts1-1);
@@ -711,16 +671,13 @@ static int prism2_config(struct pcmcia_device *link)
 	sandisk_enable_wireless(dev);
 
 	ret = prism2_hw_config(dev, 1);
-	if (!ret) {
+	if (!ret)
 		ret = hostap_hw_ready(dev);
-		if (ret == 0 && local->ddev)
-			strcpy(hw_priv->node.dev_name, local->ddev->name);
-	}
+
 	return ret;
 
- cs_failed:
-	cs_error(link, last_fn, last_ret);
-
+ failed_unlock:
+	 spin_unlock_irqrestore(&local->irq_init_lock, flags);
  failed:
 	kfree(hw_priv);
 	prism2_release((u_long)link);
@@ -827,13 +784,6 @@ static struct pcmcia_device_id hostap_cs_ids[] = {
 	PCMCIA_MFC_DEVICE_PROD_ID12(0, "SanDisk", "ConnectPlus",
 				    0x7a954bd9, 0x74be00c6),
 	PCMCIA_DEVICE_PROD_ID123(
-		"Intersil", "PRISM 2_5 PCMCIA ADAPTER",	"ISL37300P",
-		0x4b801a17, 0x6345a0bf, 0xc9049a39),
-	/* D-Link DWL-650 Rev. P1; manfid 0x000b, 0x7110 */
-	PCMCIA_DEVICE_PROD_ID123(
-		"D-Link", "DWL-650 Wireless PC Card RevP", "ISL37101P-10",
-		0x1a424a1c, 0x6ea57632, 0xdd97a26b),
-	PCMCIA_DEVICE_PROD_ID123(
 		"Addtron", "AWP-100 Wireless PCMCIA", "Version 01.02",
 		0xe6ec52ce, 0x08649af2, 0x4b74baa0),
 	PCMCIA_DEVICE_PROD_ID123(
@@ -867,14 +817,12 @@ static struct pcmcia_device_id hostap_cs_ids[] = {
 		"Ver. 1.00",
 		0x5cd01705, 0x4271660f, 0x9d08ee12),
 	PCMCIA_DEVICE_PROD_ID123(
-		"corega", "WL PCCL-11", "ISL37300P",
-		0xa21501a, 0x59868926, 0xc9049a39),
-	PCMCIA_DEVICE_PROD_ID123(
-		"The Linksys Group, Inc.", "Wireless Network CF Card", "ISL37300P",
-		0xa5f472c2, 0x9c05598d, 0xc9049a39),
-	PCMCIA_DEVICE_PROD_ID123(
 		"Wireless LAN" , "11Mbps PC Card", "Version 01.02",
 		0x4b8870ff, 0x70e946d1, 0x4b74baa0),
+	PCMCIA_DEVICE_PROD_ID3("HFA3863", 0x355cb092),
+	PCMCIA_DEVICE_PROD_ID3("ISL37100P", 0x630d52b2),
+	PCMCIA_DEVICE_PROD_ID3("ISL37101P-10", 0xdd97a26b),
+	PCMCIA_DEVICE_PROD_ID3("ISL37300P", 0xc9049a39),
 	PCMCIA_DEVICE_NULL
 };
 MODULE_DEVICE_TABLE(pcmcia, hostap_cs_ids);

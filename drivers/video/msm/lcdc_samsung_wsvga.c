@@ -40,7 +40,15 @@ static struct pwm_device *bl_pwm1;
 #define PWM_DUTY_LEVEL (PWM_PERIOD_USEC / PWM_LEVEL)
 #endif
 
-static struct msm_panel_common_pdata *lcdc_samsung_pdata;
+struct lcdc_samsung_data {
+	struct msm_panel_common_pdata *pdata;
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+	int vga_enabled;
+#endif
+	struct platform_device *fbpdev;
+};
+
+static struct lcdc_samsung_data *dd;
 
 
 static void lcdc_samsung_panel_set_backlight(struct msm_fb_data_type *mfd)
@@ -81,21 +89,73 @@ static void lcdc_samsung_panel_set_backlight(struct msm_fb_data_type *mfd)
 
 }
 
-static int __init samsung_probe(struct platform_device *pdev)
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+static ssize_t show_vga_enable(struct device *device,
+			       struct device_attribute *attr, char *buf)
 {
-	if (pdev->id == 0) {
-		lcdc_samsung_pdata = pdev->dev.platform_data;
-		return 0;
+	return snprintf(buf, PAGE_SIZE, "%d\n", dd->vga_enabled);
+}
+
+static ssize_t store_vga_enable(struct device *dev,
+				struct device_attribute *attr,
+				const char *buf, size_t count)
+{
+	unsigned long enable;
+	int rc;
+
+	rc = strict_strtoul(buf, 10, &enable);
+	if (rc)
+		return -EINVAL;
+
+	if (dd->pdata && dd->pdata->vga_switch)
+		rc = dd->pdata->vga_switch(enable);
+	else
+		rc = -ENODEV;
+	if (!rc) {
+		dd->vga_enabled = enable;
+		rc = count;
 	}
+	return rc;
+}
+
+static DEVICE_ATTR(vga_enable, S_IRUGO|S_IWUSR, show_vga_enable,
+		   store_vga_enable);
+static struct attribute *attrs[] = {
+	&dev_attr_vga_enable.attr,
+	NULL,
+};
+static struct attribute_group attr_group = {
+	.attrs = attrs,
+};
+#endif
+
+static int __devinit samsung_probe(struct platform_device *pdev)
+{
+	int rc = 0;
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+	struct msm_fb_data_type *mfd;
+#endif
+
+	if (pdev->id == 0) {
+		dd = kzalloc(sizeof *dd, GFP_KERNEL);
+		if (!dd)
+			return -ENOMEM;
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+		dd->vga_enabled = 0;
+#endif
+		dd->pdata = pdev->dev.platform_data;
+		return 0;
+	} else if (!dd)
+		return -ENODEV;
 
 #ifdef CONFIG_PMIC8058_PWM
-	bl_pwm0 = pwm_request(lcdc_samsung_pdata->gpio_num[0], "backlight1");
+	bl_pwm0 = pwm_request(dd->pdata->gpio_num[0], "backlight1");
 	if (bl_pwm0 == NULL || IS_ERR(bl_pwm0)) {
 		pr_err("%s pwm_request() failed\n", __func__);
 		bl_pwm0 = NULL;
 	}
 
-	bl_pwm1 = pwm_request(lcdc_samsung_pdata->gpio_num[1], "backlight2");
+	bl_pwm1 = pwm_request(dd->pdata->gpio_num[1], "backlight2");
 	if (bl_pwm1 == NULL || IS_ERR(bl_pwm1)) {
 		pr_err("%s pwm_request() failed\n", __func__);
 		bl_pwm1 = NULL;
@@ -103,18 +163,48 @@ static int __init samsung_probe(struct platform_device *pdev)
 
 	printk(KERN_INFO "samsung_probe: bl_pwm0=%p LPG_chan0=%d "
 			"bl_pwm1=%p LPG_chan1=%d\n",
-			bl_pwm0, (int)lcdc_samsung_pdata->gpio_num[0],
-			bl_pwm1, (int)lcdc_samsung_pdata->gpio_num[1]
+			bl_pwm0, (int)dd->pdata->gpio_num[0],
+			bl_pwm1, (int)dd->pdata->gpio_num[1]
 			);
 #endif
 
-	msm_fb_add_device(pdev);
 
+	dd->fbpdev = msm_fb_add_device(pdev);
+	if (!dd->fbpdev) {
+		dev_err(&pdev->dev, "failed to add msm_fb device\n");
+		rc = -ENODEV;
+		goto probe_exit;
+	}
+
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+	mfd = platform_get_drvdata(dd->fbpdev);
+	if (mfd && mfd->fbi && mfd->fbi->dev) {
+		rc = sysfs_create_group(&mfd->fbi->dev->kobj, &attr_group);
+		if (rc)
+			dev_err(&pdev->dev, "failed to create sysfs group\n");
+	} else {
+		dev_err(&pdev->dev, "no dev to create sysfs group\n");
+		rc = -ENODEV;
+	}
+#endif
+
+probe_exit:
+	return rc;
+}
+
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+static int __devexit samsung_remove(struct platform_device *pdev)
+{
+	sysfs_remove_group(&dd->fbpdev->dev.kobj, &attr_group);
 	return 0;
 }
+#endif
 
 static struct platform_driver this_driver = {
 	.probe  = samsung_probe,
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+	.remove = samsung_remove,
+#endif
 	.driver = {
 		.name   = "lcdc_samsung_wsvga",
 	},
@@ -137,7 +227,7 @@ static int __init lcdc_samsung_panel_init(void)
 	int ret;
 	struct msm_panel_info *pinfo;
 
-#ifdef CONFIG_FB_MSM_MDDI_AUTO_DETECT
+#ifdef CONFIG_FB_MSM_LCDC_AUTO_DETECT
 	if (msm_fb_detect_client("lcdc_samsung_wsvga"))
 		return 0;
 #endif
@@ -149,12 +239,21 @@ static int __init lcdc_samsung_panel_init(void)
 	pinfo = &samsung_panel_data.panel_info;
 	pinfo->xres = 1024;
 	pinfo->yres = 600;
+#ifdef CONFIG_FB_MSM_LCDC_DSUB
+	/* DSUB (VGA) is on the same bus, this allows us to allocate for the
+	 * max resolution of the DSUB display */
+	pinfo->mode2_xres = 1440;
+	pinfo->mode2_yres = 900;
+	pinfo->mode2_bpp = 16;
+#else
+	MSM_FB_SINGLE_MODE_PANEL(pinfo);
+#endif
 	pinfo->type = LCDC_PANEL;
 	pinfo->pdest = DISPLAY_1;
 	pinfo->wait_cycle = 0;
 	pinfo->bpp = 18;
 	pinfo->fb_num = 2;
-	pinfo->clk_rate = 53990000;
+	pinfo->clk_rate = 43192000;
 	pinfo->bl_max = 15;
 	pinfo->bl_min = 1;
 

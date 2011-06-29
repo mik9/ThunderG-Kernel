@@ -24,6 +24,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/delay.h>
+#include <linux/slab.h>
 
 #include "cx88.h"
 #include "tea5767.h"
@@ -1466,6 +1467,18 @@ static const struct cx88_board cx88_boards[] = {
 			.audioroute = 8,
 		},
 	},
+	[CX88_BOARD_SAMSUNG_SMT_7020] = {
+		.name		= "Samsung SMT 7020 DVB-S",
+		.tuner_type	= TUNER_ABSENT,
+		.radio_type	= UNSET,
+		.tuner_addr	= ADDR_UNSET,
+		.radio_addr	= ADDR_UNSET,
+		.input		= { {
+			.type	= CX88_VMUX_DVB,
+			.vmux	= 0,
+		} },
+		.mpeg           = CX88_MPEG_DVB,
+	},
 	[CX88_BOARD_ADSTECH_PTV_390] = {
 		.name           = "ADS Tech Instant Video PCI",
 		.tuner_type     = TUNER_ABSENT,
@@ -2075,6 +2088,18 @@ static const struct cx88_board cx88_boards[] = {
 		},
 		.mpeg           = CX88_MPEG_DVB,
 	},
+	[CX88_BOARD_PROF_7301] = {
+		.name           = "Prof 7301 DVB-S/S2",
+		.tuner_type     = UNSET,
+		.radio_type     = UNSET,
+		.tuner_addr     = ADDR_UNSET,
+		.radio_addr     = ADDR_UNSET,
+		.input          = { {
+			.type   = CX88_VMUX_DVB,
+			.vmux   = 0,
+		} },
+		.mpeg           = CX88_MPEG_DVB,
+	},
 };
 
 /* ------------------------------------------------------------------ */
@@ -2343,6 +2368,14 @@ static const struct cx88_subid cx88_subids[] = {
 		.subvendor = 0x0070,
 		.subdevice = 0x1404,
 		.card      = CX88_BOARD_HAUPPAUGE_HVR3000,
+	}, {
+		.subvendor = 0x18ac,
+		.subdevice = 0xdc00,
+		.card      = CX88_BOARD_SAMSUNG_SMT_7020,
+	}, {
+		.subvendor = 0x18ac,
+		.subdevice = 0xdccd,
+		.card      = CX88_BOARD_SAMSUNG_SMT_7020,
 	},{
 		.subvendor = 0x1461,
 		.subdevice = 0xc111, /* AverMedia M150-D */
@@ -2535,6 +2568,10 @@ static const struct cx88_subid cx88_subids[] = {
 		.subvendor = 0x107d,
 		.subdevice = 0x6618,
 		.card      = CX88_BOARD_WINFAST_TV2000_XP_GLOBAL,
+	}, {
+		.subvendor = 0xb034,
+		.subdevice = 0x3034,
+		.card      = CX88_BOARD_PROF_7301,
 	},
 };
 
@@ -2616,6 +2653,9 @@ static void hauppauge_eeprom(struct cx88_core *core, u8 *eeprom_data)
 	case 96659: /* WinTV-HVR1300 () */
 	case 98559: /* WinTV-HVR1100LP (Video no IR, Retail - Low Profile) */
 		/* known */
+		break;
+	case CX88_BOARD_SAMSUNG_SMT_7020:
+		cx_set(MO_GP0_IO, 0x008989FF);
 		break;
 	default:
 		warn_printk(core, "warning: unknown hauppauge model #%d\n",
@@ -3211,6 +3251,7 @@ static void cx88_card_setup(struct cx88_core *core)
 	case  CX88_BOARD_TBS_8920:
 	case  CX88_BOARD_PROF_6200:
 	case  CX88_BOARD_PROF_7300:
+	case  CX88_BOARD_PROF_7301:
 	case  CX88_BOARD_SATTRADE_ST4200:
 		cx_write(MO_GP0_IO, 0x8000);
 		msleep(100);
@@ -3267,7 +3308,7 @@ static void cx88_card_setup(struct cx88_core *core)
 			    ctl.fname);
 		call_all(core, tuner, s_config, &xc2028_cfg);
 	}
-	call_all(core, tuner, s_standby);
+	call_all(core, core, s_power, 0);
 }
 
 /* ------------------------------------------------------------------ */

@@ -32,6 +32,8 @@ struct _cache_table {
 	short size;
 };
 
+#define MB(x)	((x) * 1024)
+
 /* All the cache descriptor types we care about (no TLB or
    trace cache entries) */
 
@@ -45,9 +47,9 @@ static const struct _cache_table __cpuinitconst cache_table[] =
 	{ 0x0d, LVL_1_DATA, 16 },	/* 4-way set assoc, 64 byte line size */
 	{ 0x21, LVL_2,      256 },	/* 8-way set assoc, 64 byte line size */
 	{ 0x22, LVL_3,      512 },	/* 4-way set assoc, sectored cache, 64 byte line size */
-	{ 0x23, LVL_3,      1024 },	/* 8-way set assoc, sectored cache, 64 byte line size */
-	{ 0x25, LVL_3,      2048 },	/* 8-way set assoc, sectored cache, 64 byte line size */
-	{ 0x29, LVL_3,      4096 },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x23, LVL_3,      MB(1) },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x25, LVL_3,      MB(2) },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x29, LVL_3,      MB(4) },	/* 8-way set assoc, sectored cache, 64 byte line size */
 	{ 0x2c, LVL_1_DATA, 32 },	/* 8-way set assoc, 64 byte line size */
 	{ 0x30, LVL_1_INST, 32 },	/* 8-way set assoc, 64 byte line size */
 	{ 0x39, LVL_2,      128 },	/* 4-way set assoc, sectored cache, 64 byte line size */
@@ -60,16 +62,16 @@ static const struct _cache_table __cpuinitconst cache_table[] =
 	{ 0x41, LVL_2,      128 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x42, LVL_2,      256 },	/* 4-way set assoc, 32 byte line size */
 	{ 0x43, LVL_2,      512 },	/* 4-way set assoc, 32 byte line size */
-	{ 0x44, LVL_2,      1024 },	/* 4-way set assoc, 32 byte line size */
-	{ 0x45, LVL_2,      2048 },	/* 4-way set assoc, 32 byte line size */
-	{ 0x46, LVL_3,      4096 },	/* 4-way set assoc, 64 byte line size */
-	{ 0x47, LVL_3,      8192 },	/* 8-way set assoc, 64 byte line size */
-	{ 0x49, LVL_3,      4096 },	/* 16-way set assoc, 64 byte line size */
-	{ 0x4a, LVL_3,      6144 },	/* 12-way set assoc, 64 byte line size */
-	{ 0x4b, LVL_3,      8192 },	/* 16-way set assoc, 64 byte line size */
-	{ 0x4c, LVL_3,     12288 },	/* 12-way set assoc, 64 byte line size */
-	{ 0x4d, LVL_3,     16384 },	/* 16-way set assoc, 64 byte line size */
-	{ 0x4e, LVL_2,      6144 },	/* 24-way set assoc, 64 byte line size */
+	{ 0x44, LVL_2,      MB(1) },	/* 4-way set assoc, 32 byte line size */
+	{ 0x45, LVL_2,      MB(2) },	/* 4-way set assoc, 32 byte line size */
+	{ 0x46, LVL_3,      MB(4) },	/* 4-way set assoc, 64 byte line size */
+	{ 0x47, LVL_3,      MB(8) },	/* 8-way set assoc, 64 byte line size */
+	{ 0x49, LVL_3,      MB(4) },	/* 16-way set assoc, 64 byte line size */
+	{ 0x4a, LVL_3,      MB(6) },	/* 12-way set assoc, 64 byte line size */
+	{ 0x4b, LVL_3,      MB(8) },	/* 16-way set assoc, 64 byte line size */
+	{ 0x4c, LVL_3,      MB(12) },	/* 12-way set assoc, 64 byte line size */
+	{ 0x4d, LVL_3,      MB(16) },	/* 16-way set assoc, 64 byte line size */
+	{ 0x4e, LVL_2,      MB(6) },	/* 24-way set assoc, 64 byte line size */
 	{ 0x60, LVL_1_DATA, 16 },	/* 8-way set assoc, sectored cache, 64 byte line size */
 	{ 0x66, LVL_1_DATA, 8 },	/* 4-way set assoc, sectored cache, 64 byte line size */
 	{ 0x67, LVL_1_DATA, 16 },	/* 4-way set assoc, sectored cache, 64 byte line size */
@@ -78,34 +80,34 @@ static const struct _cache_table __cpuinitconst cache_table[] =
 	{ 0x71, LVL_TRACE,  16 },	/* 8-way set assoc */
 	{ 0x72, LVL_TRACE,  32 },	/* 8-way set assoc */
 	{ 0x73, LVL_TRACE,  64 },	/* 8-way set assoc */
-	{ 0x78, LVL_2,    1024 },	/* 4-way set assoc, 64 byte line size */
-	{ 0x79, LVL_2,     128 },	/* 8-way set assoc, sectored cache, 64 byte line size */
-	{ 0x7a, LVL_2,     256 },	/* 8-way set assoc, sectored cache, 64 byte line size */
-	{ 0x7b, LVL_2,     512 },	/* 8-way set assoc, sectored cache, 64 byte line size */
-	{ 0x7c, LVL_2,    1024 },	/* 8-way set assoc, sectored cache, 64 byte line size */
-	{ 0x7d, LVL_2,    2048 },	/* 8-way set assoc, 64 byte line size */
-	{ 0x7f, LVL_2,     512 },	/* 2-way set assoc, 64 byte line size */
-	{ 0x82, LVL_2,     256 },	/* 8-way set assoc, 32 byte line size */
-	{ 0x83, LVL_2,     512 },	/* 8-way set assoc, 32 byte line size */
-	{ 0x84, LVL_2,    1024 },	/* 8-way set assoc, 32 byte line size */
-	{ 0x85, LVL_2,    2048 },	/* 8-way set assoc, 32 byte line size */
-	{ 0x86, LVL_2,     512 },	/* 4-way set assoc, 64 byte line size */
-	{ 0x87, LVL_2,    1024 },	/* 8-way set assoc, 64 byte line size */
-	{ 0xd0, LVL_3,     512 },	/* 4-way set assoc, 64 byte line size */
-	{ 0xd1, LVL_3,    1024 },	/* 4-way set assoc, 64 byte line size */
-	{ 0xd2, LVL_3,    2048 },	/* 4-way set assoc, 64 byte line size */
-	{ 0xd6, LVL_3,    1024 },	/* 8-way set assoc, 64 byte line size */
-	{ 0xd7, LVL_3,    2048 },	/* 8-way set assoc, 64 byte line size */
-	{ 0xd8, LVL_3,    4096 },	/* 12-way set assoc, 64 byte line size */
-	{ 0xdc, LVL_3,    2048 },	/* 12-way set assoc, 64 byte line size */
-	{ 0xdd, LVL_3,    4096 },	/* 12-way set assoc, 64 byte line size */
-	{ 0xde, LVL_3,    8192 },	/* 12-way set assoc, 64 byte line size */
-	{ 0xe2, LVL_3,    2048 },	/* 16-way set assoc, 64 byte line size */
-	{ 0xe3, LVL_3,    4096 },	/* 16-way set assoc, 64 byte line size */
-	{ 0xe4, LVL_3,    8192 },	/* 16-way set assoc, 64 byte line size */
-	{ 0xea, LVL_3,    12288 },	/* 24-way set assoc, 64 byte line size */
-	{ 0xeb, LVL_3,    18432 },	/* 24-way set assoc, 64 byte line size */
-	{ 0xec, LVL_3,    24576 },	/* 24-way set assoc, 64 byte line size */
+	{ 0x78, LVL_2,      MB(1) },	/* 4-way set assoc, 64 byte line size */
+	{ 0x79, LVL_2,      128 },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x7a, LVL_2,      256 },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x7b, LVL_2,      512 },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x7c, LVL_2,      MB(1) },	/* 8-way set assoc, sectored cache, 64 byte line size */
+	{ 0x7d, LVL_2,      MB(2) },	/* 8-way set assoc, 64 byte line size */
+	{ 0x7f, LVL_2,      512 },	/* 2-way set assoc, 64 byte line size */
+	{ 0x82, LVL_2,      256 },	/* 8-way set assoc, 32 byte line size */
+	{ 0x83, LVL_2,      512 },	/* 8-way set assoc, 32 byte line size */
+	{ 0x84, LVL_2,      MB(1) },	/* 8-way set assoc, 32 byte line size */
+	{ 0x85, LVL_2,      MB(2) },	/* 8-way set assoc, 32 byte line size */
+	{ 0x86, LVL_2,      512 },	/* 4-way set assoc, 64 byte line size */
+	{ 0x87, LVL_2,      MB(1) },	/* 8-way set assoc, 64 byte line size */
+	{ 0xd0, LVL_3,      512 },	/* 4-way set assoc, 64 byte line size */
+	{ 0xd1, LVL_3,      MB(1) },	/* 4-way set assoc, 64 byte line size */
+	{ 0xd2, LVL_3,      MB(2) },	/* 4-way set assoc, 64 byte line size */
+	{ 0xd6, LVL_3,      MB(1) },	/* 8-way set assoc, 64 byte line size */
+	{ 0xd7, LVL_3,      MB(2) },	/* 8-way set assoc, 64 byte line size */
+	{ 0xd8, LVL_3,      MB(4) },	/* 12-way set assoc, 64 byte line size */
+	{ 0xdc, LVL_3,      MB(2) },	/* 12-way set assoc, 64 byte line size */
+	{ 0xdd, LVL_3,      MB(4) },	/* 12-way set assoc, 64 byte line size */
+	{ 0xde, LVL_3,      MB(8) },	/* 12-way set assoc, 64 byte line size */
+	{ 0xe2, LVL_3,      MB(2) },	/* 16-way set assoc, 64 byte line size */
+	{ 0xe3, LVL_3,      MB(4) },	/* 16-way set assoc, 64 byte line size */
+	{ 0xe4, LVL_3,      MB(8) },	/* 16-way set assoc, 64 byte line size */
+	{ 0xea, LVL_3,      MB(12) },	/* 24-way set assoc, 64 byte line size */
+	{ 0xeb, LVL_3,      MB(18) },	/* 24-way set assoc, 64 byte line size */
+	{ 0xec, LVL_3,      MB(24) },	/* 24-way set assoc, 64 byte line size */
 	{ 0x00, 0, 0}
 };
 
@@ -146,13 +148,19 @@ union _cpuid4_leaf_ecx {
 	u32 full;
 };
 
+struct amd_l3_cache {
+	struct	 pci_dev *dev;
+	bool	 can_disable;
+	unsigned indices;
+	u8	 subcaches[4];
+};
+
 struct _cpuid4_info {
 	union _cpuid4_leaf_eax eax;
 	union _cpuid4_leaf_ebx ebx;
 	union _cpuid4_leaf_ecx ecx;
 	unsigned long size;
-	bool can_disable;
-	unsigned int l3_indices;
+	struct amd_l3_cache *l3;
 	DECLARE_BITMAP(shared_cpu_map, NR_CPUS);
 };
 
@@ -162,8 +170,7 @@ struct _cpuid4_info_regs {
 	union _cpuid4_leaf_ebx ebx;
 	union _cpuid4_leaf_ecx ecx;
 	unsigned long size;
-	bool can_disable;
-	unsigned int l3_indices;
+	struct amd_l3_cache *l3;
 };
 
 unsigned short			num_cache_leaves;
@@ -300,91 +307,163 @@ struct _cache_attr {
 };
 
 #ifdef CONFIG_CPU_SUP_AMD
-static unsigned int __cpuinit amd_calc_l3_indices(void)
+
+/*
+ * L3 cache descriptors
+ */
+static struct amd_l3_cache **__cpuinitdata l3_caches;
+
+static void __cpuinit amd_calc_l3_indices(struct amd_l3_cache *l3)
 {
-	/*
-	 * We're called over smp_call_function_single() and therefore
-	 * are on the correct cpu.
-	 */
-	int cpu = smp_processor_id();
-	int node = cpu_to_node(cpu);
-	struct pci_dev *dev = node_to_k8_nb_misc(node);
 	unsigned int sc0, sc1, sc2, sc3;
 	u32 val = 0;
 
-	pci_read_config_dword(dev, 0x1C4, &val);
+	pci_read_config_dword(l3->dev, 0x1C4, &val);
 
 	/* calculate subcache sizes */
-	sc0 = !(val & BIT(0));
-	sc1 = !(val & BIT(4));
-	sc2 = !(val & BIT(8))  + !(val & BIT(9));
-	sc3 = !(val & BIT(12)) + !(val & BIT(13));
+	l3->subcaches[0] = sc0 = !(val & BIT(0));
+	l3->subcaches[1] = sc1 = !(val & BIT(4));
+	l3->subcaches[2] = sc2 = !(val & BIT(8))  + !(val & BIT(9));
+	l3->subcaches[3] = sc3 = !(val & BIT(12)) + !(val & BIT(13));
 
-	return (max(max(max(sc0, sc1), sc2), sc3) << 10) - 1;
+	l3->indices = (max(max(max(sc0, sc1), sc2), sc3) << 10) - 1;
+}
+
+static struct amd_l3_cache * __cpuinit amd_init_l3_cache(int node)
+{
+	struct amd_l3_cache *l3;
+	struct pci_dev *dev = node_to_k8_nb_misc(node);
+
+	l3 = kzalloc(sizeof(struct amd_l3_cache), GFP_ATOMIC);
+	if (!l3) {
+		printk(KERN_WARNING "Error allocating L3 struct\n");
+		return NULL;
+	}
+
+	l3->dev = dev;
+
+	amd_calc_l3_indices(l3);
+
+	return l3;
 }
 
 static void __cpuinit
 amd_check_l3_disable(int index, struct _cpuid4_info_regs *this_leaf)
 {
+	int node;
+
+	if (boot_cpu_data.x86 != 0x10)
+		return;
+
 	if (index < 3)
 		return;
 
-	if (boot_cpu_data.x86 == 0x11)
+	/* see errata #382 and #388 */
+	if (boot_cpu_data.x86_model < 0x8)
 		return;
 
-	/* see errata #382 and #388 */
-	if ((boot_cpu_data.x86 == 0x10) &&
-	    ((boot_cpu_data.x86_model < 0x8) ||
-	     (boot_cpu_data.x86_mask  < 0x1)))
-		return;
+	if ((boot_cpu_data.x86_model == 0x8 ||
+	     boot_cpu_data.x86_model == 0x9)
+		&&
+	     boot_cpu_data.x86_mask < 0x1)
+			return;
 
 	/* not in virtualized environments */
 	if (num_k8_northbridges == 0)
 		return;
 
-	this_leaf->can_disable = true;
-	this_leaf->l3_indices  = amd_calc_l3_indices();
+	/*
+	 * Strictly speaking, the amount in @size below is leaked since it is
+	 * never freed but this is done only on shutdown so it doesn't matter.
+	 */
+	if (!l3_caches) {
+		int size = num_k8_northbridges * sizeof(struct amd_l3_cache *);
+
+		l3_caches = kzalloc(size, GFP_ATOMIC);
+		if (!l3_caches)
+			return;
+	}
+
+	node = amd_get_nb_id(smp_processor_id());
+
+	if (!l3_caches[node]) {
+		l3_caches[node] = amd_init_l3_cache(node);
+		l3_caches[node]->can_disable = true;
+	}
+
+	WARN_ON(!l3_caches[node]);
+
+	this_leaf->l3 = l3_caches[node];
 }
 
 static ssize_t show_cache_disable(struct _cpuid4_info *this_leaf, char *buf,
-				  unsigned int index)
+				  unsigned int slot)
 {
-	int cpu = cpumask_first(to_cpumask(this_leaf->shared_cpu_map));
-	int node = amd_get_nb_id(cpu);
-	struct pci_dev *dev = node_to_k8_nb_misc(node);
+	struct pci_dev *dev = this_leaf->l3->dev;
 	unsigned int reg = 0;
 
-	if (!this_leaf->can_disable)
+	if (!this_leaf->l3 || !this_leaf->l3->can_disable)
 		return -EINVAL;
 
 	if (!dev)
 		return -EINVAL;
 
-	pci_read_config_dword(dev, 0x1BC + index * 4, &reg);
+	pci_read_config_dword(dev, 0x1BC + slot * 4, &reg);
 	return sprintf(buf, "0x%08x\n", reg);
 }
 
-#define SHOW_CACHE_DISABLE(index)					\
+#define SHOW_CACHE_DISABLE(slot)					\
 static ssize_t								\
-show_cache_disable_##index(struct _cpuid4_info *this_leaf, char *buf)	\
+show_cache_disable_##slot(struct _cpuid4_info *this_leaf, char *buf)	\
 {									\
-	return show_cache_disable(this_leaf, buf, index);		\
+	return show_cache_disable(this_leaf, buf, slot);		\
 }
 SHOW_CACHE_DISABLE(0)
 SHOW_CACHE_DISABLE(1)
 
-static ssize_t store_cache_disable(struct _cpuid4_info *this_leaf,
-	const char *buf, size_t count, unsigned int index)
+static void amd_l3_disable_index(struct amd_l3_cache *l3, int cpu,
+				 unsigned slot, unsigned long idx)
 {
+	int i;
+
+	idx |= BIT(30);
+
+	/*
+	 *  disable index in all 4 subcaches
+	 */
+	for (i = 0; i < 4; i++) {
+		u32 reg = idx | (i << 20);
+
+		if (!l3->subcaches[i])
+			continue;
+
+		pci_write_config_dword(l3->dev, 0x1BC + slot * 4, reg);
+
+		/*
+		 * We need to WBINVD on a core on the node containing the L3
+		 * cache which indices we disable therefore a simple wbinvd()
+		 * is not sufficient.
+		 */
+		wbinvd_on_cpu(cpu);
+
+		reg |= BIT(31);
+		pci_write_config_dword(l3->dev, 0x1BC + slot * 4, reg);
+	}
+}
+
+
+static ssize_t store_cache_disable(struct _cpuid4_info *this_leaf,
+				   const char *buf, size_t count,
+				   unsigned int slot)
+{
+	struct pci_dev *dev = this_leaf->l3->dev;
 	int cpu = cpumask_first(to_cpumask(this_leaf->shared_cpu_map));
-	int node = amd_get_nb_id(cpu);
-	struct pci_dev *dev = node_to_k8_nb_misc(node);
 	unsigned long val = 0;
 
 #define SUBCACHE_MASK	(3UL << 20)
 #define SUBCACHE_INDEX	0xfff
 
-	if (!this_leaf->can_disable)
+	if (!this_leaf->l3 || !this_leaf->l3->can_disable)
 		return -EINVAL;
 
 	if (!capable(CAP_SYS_ADMIN))
@@ -398,26 +477,20 @@ static ssize_t store_cache_disable(struct _cpuid4_info *this_leaf,
 
 	/* do not allow writes outside of allowed bits */
 	if ((val & ~(SUBCACHE_MASK | SUBCACHE_INDEX)) ||
-	    ((val & SUBCACHE_INDEX) > this_leaf->l3_indices))
+	    ((val & SUBCACHE_INDEX) > this_leaf->l3->indices))
 		return -EINVAL;
 
-	val |= BIT(30);
-	pci_write_config_dword(dev, 0x1BC + index * 4, val);
-	/*
-	 * We need to WBINVD on a core on the node containing the L3 cache which
-	 * indices we disable therefore a simple wbinvd() is not sufficient.
-	 */
-	wbinvd_on_cpu(cpu);
-	pci_write_config_dword(dev, 0x1BC + index * 4, val | BIT(31));
+	amd_l3_disable_index(this_leaf->l3, cpu, slot, val);
+
 	return count;
 }
 
-#define STORE_CACHE_DISABLE(index)					\
+#define STORE_CACHE_DISABLE(slot)					\
 static ssize_t								\
-store_cache_disable_##index(struct _cpuid4_info *this_leaf,		\
+store_cache_disable_##slot(struct _cpuid4_info *this_leaf,		\
 			    const char *buf, size_t count)		\
 {									\
-	return store_cache_disable(this_leaf, buf, count, index);	\
+	return store_cache_disable(this_leaf, buf, count, slot);	\
 }
 STORE_CACHE_DISABLE(0)
 STORE_CACHE_DISABLE(1)
@@ -445,8 +518,7 @@ __cpuinit cpuid4_cache_lookup_regs(int index,
 
 	if (boot_cpu_data.x86_vendor == X86_VENDOR_AMD) {
 		amd_cpuid4(index, &eax, &ebx, &ecx);
-		if (boot_cpu_data.x86 >= 0x10)
-			amd_check_l3_disable(index, this_leaf);
+		amd_check_l3_disable(index, this_leaf);
 	} else {
 		cpuid_count(4, index, &eax.full, &ebx.full, &ecx.full, &edx);
 	}
@@ -619,22 +691,6 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 #endif
 	}
 
-	if (trace)
-		printk(KERN_INFO "CPU: Trace cache: %dK uops", trace);
-	else if (l1i)
-		printk(KERN_INFO "CPU: L1 I cache: %dK", l1i);
-
-	if (l1d)
-		printk(KERN_CONT ", L1 D cache: %dK\n", l1d);
-	else
-		printk(KERN_CONT "\n");
-
-	if (l2)
-		printk(KERN_INFO "CPU: L2 cache: %dK\n", l2);
-
-	if (l3)
-		printk(KERN_INFO "CPU: L3 cache: %dK\n", l3);
-
 	c->x86_cache_size = l3 ? l3 : (l2 ? l2 : (l1i+l1d));
 
 	return l2;
@@ -643,8 +699,8 @@ unsigned int __cpuinit init_intel_cacheinfo(struct cpuinfo_x86 *c)
 #ifdef CONFIG_SYSFS
 
 /* pointer to _cpuid4_info array (for each cache leaf) */
-static DEFINE_PER_CPU(struct _cpuid4_info *, cpuid4_info);
-#define CPUID4_INFO_IDX(x, y)	(&((per_cpu(cpuid4_info, x))[y]))
+static DEFINE_PER_CPU(struct _cpuid4_info *, ici_cpuid4_info);
+#define CPUID4_INFO_IDX(x, y)	(&((per_cpu(ici_cpuid4_info, x))[y]))
 
 #ifdef CONFIG_SMP
 static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu, int index)
@@ -656,7 +712,7 @@ static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu, int index)
 
 	if ((index == 3) && (c->x86_vendor == X86_VENDOR_AMD)) {
 		for_each_cpu(i, c->llc_shared_map) {
-			if (!per_cpu(cpuid4_info, i))
+			if (!per_cpu(ici_cpuid4_info, i))
 				continue;
 			this_leaf = CPUID4_INFO_IDX(i, index);
 			for_each_cpu(sibling, c->llc_shared_map) {
@@ -680,7 +736,7 @@ static void __cpuinit cache_shared_cpu_map_setup(unsigned int cpu, int index)
 			    c->apicid >> index_msb) {
 				cpumask_set_cpu(i,
 					to_cpumask(this_leaf->shared_cpu_map));
-				if (i != cpu && per_cpu(cpuid4_info, i))  {
+				if (i != cpu && per_cpu(ici_cpuid4_info, i))  {
 					sibling_leaf =
 						CPUID4_INFO_IDX(i, index);
 					cpumask_set_cpu(cpu, to_cpumask(
@@ -719,8 +775,9 @@ static void __cpuinit free_cache_attributes(unsigned int cpu)
 	for (i = 0; i < num_cache_leaves; i++)
 		cache_remove_shared_cpu_map(cpu, i);
 
-	kfree(per_cpu(cpuid4_info, cpu));
-	per_cpu(cpuid4_info, cpu) = NULL;
+	kfree(per_cpu(ici_cpuid4_info, cpu)->l3);
+	kfree(per_cpu(ici_cpuid4_info, cpu));
+	per_cpu(ici_cpuid4_info, cpu) = NULL;
 }
 
 static int
@@ -759,15 +816,15 @@ static int __cpuinit detect_cache_attributes(unsigned int cpu)
 	if (num_cache_leaves == 0)
 		return -ENOENT;
 
-	per_cpu(cpuid4_info, cpu) = kzalloc(
+	per_cpu(ici_cpuid4_info, cpu) = kzalloc(
 	    sizeof(struct _cpuid4_info) * num_cache_leaves, GFP_KERNEL);
-	if (per_cpu(cpuid4_info, cpu) == NULL)
+	if (per_cpu(ici_cpuid4_info, cpu) == NULL)
 		return -ENOMEM;
 
 	smp_call_function_single(cpu, get_cpu_leaves, &retval, true);
 	if (retval) {
-		kfree(per_cpu(cpuid4_info, cpu));
-		per_cpu(cpuid4_info, cpu) = NULL;
+		kfree(per_cpu(ici_cpuid4_info, cpu));
+		per_cpu(ici_cpuid4_info, cpu) = NULL;
 	}
 
 	return retval;
@@ -779,7 +836,7 @@ static int __cpuinit detect_cache_attributes(unsigned int cpu)
 extern struct sysdev_class cpu_sysdev_class; /* from drivers/base/cpu.c */
 
 /* pointer to kobject for cpuX/cache */
-static DEFINE_PER_CPU(struct kobject *, cache_kobject);
+static DEFINE_PER_CPU(struct kobject *, ici_cache_kobject);
 
 struct _index_kobject {
 	struct kobject kobj;
@@ -788,8 +845,8 @@ struct _index_kobject {
 };
 
 /* pointer to array of kobjects for cpuX/cache/indexY */
-static DEFINE_PER_CPU(struct _index_kobject *, index_kobject);
-#define INDEX_KOBJECT_PTR(x, y)		(&((per_cpu(index_kobject, x))[y]))
+static DEFINE_PER_CPU(struct _index_kobject *, ici_index_kobject);
+#define INDEX_KOBJECT_PTR(x, y)		(&((per_cpu(ici_index_kobject, x))[y]))
 
 #define show_one_plus(file_name, object, val)				\
 static ssize_t show_##file_name						\
@@ -921,7 +978,7 @@ static ssize_t store(struct kobject *kobj, struct attribute *attr,
 	return ret;
 }
 
-static struct sysfs_ops sysfs_ops = {
+static const struct sysfs_ops sysfs_ops = {
 	.show   = show,
 	.store  = store,
 };
@@ -937,10 +994,10 @@ static struct kobj_type ktype_percpu_entry = {
 
 static void __cpuinit cpuid4_cache_sysfs_exit(unsigned int cpu)
 {
-	kfree(per_cpu(cache_kobject, cpu));
-	kfree(per_cpu(index_kobject, cpu));
-	per_cpu(cache_kobject, cpu) = NULL;
-	per_cpu(index_kobject, cpu) = NULL;
+	kfree(per_cpu(ici_cache_kobject, cpu));
+	kfree(per_cpu(ici_index_kobject, cpu));
+	per_cpu(ici_cache_kobject, cpu) = NULL;
+	per_cpu(ici_index_kobject, cpu) = NULL;
 	free_cache_attributes(cpu);
 }
 
@@ -956,14 +1013,14 @@ static int __cpuinit cpuid4_cache_sysfs_init(unsigned int cpu)
 		return err;
 
 	/* Allocate all required memory */
-	per_cpu(cache_kobject, cpu) =
+	per_cpu(ici_cache_kobject, cpu) =
 		kzalloc(sizeof(struct kobject), GFP_KERNEL);
-	if (unlikely(per_cpu(cache_kobject, cpu) == NULL))
+	if (unlikely(per_cpu(ici_cache_kobject, cpu) == NULL))
 		goto err_out;
 
-	per_cpu(index_kobject, cpu) = kzalloc(
+	per_cpu(ici_index_kobject, cpu) = kzalloc(
 	    sizeof(struct _index_kobject) * num_cache_leaves, GFP_KERNEL);
-	if (unlikely(per_cpu(index_kobject, cpu) == NULL))
+	if (unlikely(per_cpu(ici_index_kobject, cpu) == NULL))
 		goto err_out;
 
 	return 0;
@@ -988,7 +1045,7 @@ static int __cpuinit cache_add_dev(struct sys_device * sys_dev)
 	if (unlikely(retval < 0))
 		return retval;
 
-	retval = kobject_init_and_add(per_cpu(cache_kobject, cpu),
+	retval = kobject_init_and_add(per_cpu(ici_cache_kobject, cpu),
 				      &ktype_percpu_entry,
 				      &sys_dev->kobj, "%s", "cache");
 	if (retval < 0) {
@@ -1003,19 +1060,19 @@ static int __cpuinit cache_add_dev(struct sys_device * sys_dev)
 
 		this_leaf = CPUID4_INFO_IDX(cpu, i);
 
-		if (this_leaf->can_disable)
+		if (this_leaf->l3 && this_leaf->l3->can_disable)
 			ktype_cache.default_attrs = default_l3_attrs;
 		else
 			ktype_cache.default_attrs = default_attrs;
 
 		retval = kobject_init_and_add(&(this_object->kobj),
 					      &ktype_cache,
-					      per_cpu(cache_kobject, cpu),
+					      per_cpu(ici_cache_kobject, cpu),
 					      "index%1lu", i);
 		if (unlikely(retval)) {
 			for (j = 0; j < i; j++)
 				kobject_put(&(INDEX_KOBJECT_PTR(cpu, j)->kobj));
-			kobject_put(per_cpu(cache_kobject, cpu));
+			kobject_put(per_cpu(ici_cache_kobject, cpu));
 			cpuid4_cache_sysfs_exit(cpu);
 			return retval;
 		}
@@ -1023,7 +1080,7 @@ static int __cpuinit cache_add_dev(struct sys_device * sys_dev)
 	}
 	cpumask_set_cpu(cpu, to_cpumask(cache_dev_map));
 
-	kobject_uevent(per_cpu(cache_kobject, cpu), KOBJ_ADD);
+	kobject_uevent(per_cpu(ici_cache_kobject, cpu), KOBJ_ADD);
 	return 0;
 }
 
@@ -1032,7 +1089,7 @@ static void __cpuinit cache_remove_dev(struct sys_device * sys_dev)
 	unsigned int cpu = sys_dev->id;
 	unsigned long i;
 
-	if (per_cpu(cpuid4_info, cpu) == NULL)
+	if (per_cpu(ici_cpuid4_info, cpu) == NULL)
 		return;
 	if (!cpumask_test_cpu(cpu, to_cpumask(cache_dev_map)))
 		return;
@@ -1040,7 +1097,7 @@ static void __cpuinit cache_remove_dev(struct sys_device * sys_dev)
 
 	for (i = 0; i < num_cache_leaves; i++)
 		kobject_put(&(INDEX_KOBJECT_PTR(cpu, i)->kobj));
-	kobject_put(per_cpu(cache_kobject, cpu));
+	kobject_put(per_cpu(ici_cache_kobject, cpu));
 	cpuid4_cache_sysfs_exit(cpu);
 }
 

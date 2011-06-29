@@ -4,7 +4,6 @@
  * Copyright (C) 2003 Al Borchers (alborchers@steinerpoint.com)
  * Copyright (C) 2008 David Brownell
  * Copyright (C) 2008 by Nokia Corporation
- * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
  *
  * This code also borrows from usbserial.c, which is
  * Copyright (C) 1999 - 2002 Greg Kroah-Hartman (greg@kroah.com)
@@ -24,6 +23,7 @@
 #include <linux/delay.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
+#include <linux/slab.h>
 
 #include "u_serial.h"
 
@@ -122,7 +122,7 @@ struct gs_port {
 };
 
 /* increase N_PORTS if you need more */
-#define N_PORTS		4
+#define N_PORTS		8
 static struct portmaster {
 	struct mutex	lock;			/* protect open/close */
 	struct gs_port	*port;
@@ -381,6 +381,10 @@ __acquires(&port->port_lock)
 				spin_unlock(&port->port_lock);
 				status = usb_ep_queue(in, req, GFP_ATOMIC);
 				spin_lock(&port->port_lock);
+				if (!port->port_usb) {
+					gs_free_req(in, req);
+					break;
+				}
 				if (status) {
 					printk(KERN_ERR "%s: %s err %d\n",
 					__func__, "queue", status);
@@ -410,7 +414,16 @@ __acquires(&port->port_lock)
 		spin_unlock(&port->port_lock);
 		status = usb_ep_queue(in, req, GFP_ATOMIC);
 		spin_lock(&port->port_lock);
-
+		/*
+		 * If port_usb is NULL, gserial disconnect is called
+		 * while the spinlock is dropped and all requests are
+		 * freed. Free the current request here.
+		 */
+		if (!port->port_usb) {
+			do_tty_wake = false;
+			gs_free_req(in, req);
+			break;
+		}
 		if (status) {
 			pr_debug("%s: %s %s err %d\n",
 					__func__, "queue", in->name, status);
@@ -419,9 +432,6 @@ __acquires(&port->port_lock)
 		}
 		prev_len = req->length;
 
-		/* abort immediately after disconnect */
-		if (!port->port_usb)
-			break;
 	}
 
 	if (do_tty_wake && port->port_tty)
@@ -462,7 +472,16 @@ __acquires(&port->port_lock)
 		spin_unlock(&port->port_lock);
 		status = usb_ep_queue(out, req, GFP_ATOMIC);
 		spin_lock(&port->port_lock);
-
+		/*
+		 * If port_usb is NULL, gserial disconnect is called
+		 * while the spinlock is dropped and all requests are
+		 * freed. Free the current request here.
+		 */
+		if (!port->port_usb) {
+			started = 0;
+			gs_free_req(out, req);
+			break;
+		}
 		if (status) {
 			pr_debug("%s: %s %s err %d\n",
 					__func__, "queue", out->name, status);
@@ -471,9 +490,6 @@ __acquires(&port->port_lock)
 		}
 		started++;
 
-		/* abort immediately after disconnect */
-		if (!port->port_usb)
-			break;
 	}
 	return started;
 }
@@ -559,11 +575,17 @@ recycle:
 		list_move(&req->list, &port->read_pool);
 	}
 
-	/* Push from tty to ldisc; without low_latency set this is handled by
-	 * a workqueue, so we won't get callbacks and can hold port_lock
+	/* Push from tty to ldisc; this is immediate with low_latency, and
+	 * may trigger callbacks to this driver ... so drop the spinlock.
 	 */
 	if (tty && do_push) {
+		spin_unlock_irq(&port->port_lock);
 		tty_flip_buffer_push(tty);
+		wake_up_interruptible(&tty->read_wait);
+		spin_lock_irq(&port->port_lock);
+
+		/* tty may have been closed */
+		tty = port->port_tty;
 	}
 
 
@@ -703,6 +725,8 @@ static int gs_start_io(struct gs_port *port)
 	port->n_read = 0;
 	started = gs_start_rx(port);
 
+	if (!port->port_usb)
+		return -EIO;
 	/* unblock any pending writes into our circular buffer */
 	if (started) {
 		tty_wakeup(port->port_tty);
@@ -805,6 +829,13 @@ static int gs_open(struct tty_struct *tty, struct file *file)
 
 	port->open_count = 1;
 	port->openclose = false;
+
+	/* low_latency means ldiscs work is carried in the same context
+	 * of tty_flip_buffer_push. The same can be called from IRQ with
+	 * low_latency = 0. But better to use a dedicated worker thread
+	 * to push the data.
+	 */
+	tty->low_latency = 1;
 
 	/* if connected, start the I/O stream */
 	if (port->port_usb) {
@@ -1415,8 +1446,6 @@ void gserial_disconnect(struct gserial *gser)
 	spin_unlock_irqrestore(&port->port_lock, flags);
 
 	/* disable endpoints, aborting down any active I/O */
-	usb_ep_fifo_flush(gser->out);
-	usb_ep_fifo_flush(gser->in);
 	usb_ep_disable(gser->out);
 	gser->out->driver_data = NULL;
 

@@ -32,7 +32,7 @@ extern void prom_cif_callback(void);
 /*
  * This provides SMP safety on the p1275buf.
  */
-DEFINE_SPINLOCK(prom_entry_lock);
+DEFINE_RAW_SPINLOCK(prom_entry_lock);
 
 void p1275_cmd_direct(unsigned long *args)
 {
@@ -40,13 +40,13 @@ void p1275_cmd_direct(unsigned long *args)
 
 	raw_local_save_flags(flags);
 	raw_local_irq_restore(PIL_NMI);
-	spin_lock(&prom_entry_lock);
+	raw_spin_lock(&prom_entry_lock);
 
 	prom_world(1);
 	prom_cif_direct(args);
 	prom_world(0);
 
-	spin_unlock(&prom_entry_lock);
+	raw_spin_unlock(&prom_entry_lock);
 	raw_local_irq_restore(flags);
 }
 

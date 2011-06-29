@@ -472,8 +472,12 @@ static int aac_slave_configure(struct scsi_device *sdev)
  *	total capacity and the queue depth supported by the target device.
  */
 
-static int aac_change_queue_depth(struct scsi_device *sdev, int depth)
+static int aac_change_queue_depth(struct scsi_device *sdev, int depth,
+				  int reason)
 {
+	if (reason != SCSI_QDEPTH_DEFAULT)
+		return -EOPNOTSUPP;
+
 	if (sdev->tagged_supported && (sdev->type == TYPE_DISK) &&
 	    (sdev_channel(sdev) == CONTAINER_CHANNEL)) {
 		struct scsi_device * dev;
@@ -701,12 +705,17 @@ static int aac_cfg_open(struct inode *inode, struct file *file)
  *	Bugs: Needs to handle hot plugging
  */
 
-static int aac_cfg_ioctl(struct inode *inode, struct file *file,
+static long aac_cfg_ioctl(struct file *file,
 		unsigned int cmd, unsigned long arg)
 {
+	int ret;
 	if (!capable(CAP_SYS_RAWIO))
 		return -EPERM;
-	return aac_do_ioctl(file->private_data, cmd, (void __user *)arg);
+	lock_kernel();
+	ret = aac_do_ioctl(file->private_data, cmd, (void __user *)arg);
+	unlock_kernel();
+
+	return ret;
 }
 
 #ifdef CONFIG_COMPAT
@@ -1025,7 +1034,7 @@ ssize_t aac_get_serial_number(struct device *device, char *buf)
 
 static const struct file_operations aac_cfg_fops = {
 	.owner		= THIS_MODULE,
-	.ioctl		= aac_cfg_ioctl,
+	.unlocked_ioctl	= aac_cfg_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl   = aac_compat_cfg_ioctl,
 #endif

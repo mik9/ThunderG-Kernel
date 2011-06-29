@@ -53,6 +53,7 @@
 #include "xfs_log_priv.h"
 #include "xfs_filestream.h"
 #include "xfs_vnodeops.h"
+#include "xfs_trace.h"
 
 int
 xfs_setattr(
@@ -255,7 +256,7 @@ xfs_setattr(
 		    iattr->ia_size > ip->i_d.di_size) {
 			code = xfs_flush_pages(ip,
 					ip->i_d.di_size, iattr->ia_size,
-					XFS_B_ASYNC, FI_NONE);
+					XBF_ASYNC, FI_NONE);
 		}
 
 		/* wait for all I/O to complete */
@@ -266,7 +267,7 @@ xfs_setattr(
 		if (code) {
 			ASSERT(tp == NULL);
 			lock_flags &= ~XFS_ILOCK_EXCL;
-			ASSERT(lock_flags == XFS_IOLOCK_EXCL);
+			ASSERT(lock_flags == XFS_IOLOCK_EXCL || !need_iolock);
 			goto error_return;
 		}
 		tp = xfs_trans_alloc(mp, XFS_TRANS_SETATTR_SIZE);
@@ -523,9 +524,8 @@ xfs_readlink_bmap(
 		d = XFS_FSB_TO_DADDR(mp, mval[n].br_startblock);
 		byte_cnt = XFS_FSB_TO_B(mp, mval[n].br_blockcount);
 
-		bp = xfs_buf_read_flags(mp->m_ddev_targp, d, BTOBB(byte_cnt),
-					XBF_LOCK | XBF_MAPPED |
-					XBF_DONT_BLOCK);
+		bp = xfs_buf_read(mp->m_ddev_targp, d, BTOBB(byte_cnt),
+				  XBF_LOCK | XBF_MAPPED | XBF_DONT_BLOCK);
 		error = XFS_BUF_GETERROR(bp);
 		if (error) {
 			xfs_ioerror_alert("xfs_readlink",
@@ -580,108 +580,6 @@ xfs_readlink(
 
  out:
 	xfs_iunlock(ip, XFS_ILOCK_SHARED);
-	return error;
-}
-
-/*
- * xfs_fsync
- *
- * This is called to sync the inode and its data out to disk.  We need to hold
- * the I/O lock while flushing the data, and the inode lock while flushing the
- * inode.  The inode lock CANNOT be held while flushing the data, so acquire
- * after we're done with that.
- */
-int
-xfs_fsync(
-	xfs_inode_t	*ip)
-{
-	xfs_trans_t	*tp;
-	int		error = 0;
-	int		log_flushed = 0;
-
-	xfs_itrace_entry(ip);
-
-	if (XFS_FORCED_SHUTDOWN(ip->i_mount))
-		return XFS_ERROR(EIO);
-
-	/*
-	 * We always need to make sure that the required inode state is safe on
-	 * disk.  The inode might be clean but we still might need to force the
-	 * log because of committed transactions that haven't hit the disk yet.
-	 * Likewise, there could be unflushed non-transactional changes to the
-	 * inode core that have to go to disk and this requires us to issue
-	 * a synchronous transaction to capture these changes correctly.
-	 *
-	 * This code relies on the assumption that if the update_* fields
-	 * of the inode are clear and the inode is unpinned then it is clean
-	 * and no action is required.
-	 */
-	xfs_ilock(ip, XFS_ILOCK_SHARED);
-
-	if (!ip->i_update_core) {
-		/*
-		 * Timestamps/size haven't changed since last inode flush or
-		 * inode transaction commit.  That means either nothing got
-		 * written or a transaction committed which caught the updates.
-		 * If the latter happened and the transaction hasn't hit the
-		 * disk yet, the inode will be still be pinned.  If it is,
-		 * force the log.
-		 */
-		xfs_iunlock(ip, XFS_ILOCK_SHARED);
-		if (xfs_ipincount(ip)) {
-			error = _xfs_log_force(ip->i_mount, (xfs_lsn_t)0,
-				      XFS_LOG_FORCE | XFS_LOG_SYNC,
-				      &log_flushed);
-		}
-	} else	{
-		/*
-		 * Kick off a transaction to log the inode core to get the
-		 * updates.  The sync transaction will also force the log.
-		 */
-		xfs_iunlock(ip, XFS_ILOCK_SHARED);
-		tp = xfs_trans_alloc(ip->i_mount, XFS_TRANS_FSYNC_TS);
-		error = xfs_trans_reserve(tp, 0,
-				XFS_FSYNC_TS_LOG_RES(ip->i_mount), 0, 0, 0);
-		if (error) {
-			xfs_trans_cancel(tp, 0);
-			return error;
-		}
-		xfs_ilock(ip, XFS_ILOCK_EXCL);
-
-		/*
-		 * Note - it's possible that we might have pushed ourselves out
-		 * of the way during trans_reserve which would flush the inode.
-		 * But there's no guarantee that the inode buffer has actually
-		 * gone out yet (it's delwri).	Plus the buffer could be pinned
-		 * anyway if it's part of an inode in another recent
-		 * transaction.	 So we play it safe and fire off the
-		 * transaction anyway.
-		 */
-		xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
-		xfs_trans_ihold(tp, ip);
-		xfs_trans_log_inode(tp, ip, XFS_ILOG_CORE);
-		xfs_trans_set_sync(tp);
-		error = _xfs_trans_commit(tp, 0, &log_flushed);
-
-		xfs_iunlock(ip, XFS_ILOCK_EXCL);
-	}
-
-	if (ip->i_mount->m_flags & XFS_MOUNT_BARRIER) {
-		/*
-		 * If the log write didn't issue an ordered tag we need
-		 * to flush the disk cache for the data device now.
-		 */
-		if (!log_flushed)
-			xfs_blkdev_issue_flush(ip->i_mount->m_ddev_targp);
-
-		/*
-		 * If this inode is on the RT dev we need to flush that
-		 * cache as well.
-		 */
-		if (XFS_IS_REALTIME_INODE(ip))
-			xfs_blkdev_issue_flush(ip->i_mount->m_rtdev_targp);
-	}
-
 	return error;
 }
 
@@ -1088,7 +986,7 @@ xfs_release(
 		 */
 		truncated = xfs_iflags_test_and_clear(ip, XFS_ITRUNCATED);
 		if (truncated && VN_DIRTY(VFS_I(ip)) && ip->i_delayed_blks > 0)
-			xfs_flush_pages(ip, 0, -1, XFS_B_ASYNC, FI_NONE);
+			xfs_flush_pages(ip, 0, -1, XBF_ASYNC, FI_NONE);
 	}
 
 	if (ip->i_d.di_nlink != 0) {
@@ -1375,7 +1273,6 @@ xfs_lookup(
 	if (error)
 		goto out_free_name;
 
-	xfs_itrace_ref(*ipp);
 	return 0;
 
 out_free_name:
@@ -1521,7 +1418,6 @@ xfs_create(
 	 * At this point, we've gotten a newly allocated inode.
 	 * It is locked (and joined to the transaction).
 	 */
-	xfs_itrace_ref(ip);
 	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL));
 
 	/*
@@ -1981,9 +1877,6 @@ xfs_remove(
 	if (!is_dir && link_zero && xfs_inode_is_filestream(ip))
 		xfs_filestream_deassociate(ip);
 
-	xfs_itrace_exit(ip);
-	xfs_itrace_exit(dp);
-
  std_return:
 	if (DM_EVENT_ENABLED(dp, DM_EVENT_POSTREMOVE)) {
 		XFS_SEND_NAMESP(mp, DM_EVENT_POSTREMOVE, dp, DM_RIGHT_NULL,
@@ -2196,7 +2089,8 @@ xfs_symlink(
 	if (DM_EVENT_ENABLED(dp, DM_EVENT_SYMLINK)) {
 		error = XFS_SEND_NAMESP(mp, DM_EVENT_SYMLINK, dp,
 					DM_RIGHT_NULL, NULL, DM_RIGHT_NULL,
-					link_name->name, target_path, 0, 0, 0);
+					link_name->name,
+					(unsigned char *)target_path, 0, 0, 0);
 		if (error)
 			return error;
 	}
@@ -2280,7 +2174,6 @@ xfs_symlink(
 			goto error_return;
 		goto error1;
 	}
-	xfs_itrace_ref(ip);
 
 	/*
 	 * An error after we've joined dp to the transaction will result in the
@@ -2393,7 +2286,8 @@ std_return:
 					dp, DM_RIGHT_NULL,
 					error ? NULL : ip,
 					DM_RIGHT_NULL, link_name->name,
-					target_path, 0, error, 0);
+					(unsigned char *)target_path,
+					0, error, 0);
 	}
 
 	if (!error)
@@ -2823,7 +2717,6 @@ xfs_free_file_space(
 	ioffset = offset & ~(rounding - 1);
 
 	if (VN_CACHED(VFS_I(ip)) != 0) {
-		xfs_inval_cached_trace(ip, ioffset, -1, ioffset, -1);
 		error = xfs_flushinval_pages(ip, ioffset, -1, FI_REMAPF_LOCKED);
 		if (error)
 			goto out_unlock_iolock;

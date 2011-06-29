@@ -192,7 +192,6 @@ void prom_getstring(int node, const char *prop, char *user_buf, int ubuf_size)
 	if (len != -1)
 		return;
 	user_buf[0] = 0;
-	return;
 }
 EXPORT_SYMBOL(prom_getstring);
 

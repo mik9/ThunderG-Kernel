@@ -24,7 +24,9 @@
 #include <linux/init.h>
 #include <linux/rcupdate.h>
 #include <linux/list.h>
+#include <linux/slab.h>
 #include <net/pkt_sched.h>
+#include <net/dst.h>
 
 /* Main transmission queue. */
 
@@ -39,6 +41,7 @@
 
 static inline int dev_requeue_skb(struct sk_buff *skb, struct Qdisc *q)
 {
+	skb_dst_force(skb);
 	q->gso_skb = skb;
 	q->qstats.requeues++;
 	q->q.qlen++;	/* it's still part of the queue */
@@ -93,7 +96,7 @@ static inline int handle_dev_cpu_collision(struct sk_buff *skb,
 		 * Another cpu is holding lock, requeue & delay xmits for
 		 * some time.
 		 */
-		__get_cpu_var(netdev_rx_stat).cpu_collision++;
+		__get_cpu_var(softnet_data).cpu_collision++;
 		ret = dev_requeue_skb(skb, q);
 	}
 
@@ -119,32 +122,26 @@ int sch_direct_xmit(struct sk_buff *skb, struct Qdisc *q,
 	spin_unlock(root_lock);
 
 	HARD_TX_LOCK(dev, txq, smp_processor_id());
-	if (!netif_tx_queue_stopped(txq) &&
-	    !netif_tx_queue_frozen(txq))
+	if (!netif_tx_queue_stopped(txq) && !netif_tx_queue_frozen(txq))
 		ret = dev_hard_start_xmit(skb, dev, txq);
+
 	HARD_TX_UNLOCK(dev, txq);
 
 	spin_lock(root_lock);
 
-	switch (ret) {
-	case NETDEV_TX_OK:
-		/* Driver sent out skb successfully */
+	if (dev_xmit_complete(ret)) {
+		/* Driver sent out skb successfully or skb was consumed */
 		ret = qdisc_qlen(q);
-		break;
-
-	case NETDEV_TX_LOCKED:
+	} else if (ret == NETDEV_TX_LOCKED) {
 		/* Driver try lock failed */
 		ret = handle_dev_cpu_collision(skb, txq, q);
-		break;
-
-	default:
+	} else {
 		/* Driver returned NETDEV_TX_BUSY - requeue skb */
 		if (unlikely (ret != NETDEV_TX_BUSY && net_ratelimit()))
 			printk(KERN_WARNING "BUG %s code %d qlen %d\n",
 			       dev->name, ret, q->q.qlen);
 
 		ret = dev_requeue_skb(skb, q);
-		break;
 	}
 
 	if (ret && (netif_tx_queue_stopped(txq) ||
@@ -184,7 +181,7 @@ static inline int qdisc_restart(struct Qdisc *q)
 	skb = dequeue_skb(q);
 	if (unlikely(!skb))
 		return 0;
-
+	WARN_ON_ONCE(skb_dst_is_noref(skb));
 	root_lock = qdisc_lock(q);
 	dev = qdisc_dev(q);
 	txq = netdev_get_tx_queue(dev, skb_get_queue_mapping(skb));
@@ -552,7 +549,7 @@ struct Qdisc *qdisc_alloc(struct netdev_queue *dev_queue,
 	unsigned int size;
 	int err = -ENOBUFS;
 
-	/* ensure that the Qdisc and the private data are 32-byte aligned */
+	/* ensure that the Qdisc and the private data are 64-byte aligned */
 	size = QDISC_ALIGN(sizeof(*sch));
 	size += ops->priv_size + (QDISC_ALIGNTO - 1);
 
@@ -614,6 +611,13 @@ void qdisc_reset(struct Qdisc *qdisc)
 }
 EXPORT_SYMBOL(qdisc_reset);
 
+static void qdisc_rcu_free(struct rcu_head *head)
+{
+	struct Qdisc *qdisc = container_of(head, struct Qdisc, rcu_head);
+
+	kfree((char *) qdisc - qdisc->padded);
+}
+
 void qdisc_destroy(struct Qdisc *qdisc)
 {
 	const struct Qdisc_ops  *ops = qdisc->ops;
@@ -637,7 +641,11 @@ void qdisc_destroy(struct Qdisc *qdisc)
 	dev_put(qdisc_dev(qdisc));
 
 	kfree_skb(qdisc->gso_skb);
-	kfree((char *) qdisc - qdisc->padded);
+	/*
+	 * gen_estimator est_timer() might access qdisc->q.lock,
+	 * wait a RCU grace period before freeing qdisc.
+	 */
+	call_rcu(&qdisc->rcu_head, qdisc_rcu_free);
 }
 EXPORT_SYMBOL(qdisc_destroy);
 

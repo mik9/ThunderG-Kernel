@@ -1,20 +1,19 @@
 /* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 and
- * only version 2 as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
- * 02110-1301, USA.
- *
- */
+*
+* This program is free software; you can redistribute it and/or modify
+* it under the terms of the GNU General Public License version 2 and
+* only version 2 as published by the Free Software Foundation.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with this program; if not, write to the Free Software
+* Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+* 02110-1301, USA.
+*/
 
 /*
 per-process_perf
@@ -50,9 +49,52 @@ INCLUDE FILES FOR MODULE
 #include <asm/thread_notify.h>
 #include "asm/uaccess.h"
 #include "cp15_registers.h"
+#include "l2_cp15_registers.h"
 #include <asm/perftypes.h>
 #include "per-axi.h"
 #include "perf.h"
+
+#define DEBUG_SWAPIO
+#ifdef DEBUG_SWAPIO
+#define MR_SIZE 1024
+#define PM_PP_ERR -1
+struct mark_data_s {
+  long c;
+  long cpu;
+  unsigned long pid_old;
+  unsigned long pid_new;
+};
+
+struct mark_data_s markRay[MR_SIZE] __attribute__((aligned(16)));
+int mrcnt;
+
+DEFINE_SPINLOCK(_mark_lock);
+
+static inline void MARKPIDS(char a, int opid, int npid)
+{
+	int cpu = smp_processor_id();
+
+	if (opid == 0)
+		return;
+	spin_lock(&_mark_lock);
+	if (++mrcnt >= MR_SIZE)
+		mrcnt = 0;
+	spin_unlock(&_mark_lock);
+
+	markRay[mrcnt].pid_old = opid;
+	markRay[mrcnt].pid_new = npid;
+	markRay[mrcnt].cpu = cpu;
+	markRay[mrcnt].c = a;
+}
+static inline void MARK(char a) { MARKPIDS(a, 0xFFFF, 0xFFFF); }
+static inline void MARKPID(char a, int pid) { MARKPIDS(a, pid, 0xFFFF); }
+
+#else
+#define MARK(a)
+#define MARKPID(a, b)
+#define MARKPIDS(a, b, c)
+
+#endif /* DEBUG_SWAPIO */
 
 /*
 DEFINITIONS AND DECLARATIONS FOR MODULE
@@ -87,6 +129,7 @@ Constant / Define Declarations
 #define L2_EVENTS_1  3
 
 #define PM_CYCLE_OVERFLOW_MASK 0x80000000
+#define L2_PM_CYCLE_OVERFLOW_MASK 0x80000000
 
 #define PM_START_ALL() do {\
 	if (pm_global) \
@@ -102,24 +145,54 @@ Constant / Define Declarations
 	} while (0);
 
 /*
+ * Accessors for SMP based variables.
+ */
+#define _SWAPS(p) ((p)->cnts[smp_processor_id()].swaps)
+#define _CYCLES(p) ((p)->cnts[smp_processor_id()].cycles)
+#define _COUNTS(p, i) ((p)->cnts[smp_processor_id()].counts[i])
+#define _L2COUNTS(p, i) ((p)->cnts[smp_processor_id()].l2_counts[i])
+#define _L2CYCLES(p) ((p)->cnts[smp_processor_id()].l2_cycles)
+
+/*
   Type Declarations
 */
-struct per_process_perf_mon_type{
+
+/*
+ * Counts are on a per core basis.
+ */
+struct pm_counters_s {
   unsigned long long  cycles;
+  unsigned long long  l2_cycles;
   unsigned long long  counts[PERF_NUM_MONITORS];
+  unsigned long long  l2_counts[PERF_NUM_MONITORS];
+  unsigned long  swaps;
+};
+
+struct per_process_perf_mon_type{
+  struct pm_counters_s cnts[NR_CPUS];
   unsigned long  control;
   unsigned long  index[PERF_NUM_MONITORS];
+  unsigned long  l2_index[PERF_NUM_MONITORS];
   unsigned long  pid;
   struct proc_dir_entry *proc;
-  unsigned long  swaps;
+  struct proc_dir_entry *l2_proc;
   unsigned short flags;
+  unsigned short running_cpu;
   char           *pidName;
   unsigned long lpm0evtyper;
   unsigned long lpm1evtyper;
   unsigned long lpm2evtyper;
   unsigned long l2lpmevtyper;
   unsigned long vlpmevtyper;
+  unsigned long l2pmevtyper0;
+  unsigned long l2pmevtyper1;
+  unsigned long l2pmevtyper2;
+  unsigned long l2pmevtyper3;
+  unsigned long l2pmevtyper4;
 };
+
+unsigned long last_in_pid[NR_CPUS];
+unsigned long fake_swap_out[NR_CPUS] = {0};
 
 /*
   Local Object Definitions
@@ -129,8 +202,10 @@ struct proc_dir_entry *proc_dir;
 struct proc_dir_entry *settings_dir;
 struct proc_dir_entry *values_dir;
 struct proc_dir_entry *axi_dir;
+struct proc_dir_entry *l2_dir;
 struct proc_dir_entry *axi_settings_dir;
 struct proc_dir_entry *axi_results_dir;
+struct proc_dir_entry *l2_results_dir;
 
 unsigned long pp_enabled;
 unsigned long pp_settings_valid = -1;
@@ -138,6 +213,7 @@ unsigned long pp_auto_lock;
 unsigned long pp_set_pid;
 signed long pp_clear_pid = -1;
 unsigned long per_proc_event[PERF_NUM_MONITORS];
+unsigned long l2_per_proc_event[PERF_NUM_MONITORS];
 unsigned long dbg_flags;
 unsigned long pp_lpm0evtyper;
 unsigned long pp_lpm1evtyper;
@@ -148,6 +224,12 @@ unsigned long pm_stop_for_interrupts;
 unsigned long pm_global;   /* track all, not process based */
 unsigned long pm_global_enable;
 unsigned long pm_remove_pid;
+
+unsigned long pp_l2pmevtyper0;
+unsigned long pp_l2pmevtyper1;
+unsigned long pp_l2pmevtyper2;
+unsigned long pp_l2pmevtyper3;
+unsigned long pp_l2pmevtyper4;
 
 unsigned long pp_proc_entry_index;
 char *per_process_proc_names[PP_MAX_PROC_ENTRIES];
@@ -220,18 +302,67 @@ SIDE EFFECTS
 int per_process_results_read(char *page, char **start, off_t off, int count,
    int *eof, void *data)
 {
+	struct per_process_perf_mon_type *p =
+		(struct per_process_perf_mon_type *)data;
+	struct pm_counters_s cnts;
+	int i, j;
+
+	/*
+	* Total across all CPUS
+	*/
+	memset(&cnts, 0, sizeof(cnts));
+	for (i = 0; i < num_possible_cpus(); i++) {
+		cnts.swaps += p->cnts[i].swaps;
+		cnts.cycles += p->cnts[i].cycles;
+		for (j = 0; j < PERF_NUM_MONITORS; j++)
+			cnts.counts[j] += p->cnts[i].counts[j];
+	}
+
+	/*
+	* Display as single results of the totals calculated above.
+	* Do we want to display or have option to display individula cores?
+	*/
+	return sprintf(page, "pid:%lu one:%s:%llu two:%s:%llu three:%s:%llu \
+	four:%s:%llu cycles:%llu swaps:%lu\n",
+	p->pid,
+	per_process_get_name(p->index[0]), cnts.counts[0],
+	per_process_get_name(p->index[1]), cnts.counts[1],
+	per_process_get_name(p->index[2]), cnts.counts[2],
+	per_process_get_name(p->index[3]), cnts.counts[3],
+	cnts.cycles, cnts.swaps);
+}
+
+int per_process_l2_results_read(char *page, char **start, off_t off, int count,
+   int *eof, void *data)
+{
   struct per_process_perf_mon_type *p =
 	(struct per_process_perf_mon_type *)data;
+	struct pm_counters_s cnts;
+	int i, j;
 
-  return sprintf(page, "pid:%lu one:%s:%llu two:%s:%llu three:%s:%llu \
-	four:%s:%llu cycles:%llu swaps:%lu\n",
+	/*
+	* Total across all CPUS
+	*/
+	memset(&cnts, 0, sizeof(cnts));
+	for (i = 0; i < num_possible_cpus(); i++) {
+		cnts.l2_cycles += p->cnts[i].l2_cycles;
+		for (j = 0; j < PERF_NUM_MONITORS; j++)
+			cnts.l2_counts[j] += p->cnts[i].l2_counts[j];
+	}
+
+  /*
+   * Display as single results of the totals calculated above.
+   * Do we want to display or have option to display individula cores?
+   */
+   return sprintf(page, "pid:%lu l2_one:%s:%llu l2_two:%s:%llu \
+	l2_three:%s:%llu \
+	l2_four:%s:%llu l2_cycles:%llu\n",
      p->pid,
-     per_process_get_name(p->index[0]), p->counts[0],
-     per_process_get_name(p->index[1]), p->counts[1],
-     per_process_get_name(p->index[2]), p->counts[2],
-     per_process_get_name(p->index[3]), p->counts[3],
-     p->cycles, p->swaps);
-
+     per_process_get_name(p->l2_index[0]), cnts.l2_counts[0],
+     per_process_get_name(p->l2_index[1]), cnts.l2_counts[1],
+     per_process_get_name(p->l2_index[2]), cnts.l2_counts[2],
+     per_process_get_name(p->l2_index[3]), cnts.l2_counts[3],
+     cnts.l2_cycles);
 }
 
 /*
@@ -317,6 +448,28 @@ void per_process_create_results_proc(struct per_process_perf_mon_type *p)
 	p->proc->data = (void *)p;
 }
 
+void per_process_create_l2_results_proc(struct per_process_perf_mon_type *p)
+{
+
+	if (0 == p->pidName)
+		p->pidName = kmalloc(12, GFP_KERNEL);
+	if (0 == p->pidName)
+		return;
+	sprintf(p->pidName, "%ld", p->pid);
+
+	if (0 == p->l2_proc) {
+		p->l2_proc = create_proc_entry(p->pidName, 0777,
+			l2_results_dir);
+		if (0 == p->l2_proc)
+			return;
+	} else {
+		p->l2_proc->name = p->pidName;
+	}
+
+	p->l2_proc->read_proc = per_process_l2_results_read;
+	p->l2_proc->write_proc = per_process_results_write;
+	p->l2_proc->data = (void *)p;
+}
 /*
 FUNCTION per_process_swap_out
 
@@ -331,24 +484,62 @@ RETURN VALUE
 
 SIDE EFFECTS
 */
-void per_process_swap_out(struct per_process_perf_mon_type *p)
+typedef void (*vfun)(void *);
+void per_process_swap_out(struct per_process_perf_mon_type *data)
 {
 	int i;
 	unsigned long overflow;
+#ifdef CONFIG_ARCH_MSM8X60
+	unsigned long l2_overflow;
+#endif
+	struct per_process_perf_mon_type *p = data;
 
+	MARKPIDS('O', p->pid, 0);
 	RCP15_PMOVSR(overflow);
+#ifdef CONFIG_ARCH_MSM8X60
+	RCP15_L2PMOVSR(l2_overflow);
+#endif
 
-	if (pp_enabled)
-		p->swaps++;
-	p->cycles += pm_get_cycle_count();
+	if (!pp_enabled)
+		return;
+
+	/*
+	* The kernel for some reason (2.6.32.9) starts a process context on
+	* one core and ends on another.  So the swap in and swap out can be
+	* on different cores.  If this happens, we need to stop the
+	* counters and collect the data on the core that started the counters
+	* ....otherwise we receive invalid data.  So we mark the the core with
+	* the process as deferred.  The next time a process is swapped on
+	* the core that the process was running on, the counters will be
+	* updated.
+	*/
+	if ((smp_processor_id() != p->running_cpu) && (p->pid != 0)) {
+		fake_swap_out[p->running_cpu] = 1;
+		return;
+	}
+
+	_SWAPS(p)++;
+	_CYCLES(p) += pm_get_cycle_count();
+
 	if (overflow & PM_CYCLE_OVERFLOW_MASK)
-		p->cycles += 0xFFFFFFFF;
+		_CYCLES(p) += 0xFFFFFFFF;
 
 	for (i = 0; i < PERF_NUM_MONITORS; i++) {
-		p->counts[i] += pm_get_count(i);
-		if (overflow & (1<<i))
-			p->counts[i] += 0xFFFFFFFF;
+		_COUNTS(p, i) += pm_get_count(i);
+		if (overflow & (1 << i))
+			_COUNTS(p, i) += 0xFFFFFFFF;
 	}
+
+#ifdef CONFIG_ARCH_MSM8X60
+	_L2CYCLES(p) += l2_pm_get_cycle_count();
+	if (l2_overflow & L2_PM_CYCLE_OVERFLOW_MASK)
+		_L2CYCLES(p) += 0xFFFFFFFF;
+	for (i = 0; i < PERF_NUM_MONITORS; i++) {
+		_L2COUNTS(p, i) += l2_pm_get_count(i);
+		if (l2_overflow & (1 << i))
+			_L2COUNTS(p, i) += 0xFFFFFFFF;
+	}
+#endif
 }
 
 /*
@@ -382,6 +573,8 @@ void per_process_remove_manual(unsigned long pid)
 	*/
 	if (p->proc)
 		remove_proc_entry(p->pidName, values_dir);
+	if (p->l2_proc)
+		remove_proc_entry(p->pidName, l2_results_dir);
 	kfree(p->pidName);
 
 	/*
@@ -428,15 +621,21 @@ void per_process_initialize(struct per_process_perf_mon_type *p,
 	* We want to keep the proc entry and the name
 	*/
 	p->pid = pid;
+
 	/*
 	* Create a proc entry for this pid, then get the current event types and
 	* store in data struct so when the process is switched in we can track
 	* it.
 	*/
-	if (p->proc == 0)
+	if (p->proc == 0) {
 		per_process_create_results_proc(p);
-	p->cycles = 0;
-	p->swaps = 0;
+#ifdef CONFIG_ARCH_MSM8X60
+		per_process_create_l2_results_proc(p);
+#endif
+	}
+	_CYCLES(p) = 0;
+	_L2CYCLES(p) = 0;
+	_SWAPS(p) = 0;
 	/*
 	* Set the per process data struct, but not the monitors until later...
 	* Init only happens with the user sets the SetPID variable to this pid
@@ -444,13 +643,26 @@ void per_process_initialize(struct per_process_perf_mon_type *p,
 	*/
 	for (i = 0; i < PERF_NUM_MONITORS; i++) {
 		p->index[i] = per_proc_event[i];
-		p->counts[i] = 0;
+#ifdef CONFIG_ARCH_MSM8X60
+		p->l2_index[i] = l2_per_proc_event[i];
+#endif
+		_COUNTS(p, i) = 0;
+		_L2COUNTS(p, i) = 0;
 	}
 	p->lpm0evtyper  = pp_lpm0evtyper;
 	p->lpm1evtyper  = pp_lpm1evtyper;
 	p->lpm2evtyper  = pp_lpm2evtyper;
 	p->l2lpmevtyper = pp_l2lpmevtyper;
 	p->vlpmevtyper  = pp_vlpmevtyper;
+
+#ifdef CONFIG_ARCH_MSM8X60
+	p->l2pmevtyper0  = pp_l2pmevtyper0;
+	p->l2pmevtyper1  = pp_l2pmevtyper1;
+	p->l2pmevtyper2  = pp_l2pmevtyper2;
+	p->l2pmevtyper3  = pp_l2pmevtyper3;
+	p->l2pmevtyper4  = pp_l2pmevtyper4;
+#endif
+
 	/*
 	* Reset pid and settings value
 	*/
@@ -477,6 +689,7 @@ void per_process_swap_in(struct per_process_perf_mon_type *p_new,
 {
 	int i;
 
+	MARKPIDS('I', p_new->pid, 0);
 	/*
 	* If the set proc variable == the current pid then init a new
 	* entry...
@@ -484,16 +697,30 @@ void per_process_swap_in(struct per_process_perf_mon_type *p_new,
 	if (pp_set_pid == pid)
 		per_process_initialize(p_new, pid);
 
+	p_new->running_cpu = smp_processor_id();
+	last_in_pid[smp_processor_id()] = pid;
+
 	/*
 	* setup the monitors for this process.
 	*/
-	for (i = 0; i < PERF_NUM_MONITORS; i++)
+	for (i = 0; i < PERF_NUM_MONITORS; i++) {
 		pm_set_event(i, p_new->index[i]);
+#ifdef CONFIG_ARCH_MSM8X60
+		l2_pm_set_event(i, p_new->l2_index[i]);
+#endif
+	}
 	pm_set_local_iu(p_new->lpm0evtyper);
 	pm_set_local_xu(p_new->lpm1evtyper);
 	pm_set_local_su(p_new->lpm2evtyper);
 	pm_set_local_l2(p_new->l2lpmevtyper);
 
+#ifdef CONFIG_ARCH_MSM8X60
+	pm_set_local_bu(p_new->l2pmevtyper0);
+	pm_set_local_cb(p_new->l2pmevtyper1);
+	pm_set_local_mp(p_new->l2pmevtyper2);
+	pm_set_local_sp(p_new->l2pmevtyper3);
+	pm_set_local_scu(p_new->l2pmevtyper4);
+#endif
 }
 
 /*
@@ -512,76 +739,109 @@ RETURN VALUE
 
 SIDE EFFECTS
 */
+
+DEFINE_SPINLOCK(pm_lock);
 void _per_process_switch(unsigned long old_pid, unsigned long new_pid)
 {
-	struct per_process_perf_mon_type *p_old, *p_new;
+  struct per_process_perf_mon_type *p_old, *p_new;
 
 	if (pm_global_enable == 0)
 		return;
-	  pm_stop_all();
-	/*
-	* Always collect for 0, it collects for all.
-	*/
-	if (pp_enabled) {
-		if (first_switch == 1) {
-			per_process_initialize(&perf_mons[0], 0);
-			first_switch = 0;
-		}
-		per_process_swap_out(&perf_mons[0]);
-		per_process_swap_in(&perf_mons[0], 0);
-	}
 
-	p_old = per_process_find(old_pid);
-	p_new = per_process_find(new_pid);
+	spin_lock(&pm_lock);
+
+	pm_stop_all();
+#ifdef CONFIG_ARCH_MSM8X60
+	l2_pm_stop_all();
+#endif
+
+	/*
+	 * We detected that the process was swapped in on one core and out on
+	 * a different core.  This does not allow us to stop and stop counters
+	 * properly so we need to defer processing.  This checks to see if there
+	 * is any defered processing necessary. And does it... */
+	if (fake_swap_out[smp_processor_id()] != 0) {
+		fake_swap_out[smp_processor_id()] = 0;
+		p_old = per_process_find(last_in_pid[smp_processor_id()]);
+		last_in_pid[smp_processor_id()] = 0;
+		if (p_old != 0)
+			per_process_swap_out(p_old);
+	}
 
 	/*
 	* Clear the data collected so far for this process?
 	*/
 	if (pp_clear_pid != -1) {
-		int i;
 		struct per_process_perf_mon_type *p_clear =
 			per_process_find(pp_clear_pid);
 		if (p_clear) {
-			p_clear->swaps = 0;
-			p_clear->cycles = 0;
-			for (i = 0; i < PERF_NUM_MONITORS; i++)
-				p_clear->counts[i] = 0;
+			memset(p_clear->cnts, 0,
+			sizeof(struct pm_counters_s)*num_possible_cpus());
 			printk(KERN_INFO "Clear Per Processor Stats for \
 				PID:%ld\n", pp_clear_pid);
 			pp_clear_pid = -1;
 		}
 	}
+       /*
+       * Always collect for 0, it collects for all.
+       */
+       if (pp_enabled) {
+		if (first_switch == 1) {
+			per_process_initialize(&perf_mons[0], 0);
+			first_switch = 0;
+		}
+		if (pm_global) {
+			per_process_swap_out(&perf_mons[0]);
+			per_process_swap_in(&perf_mons[0], 0);
+		} else {
+			p_old = per_process_find(old_pid);
+			p_new = per_process_find(new_pid);
 
-	/*
-	* save the old counts to the old data struct, if the returned
-	* ptr is NULL or the process id passed is not the same as the
-	* process id in the data struct then don't update the data.
-	*/
-	if ((p_old) && (p_old->pid == old_pid))
-		per_process_swap_out(p_old);
+
+			/*
+			* save the old counts to the old data struct, if the
+			* returned ptr is NULL or the process id passed is not
+			* the same as the process id in the data struct then
+			* don't update the data.
+			*/
+			if ((p_old) && (p_old->pid == old_pid) &&
+				(p_old->pid != 0)) {
+				per_process_swap_out(p_old);
+			}
+
 	/*
 	* Setup the counters for the new process
 	*/
 	if (pp_set_pid == new_pid)
 		per_process_initialize(p_new, new_pid);
-	if (p_new->pid != 0)
+	if ((p_new->pid == new_pid) && (new_pid != 0))
 		per_process_swap_in(p_new, new_pid);
-	pm_reset_all();
-	axi_swaps++;
-	if (axi_swaps%pm_axi_info.refresh == 0) {
-		if (pm_axi_info.clear == 1) {
-			pm_axi_clear_cnts();
-			pm_axi_info.clear = 0;
-		}
-		if (pm_axi_info.enable == 0)
-			pm_axi_disable();
-		else
-			pm_axi_update_cnts();
-		axi_swaps = 0;
 	}
-	if (0 == pp_enabled)
-		return;
+		pm_reset_all();
+#ifdef CONFIG_ARCH_MSM8X60
+	l2_pm_reset_all();
+#endif
+#ifdef CONFIG_ARCH_QSD8X50
+		axi_swaps++;
+		if (axi_swaps%pm_axi_info.refresh == 0) {
+			if (pm_axi_info.clear == 1) {
+				pm_axi_clear_cnts();
+					pm_axi_info.clear = 0;
+				}
+				if (pm_axi_info.enable == 0)
+					pm_axi_disable();
+				else
+					pm_axi_update_cnts();
+				axi_swaps = 0;
+		}
+#endif
+	}
 	pm_start_all();
+#ifdef CONFIG_ARCH_MSM8X60
+	l2_pm_start_all();
+#endif
+
+    spin_unlock(&pm_lock);
 }
 
 /*
@@ -605,7 +865,7 @@ void _perf_mon_interrupt_in(void)
 		return;
 	if (pm_stop_for_interrupts == 0)
 		return;
-	pm_interrupt_nesting_count++;  	/* Atomic */
+	pm_interrupt_nesting_count++;	/* Atomic */
 	pm_stop_all();
 	pm_cycle_in = pm_get_cycle_count();
 }
@@ -636,8 +896,12 @@ void _perf_mon_interrupt_out(void)
 		if (pm_cycle_in != pm_cycle_out)
 			printk(KERN_INFO "pmIn!=pmOut in:%lx out:%lx\n",
 			pm_cycle_in, pm_cycle_out);
-		if (pp_enabled)
+		if (pp_enabled) {
 			pm_start_all();
+#ifdef CONFIG_ARCH_MSM8X60
+			l2_pm_start_all();
+#endif
+		}
 		pm_interrupt_nesting_count = 0;
 	}
 }
@@ -648,14 +912,27 @@ void per_process_do_global(unsigned long g)
 
 	if (pm_global == 1) {
 		pm_stop_all();
+#ifdef CONFIG_ARCH_MSM8X60
+		l2_pm_stop_all();
+#endif
 		pm_reset_all();
+#ifdef CONFIG_ARCH_MSM8X60
+		l2_pm_reset_all();
+#endif
 		pp_set_pid = 0;
 		per_process_swap_in(&perf_mons[0], 0);
 		pm_start_all();
+#ifdef CONFIG_ARCH_MSM8X60
+		l2_pm_start_all();
+#endif
 	} else {
 		pm_stop_all();
+#ifdef CONFIG_ARCH_MSM8X60
+		l2_pm_stop_all();
+#endif
 	}
 }
+
 
 /*
 FUNCTION   per_process_write
@@ -680,7 +957,7 @@ int per_process_write(struct file *file, const char *buff,
 	*/
 	newbuf = kmalloc(cnt + 1, GFP_KERNEL);
 	if (0 == newbuf)
-		return -1;
+		return PM_PP_ERR;
 	if (copy_from_user(newbuf, buff, cnt) != 0) {
 		printk(KERN_INFO "%s copy_from_user failed\n", __func__);
 	return cnt;
@@ -809,7 +1086,13 @@ SIDE EFFECTS
 */
 int per_process_perf_init(void)
 {
+#ifdef CONFIG_ARCH_MSM8X60
+	smp_call_function_single(0, (void *)pm_initialize, (void *)NULL, 1);
+	smp_call_function_single(1, (void *)pm_initialize, (void *)NULL, 1);
+	l2_pm_initialize();
+#else
 	pm_initialize();
+#endif
 	pm_axi_init();
 	pm_axi_clear_cnts();
 	proc_dir = proc_mkdir("ppPerf", NULL);
@@ -823,6 +1106,14 @@ int per_process_perf_init(void)
 	per_process_proc_entry("event1", &per_proc_event[1], settings_dir, 1);
 	per_process_proc_entry("event2", &per_proc_event[2], settings_dir, 1);
 	per_process_proc_entry("event3", &per_proc_event[3], settings_dir, 1);
+	per_process_proc_entry("l2_event0", &l2_per_proc_event[0], settings_dir,
+		1);
+	per_process_proc_entry("l2_event1", &l2_per_proc_event[1], settings_dir,
+		1);
+	per_process_proc_entry("l2_event2", &l2_per_proc_event[2], settings_dir,
+		1);
+	per_process_proc_entry("l2_event3", &l2_per_proc_event[3], settings_dir,
+		1);
 	per_process_proc_entry("debug", &dbg_flags, settings_dir, 1);
 	per_process_proc_entry("autolock", &pp_auto_lock, settings_dir, 1);
 	per_process_proc_entry("lpm0evtyper", &pp_lpm0evtyper, settings_dir, 1);
@@ -831,6 +1122,16 @@ int per_process_perf_init(void)
 	per_process_proc_entry("l2lpmevtyper", &pp_l2lpmevtyper, settings_dir,
 				1);
 	per_process_proc_entry("vlpmevtyper", &pp_vlpmevtyper, settings_dir, 1);
+	per_process_proc_entry("l2pmevtyper0", &pp_l2pmevtyper0, settings_dir,
+		1);
+	per_process_proc_entry("l2pmevtyper1", &pp_l2pmevtyper1, settings_dir,
+		1);
+	per_process_proc_entry("l2pmevtyper2", &pp_l2pmevtyper2, settings_dir,
+		1);
+	per_process_proc_entry("l2pmevtyper3", &pp_l2pmevtyper3, settings_dir,
+		1);
+	per_process_proc_entry("l2pmevtyper4", &pp_l2pmevtyper4, settings_dir,
+		1);
 	per_process_proc_entry("stopForInterrupts", &pm_stop_for_interrupts,
 		settings_dir, 1);
 	per_process_proc_entry("global", &pm_global, settings_dir, 1);
@@ -856,9 +1157,12 @@ int per_process_perf_init(void)
 	pm_axi_set_proc_entry("axi_refresh", &pm_axi_info.refresh,
 		axi_settings_dir, 1);
 	pm_axi_get_cnt_proc_entry("axi_cnts", &axi_cnts, axi_results_dir, 0);
+	l2_dir = proc_mkdir("l2", proc_dir);
+	l2_results_dir = proc_mkdir("results", l2_dir);
 
 	memset(perf_mons, 0, sizeof(perf_mons));
 	per_process_create_results_proc(&perf_mons[0]);
+	per_process_create_l2_results_proc(&perf_mons[0]);
 	thread_register_notifier(&perfmon_notifier_block);
 	/*
 	* Set the function pointers so the module can be activated.
@@ -868,6 +1172,16 @@ int per_process_perf_init(void)
 	pp_process_remove_ptr = _per_process_remove;
 	pp_loaded = 1;
 	pm_axi_info.refresh = 1;
+
+#ifdef CONFIG_ARCH_MSM8X60
+	smp_call_function_single(0, (void *)pm_reset_all, (void *)NULL, 1);
+	smp_call_function_single(1, (void *)pm_reset_all, (void *)NULL, 1);
+	smp_call_function_single(0, (void *)l2_pm_reset_all, (void *)NULL, 1);
+	smp_call_function_single(1, (void *)l2_pm_reset_all, (void *)NULL, 1);
+#else
+	pm_reset_all();
+#endif
+
 	return 0;
 }
 
@@ -919,6 +1233,8 @@ void per_process_perf_exit(void)
 	/*
 	* Remove the directories
 	*/
+	remove_proc_entry("results", l2_dir);
+	remove_proc_entry("l2", proc_dir);
 	remove_proc_entry("results", proc_dir);
 	remove_proc_entry("settings", proc_dir);
 	remove_proc_entry("results", axi_dir);
@@ -926,6 +1242,15 @@ void per_process_perf_exit(void)
 	remove_proc_entry("axi", proc_dir);
 	remove_proc_entry("ppPerf", NULL);
 	pm_free_irq();
+#ifdef CONFIG_ARCH_MSM8X60
+	l2_pm_free_irq();
+#endif
 	thread_unregister_notifier(&perfmon_notifier_block);
+#ifdef CONFIG_ARCH_MSM8X60
+	smp_call_function_single(0, (void *)pm_deinitialize, (void *)NULL, 1);
+	smp_call_function_single(1, (void *)pm_deinitialize, (void *)NULL, 1);
+	l2_pm_deinitialize();
+#else
 	pm_deinitialize();
+#endif
 }

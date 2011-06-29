@@ -24,6 +24,8 @@
 * Protocol Control Unit Functions *
 \*********************************/
 
+#include <asm/unaligned.h>
+
 #include "ath5k.h"
 #include "reg.h"
 #include "debug.h"
@@ -37,15 +39,16 @@
  * ath5k_hw_set_opmode - Set PCU operating mode
  *
  * @ah: The &struct ath5k_hw
+ * @op_mode: &enum nl80211_iftype operating mode
  *
  * Initialize PCU for the various operating modes (AP/STA etc)
- *
- * NOTE: ah->ah_op_mode must be set before calling this.
  */
-int ath5k_hw_set_opmode(struct ath5k_hw *ah)
+int ath5k_hw_set_opmode(struct ath5k_hw *ah, enum nl80211_iftype op_mode)
 {
+	struct ath_common *common = ath5k_hw_common(ah);
 	u32 pcu_reg, beacon_reg, low_id, high_id;
 
+	ATH5K_DBG(ah->ah_sc, ATH5K_DEBUG_MODE, "mode %d\n", op_mode);
 
 	/* Preserve rest settings */
 	pcu_reg = ath5k_hw_reg_read(ah, AR5K_STA_ID1) & 0xffff0000;
@@ -58,7 +61,7 @@ int ath5k_hw_set_opmode(struct ath5k_hw *ah)
 
 	ATH5K_TRACE(ah->ah_sc);
 
-	switch (ah->ah_op_mode) {
+	switch (op_mode) {
 	case NL80211_IFTYPE_ADHOC:
 		pcu_reg |= AR5K_STA_ID1_ADHOC | AR5K_STA_ID1_KEYSRCH_MODE;
 		beacon_reg |= AR5K_BCR_ADHOC;
@@ -95,8 +98,8 @@ int ath5k_hw_set_opmode(struct ath5k_hw *ah)
 	/*
 	 * Set PCU registers
 	 */
-	low_id = AR5K_LOW_ID(ah->ah_sta_id);
-	high_id = AR5K_HIGH_ID(ah->ah_sta_id);
+	low_id = get_unaligned_le32(common->macaddr);
+	high_id = get_unaligned_le16(common->macaddr + 4);
 	ath5k_hw_reg_write(ah, low_id, AR5K_STA_ID0);
 	ath5k_hw_reg_write(ah, pcu_reg | high_id, AR5K_STA_ID1);
 
@@ -110,39 +113,26 @@ int ath5k_hw_set_opmode(struct ath5k_hw *ah)
 }
 
 /**
- * ath5k_hw_update - Update mib counters (mac layer statistics)
+ * ath5k_hw_update - Update MIB counters (mac layer statistics)
  *
  * @ah: The &struct ath5k_hw
- * @stats: The &struct ieee80211_low_level_stats we use to track
- * statistics on the driver
  *
- * Reads MIB counters from PCU and updates sw statistics. Must be
- * called after a MIB interrupt.
+ * Reads MIB counters from PCU and updates sw statistics. Is called after a
+ * MIB interrupt, because one of these counters might have reached their maximum
+ * and triggered the MIB interrupt, to let us read and clear the counter.
+ *
+ * Is called in interrupt context!
  */
-void ath5k_hw_update_mib_counters(struct ath5k_hw *ah,
-		struct ieee80211_low_level_stats  *stats)
+void ath5k_hw_update_mib_counters(struct ath5k_hw *ah)
 {
-	ATH5K_TRACE(ah->ah_sc);
+	struct ath5k_statistics *stats = &ah->ah_sc->stats;
 
 	/* Read-And-Clear */
-	stats->dot11ACKFailureCount += ath5k_hw_reg_read(ah, AR5K_ACK_FAIL);
-	stats->dot11RTSFailureCount += ath5k_hw_reg_read(ah, AR5K_RTS_FAIL);
-	stats->dot11RTSSuccessCount += ath5k_hw_reg_read(ah, AR5K_RTS_OK);
-	stats->dot11FCSErrorCount += ath5k_hw_reg_read(ah, AR5K_FCS_FAIL);
-
-	/* XXX: Should we use this to track beacon count ?
-	 * -we read it anyway to clear the register */
-	ath5k_hw_reg_read(ah, AR5K_BEACON_CNT);
-
-	/* Reset profile count registers on 5212*/
-	if (ah->ah_version == AR5K_AR5212) {
-		ath5k_hw_reg_write(ah, 0, AR5K_PROFCNT_TX);
-		ath5k_hw_reg_write(ah, 0, AR5K_PROFCNT_RX);
-		ath5k_hw_reg_write(ah, 0, AR5K_PROFCNT_RXCLR);
-		ath5k_hw_reg_write(ah, 0, AR5K_PROFCNT_CYCLE);
-	}
-
-	/* TODO: Handle ANI stats */
+	stats->ack_fail += ath5k_hw_reg_read(ah, AR5K_ACK_FAIL);
+	stats->rts_fail += ath5k_hw_reg_read(ah, AR5K_RTS_FAIL);
+	stats->rts_ok += ath5k_hw_reg_read(ah, AR5K_RTS_OK);
+	stats->fcs_error += ath5k_hw_reg_read(ah, AR5K_FCS_FAIL);
+	stats->beacons += ath5k_hw_reg_read(ah, AR5K_BEACON_CNT);
 }
 
 /**
@@ -164,9 +154,9 @@ void ath5k_hw_set_ack_bitrate_high(struct ath5k_hw *ah, bool high)
 	else {
 		u32 val = AR5K_STA_ID1_BASE_RATE_11B | AR5K_STA_ID1_ACKCTS_6MB;
 		if (high)
-			AR5K_REG_ENABLE_BITS(ah, AR5K_STA_ID1, val);
-		else
 			AR5K_REG_DISABLE_BITS(ah, AR5K_STA_ID1, val);
+		else
+			AR5K_REG_ENABLE_BITS(ah, AR5K_STA_ID1, val);
 	}
 }
 
@@ -176,47 +166,22 @@ void ath5k_hw_set_ack_bitrate_high(struct ath5k_hw *ah, bool high)
 \******************/
 
 /**
- * ath5k_hw_het_ack_timeout - Get ACK timeout from PCU in usec
- *
- * @ah: The &struct ath5k_hw
- */
-unsigned int ath5k_hw_get_ack_timeout(struct ath5k_hw *ah)
-{
-	ATH5K_TRACE(ah->ah_sc);
-
-	return ath5k_hw_clocktoh(AR5K_REG_MS(ath5k_hw_reg_read(ah,
-			AR5K_TIME_OUT), AR5K_TIME_OUT_ACK), ah->ah_turbo);
-}
-
-/**
  * ath5k_hw_set_ack_timeout - Set ACK timeout on PCU
  *
  * @ah: The &struct ath5k_hw
  * @timeout: Timeout in usec
  */
-int ath5k_hw_set_ack_timeout(struct ath5k_hw *ah, unsigned int timeout)
+static int ath5k_hw_set_ack_timeout(struct ath5k_hw *ah, unsigned int timeout)
 {
 	ATH5K_TRACE(ah->ah_sc);
-	if (ath5k_hw_clocktoh(AR5K_REG_MS(0xffffffff, AR5K_TIME_OUT_ACK),
-			ah->ah_turbo) <= timeout)
+	if (ath5k_hw_clocktoh(ah, AR5K_REG_MS(0xffffffff, AR5K_TIME_OUT_ACK))
+			<= timeout)
 		return -EINVAL;
 
 	AR5K_REG_WRITE_BITS(ah, AR5K_TIME_OUT, AR5K_TIME_OUT_ACK,
-		ath5k_hw_htoclock(timeout, ah->ah_turbo));
+		ath5k_hw_htoclock(ah, timeout));
 
 	return 0;
-}
-
-/**
- * ath5k_hw_get_cts_timeout - Get CTS timeout from PCU in usec
- *
- * @ah: The &struct ath5k_hw
- */
-unsigned int ath5k_hw_get_cts_timeout(struct ath5k_hw *ah)
-{
-	ATH5K_TRACE(ah->ah_sc);
-	return ath5k_hw_clocktoh(AR5K_REG_MS(ath5k_hw_reg_read(ah,
-			AR5K_TIME_OUT), AR5K_TIME_OUT_CTS), ah->ah_turbo);
 }
 
 /**
@@ -225,39 +190,97 @@ unsigned int ath5k_hw_get_cts_timeout(struct ath5k_hw *ah)
  * @ah: The &struct ath5k_hw
  * @timeout: Timeout in usec
  */
-int ath5k_hw_set_cts_timeout(struct ath5k_hw *ah, unsigned int timeout)
+static int ath5k_hw_set_cts_timeout(struct ath5k_hw *ah, unsigned int timeout)
 {
 	ATH5K_TRACE(ah->ah_sc);
-	if (ath5k_hw_clocktoh(AR5K_REG_MS(0xffffffff, AR5K_TIME_OUT_CTS),
-			ah->ah_turbo) <= timeout)
+	if (ath5k_hw_clocktoh(ah, AR5K_REG_MS(0xffffffff, AR5K_TIME_OUT_CTS))
+			<= timeout)
 		return -EINVAL;
 
 	AR5K_REG_WRITE_BITS(ah, AR5K_TIME_OUT, AR5K_TIME_OUT_CTS,
-			ath5k_hw_htoclock(timeout, ah->ah_turbo));
+			ath5k_hw_htoclock(ah, timeout));
 
 	return 0;
 }
 
-
-/****************\
-* BSSID handling *
-\****************/
-
 /**
- * ath5k_hw_get_lladdr - Get station id
+ * ath5k_hw_htoclock - Translate usec to hw clock units
  *
  * @ah: The &struct ath5k_hw
- * @mac: The card's mac address
- *
- * Initialize ah->ah_sta_id using the mac address provided
- * (just a memcpy).
- *
- * TODO: Remove it once we merge ath5k_softc and ath5k_hw
+ * @usec: value in microseconds
  */
-void ath5k_hw_get_lladdr(struct ath5k_hw *ah, u8 *mac)
+unsigned int ath5k_hw_htoclock(struct ath5k_hw *ah, unsigned int usec)
 {
-	ATH5K_TRACE(ah->ah_sc);
-	memcpy(mac, ah->ah_sta_id, ETH_ALEN);
+	return usec * ath5k_hw_get_clockrate(ah);
+}
+
+/**
+ * ath5k_hw_clocktoh - Translate hw clock units to usec
+ * @clock: value in hw clock units
+ */
+unsigned int ath5k_hw_clocktoh(struct ath5k_hw *ah, unsigned int clock)
+{
+	return clock / ath5k_hw_get_clockrate(ah);
+}
+
+/**
+ * ath5k_hw_get_clockrate - Get the clock rate for current mode
+ *
+ * @ah: The &struct ath5k_hw
+ */
+unsigned int ath5k_hw_get_clockrate(struct ath5k_hw *ah)
+{
+	struct ieee80211_channel *channel = ah->ah_current_channel;
+	int clock;
+
+	if (channel->hw_value & CHANNEL_5GHZ)
+		clock = 40; /* 802.11a */
+	else if (channel->hw_value & CHANNEL_CCK)
+		clock = 22; /* 802.11b */
+	else
+		clock = 44; /* 802.11g */
+
+	/* Clock rate in turbo modes is twice the normal rate */
+	if (channel->hw_value & CHANNEL_TURBO)
+		clock *= 2;
+
+	return clock;
+}
+
+/**
+ * ath5k_hw_get_default_slottime - Get the default slot time for current mode
+ *
+ * @ah: The &struct ath5k_hw
+ */
+static unsigned int ath5k_hw_get_default_slottime(struct ath5k_hw *ah)
+{
+	struct ieee80211_channel *channel = ah->ah_current_channel;
+
+	if (channel->hw_value & CHANNEL_TURBO)
+		return 6; /* both turbo modes */
+
+	if (channel->hw_value & CHANNEL_CCK)
+		return 20; /* 802.11b */
+
+	return 9; /* 802.11 a/g */
+}
+
+/**
+ * ath5k_hw_get_default_sifs - Get the default SIFS for current mode
+ *
+ * @ah: The &struct ath5k_hw
+ */
+static unsigned int ath5k_hw_get_default_sifs(struct ath5k_hw *ah)
+{
+	struct ieee80211_channel *channel = ah->ah_current_channel;
+
+	if (channel->hw_value & CHANNEL_TURBO)
+		return 8; /* both turbo modes */
+
+	if (channel->hw_value & CHANNEL_5GHZ)
+		return 16; /* 802.11a */
+
+	return 10; /* 802.11 b/g */
 }
 
 /**
@@ -270,17 +293,18 @@ void ath5k_hw_get_lladdr(struct ath5k_hw *ah, u8 *mac)
  */
 int ath5k_hw_set_lladdr(struct ath5k_hw *ah, const u8 *mac)
 {
+	struct ath_common *common = ath5k_hw_common(ah);
 	u32 low_id, high_id;
 	u32 pcu_reg;
 
 	ATH5K_TRACE(ah->ah_sc);
 	/* Set new station ID */
-	memcpy(ah->ah_sta_id, mac, ETH_ALEN);
+	memcpy(common->macaddr, mac, ETH_ALEN);
 
 	pcu_reg = ath5k_hw_reg_read(ah, AR5K_STA_ID1) & 0xffff0000;
 
-	low_id = AR5K_LOW_ID(mac);
-	high_id = AR5K_HIGH_ID(mac);
+	low_id = get_unaligned_le32(mac);
+	high_id = get_unaligned_le16(mac + 4);
 
 	ath5k_hw_reg_write(ah, low_id, AR5K_STA_ID0);
 	ath5k_hw_reg_write(ah, pcu_reg | high_id, AR5K_STA_ID1);
@@ -297,158 +321,50 @@ int ath5k_hw_set_lladdr(struct ath5k_hw *ah, const u8 *mac)
  *
  * Sets the BSSID which trigers the "SME Join" operation
  */
-void ath5k_hw_set_associd(struct ath5k_hw *ah, const u8 *bssid, u16 assoc_id)
+void ath5k_hw_set_associd(struct ath5k_hw *ah)
 {
-	u32 low_id, high_id;
+	struct ath_common *common = ath5k_hw_common(ah);
 	u16 tim_offset = 0;
 
 	/*
 	 * Set simple BSSID mask on 5212
 	 */
-	if (ah->ah_version == AR5K_AR5212) {
-		ath5k_hw_reg_write(ah, AR5K_LOW_ID(ah->ah_bssid_mask),
-							AR5K_BSS_IDM0);
-		ath5k_hw_reg_write(ah, AR5K_HIGH_ID(ah->ah_bssid_mask),
-							AR5K_BSS_IDM1);
-	}
+	if (ah->ah_version == AR5K_AR5212)
+		ath_hw_setbssidmask(common);
 
 	/*
 	 * Set BSSID which triggers the "SME Join" operation
 	 */
-	low_id = AR5K_LOW_ID(bssid);
-	high_id = AR5K_HIGH_ID(bssid);
-	ath5k_hw_reg_write(ah, low_id, AR5K_BSS_ID0);
-	ath5k_hw_reg_write(ah, high_id | ((assoc_id & 0x3fff) <<
-				AR5K_BSS_ID1_AID_S), AR5K_BSS_ID1);
+	ath5k_hw_reg_write(ah,
+			   get_unaligned_le32(common->curbssid),
+			   AR5K_BSS_ID0);
+	ath5k_hw_reg_write(ah,
+			   get_unaligned_le16(common->curbssid + 4) |
+			   ((common->curaid & 0x3fff) << AR5K_BSS_ID1_AID_S),
+			   AR5K_BSS_ID1);
 
-	if (assoc_id == 0) {
+	if (common->curaid == 0) {
 		ath5k_hw_disable_pspoll(ah);
 		return;
 	}
 
 	AR5K_REG_WRITE_BITS(ah, AR5K_BEACON, AR5K_BEACON_TIM,
-			tim_offset ? tim_offset + 4 : 0);
+			    tim_offset ? tim_offset + 4 : 0);
 
 	ath5k_hw_enable_pspoll(ah, NULL, 0);
 }
 
-/**
- * ath5k_hw_set_bssid_mask - filter out bssids we listen
- *
- * @ah: the &struct ath5k_hw
- * @mask: the bssid_mask, a u8 array of size ETH_ALEN
- *
- * BSSID masking is a method used by AR5212 and newer hardware to inform PCU
- * which bits of the interface's MAC address should be looked at when trying
- * to decide which packets to ACK. In station mode and AP mode with a single
- * BSS every bit matters since we lock to only one BSS. In AP mode with
- * multiple BSSes (virtual interfaces) not every bit matters because hw must
- * accept frames for all BSSes and so we tweak some bits of our mac address
- * in order to have multiple BSSes.
- *
- * NOTE: This is a simple filter and does *not* filter out all
- * relevant frames. Some frames that are not for us might get ACKed from us
- * by PCU because they just match the mask.
- *
- * When handling multiple BSSes you can get the BSSID mask by computing the
- * set of  ~ ( MAC XOR BSSID ) for all bssids we handle.
- *
- * When you do this you are essentially computing the common bits of all your
- * BSSes. Later it is assumed the harware will "and" (&) the BSSID mask with
- * the MAC address to obtain the relevant bits and compare the result with
- * (frame's BSSID & mask) to see if they match.
- */
-/*
- * Simple example: on your card you have have two BSSes you have created with
- * BSSID-01 and BSSID-02. Lets assume BSSID-01 will not use the MAC address.
- * There is another BSSID-03 but you are not part of it. For simplicity's sake,
- * assuming only 4 bits for a mac address and for BSSIDs you can then have:
- *
- *                  \
- * MAC:                0001 |
- * BSSID-01:   0100 | --> Belongs to us
- * BSSID-02:   1001 |
- *                  /
- * -------------------
- * BSSID-03:   0110  | --> External
- * -------------------
- *
- * Our bssid_mask would then be:
- *
- *             On loop iteration for BSSID-01:
- *             ~(0001 ^ 0100)  -> ~(0101)
- *                             ->   1010
- *             bssid_mask      =    1010
- *
- *             On loop iteration for BSSID-02:
- *             bssid_mask &= ~(0001   ^   1001)
- *             bssid_mask =   (1010)  & ~(0001 ^ 1001)
- *             bssid_mask =   (1010)  & ~(1001)
- *             bssid_mask =   (1010)  &  (0110)
- *             bssid_mask =   0010
- *
- * A bssid_mask of 0010 means "only pay attention to the second least
- * significant bit". This is because its the only bit common
- * amongst the MAC and all BSSIDs we support. To findout what the real
- * common bit is we can simply "&" the bssid_mask now with any BSSID we have
- * or our MAC address (we assume the hardware uses the MAC address).
- *
- * Now, suppose there's an incoming frame for BSSID-03:
- *
- * IFRAME-01:  0110
- *
- * An easy eye-inspeciton of this already should tell you that this frame
- * will not pass our check. This is beacuse the bssid_mask tells the
- * hardware to only look at the second least significant bit and the
- * common bit amongst the MAC and BSSIDs is 0, this frame has the 2nd LSB
- * as 1, which does not match 0.
- *
- * So with IFRAME-01 we *assume* the hardware will do:
- *
- *     allow = (IFRAME-01 & bssid_mask) == (bssid_mask & MAC) ? 1 : 0;
- *  --> allow = (0110 & 0010) == (0010 & 0001) ? 1 : 0;
- *  --> allow = (0010) == 0000 ? 1 : 0;
- *  --> allow = 0
- *
- *  Lets now test a frame that should work:
- *
- * IFRAME-02:  0001 (we should allow)
- *
- *     allow = (0001 & 1010) == 1010
- *
- *     allow = (IFRAME-02 & bssid_mask) == (bssid_mask & MAC) ? 1 : 0;
- *  --> allow = (0001 & 0010) ==  (0010 & 0001) ? 1 :0;
- *  --> allow = (0010) == (0010)
- *  --> allow = 1
- *
- * Other examples:
- *
- * IFRAME-03:  0100 --> allowed
- * IFRAME-04:  1001 --> allowed
- * IFRAME-05:  1101 --> allowed but its not for us!!!
- *
- */
-int ath5k_hw_set_bssid_mask(struct ath5k_hw *ah, const u8 *mask)
+void ath5k_hw_set_bssid_mask(struct ath5k_hw *ah, const u8 *mask)
 {
-	u32 low_id, high_id;
+	struct ath_common *common = ath5k_hw_common(ah);
 	ATH5K_TRACE(ah->ah_sc);
 
 	/* Cache bssid mask so that we can restore it
 	 * on reset */
-	memcpy(ah->ah_bssid_mask, mask, ETH_ALEN);
-	if (ah->ah_version == AR5K_AR5212) {
-		low_id = AR5K_LOW_ID(mask);
-		high_id = AR5K_HIGH_ID(mask);
-
-		ath5k_hw_reg_write(ah, low_id, AR5K_BSS_IDM0);
-		ath5k_hw_reg_write(ah, high_id, AR5K_BSS_IDM1);
-
-		return 0;
-	}
-
-	return -EIO;
+	memcpy(common->bssidmask, mask, ETH_ALEN);
+	if (ah->ah_version == AR5K_AR5212)
+		ath_hw_setbssidmask(common);
 }
-
 
 /************\
 * RX Control *
@@ -463,7 +379,6 @@ int ath5k_hw_set_bssid_mask(struct ath5k_hw *ah, const u8 *mask)
  * (ACK etc).
  *
  * NOTE: RX DMA should be already enabled using ath5k_hw_start_rx_dma
- * TODO: Init ANI here
  */
 void ath5k_hw_start_rx_pcu(struct ath5k_hw *ah)
 {
@@ -495,42 +410,6 @@ void ath5k_hw_set_mcast_filter(struct ath5k_hw *ah, u32 filter0, u32 filter1)
 	/* Set the multicat filter */
 	ath5k_hw_reg_write(ah, filter0, AR5K_MCAST_FILTER0);
 	ath5k_hw_reg_write(ah, filter1, AR5K_MCAST_FILTER1);
-}
-
-/*
- * Set multicast filter by index
- */
-int ath5k_hw_set_mcast_filter_idx(struct ath5k_hw *ah, u32 index)
-{
-
-	ATH5K_TRACE(ah->ah_sc);
-	if (index >= 64)
-		return -EINVAL;
-	else if (index >= 32)
-		AR5K_REG_ENABLE_BITS(ah, AR5K_MCAST_FILTER1,
-				(1 << (index - 32)));
-	else
-		AR5K_REG_ENABLE_BITS(ah, AR5K_MCAST_FILTER0, (1 << index));
-
-	return 0;
-}
-
-/*
- * Clear Multicast filter by index
- */
-int ath5k_hw_clear_mcast_filter_idx(struct ath5k_hw *ah, u32 index)
-{
-
-	ATH5K_TRACE(ah->ah_sc);
-	if (index >= 64)
-		return -EINVAL;
-	else if (index >= 32)
-		AR5K_REG_DISABLE_BITS(ah, AR5K_MCAST_FILTER1,
-				(1 << (index - 32)));
-	else
-		AR5K_REG_DISABLE_BITS(ah, AR5K_MCAST_FILTER0, (1 << index));
-
-	return 0;
 }
 
 /**
@@ -617,18 +496,7 @@ void ath5k_hw_set_rx_filter(struct ath5k_hw *ah, u32 filter)
 * Beacon control *
 \****************/
 
-/**
- * ath5k_hw_get_tsf32 - Get a 32bit TSF
- *
- * @ah: The &struct ath5k_hw
- *
- * Returns lower 32 bits of current TSF
- */
-u32 ath5k_hw_get_tsf32(struct ath5k_hw *ah)
-{
-	ATH5K_TRACE(ah->ah_sc);
-	return ath5k_hw_reg_read(ah, AR5K_TSF_L32);
-}
+#define ATH5K_MAX_TSF_READ 10
 
 /**
  * ath5k_hw_get_tsf64 - Get the full 64bit TSF
@@ -639,10 +507,35 @@ u32 ath5k_hw_get_tsf32(struct ath5k_hw *ah)
  */
 u64 ath5k_hw_get_tsf64(struct ath5k_hw *ah)
 {
-	u64 tsf = ath5k_hw_reg_read(ah, AR5K_TSF_U32);
+	u32 tsf_lower, tsf_upper1, tsf_upper2;
+	int i;
+
+	/*
+	 * While reading TSF upper and then lower part, the clock is still
+	 * counting (or jumping in case of IBSS merge) so we might get
+	 * inconsistent values. To avoid this, we read the upper part again
+	 * and check it has not been changed. We make the hypothesis that a
+	 * maximum of 3 changes can happens in a row (we use 10 as a safe
+	 * value).
+	 *
+	 * Impact on performance is pretty small, since in most cases, only
+	 * 3 register reads are needed.
+	 */
+
+	tsf_upper1 = ath5k_hw_reg_read(ah, AR5K_TSF_U32);
+	for (i = 0; i < ATH5K_MAX_TSF_READ; i++) {
+		tsf_lower = ath5k_hw_reg_read(ah, AR5K_TSF_L32);
+		tsf_upper2 = ath5k_hw_reg_read(ah, AR5K_TSF_U32);
+		if (tsf_upper2 == tsf_upper1)
+			break;
+		tsf_upper1 = tsf_upper2;
+	}
+
+	WARN_ON( i == ATH5K_MAX_TSF_READ );
+
 	ATH5K_TRACE(ah->ah_sc);
 
-	return ath5k_hw_reg_read(ah, AR5K_TSF_L32) | (tsf << 32);
+	return (((u64)tsf_upper1 << 32) | tsf_lower);
 }
 
 /**
@@ -697,7 +590,7 @@ void ath5k_hw_init_beacon(struct ath5k_hw *ah, u32 next_beacon, u32 interval)
 	/*
 	 * Set the additional timers by mode
 	 */
-	switch (ah->ah_op_mode) {
+	switch (ah->ah_sc->opmode) {
 	case NL80211_IFTYPE_MONITOR:
 	case NL80211_IFTYPE_STATION:
 		/* In STA mode timer1 is used as next wakeup
@@ -734,8 +627,8 @@ void ath5k_hw_init_beacon(struct ath5k_hw *ah, u32 next_beacon, u32 interval)
 	 * Set the beacon register and enable all timers.
 	 */
 	/* When in AP or Mesh Point mode zero timer0 to start TSF */
-	if (ah->ah_op_mode == NL80211_IFTYPE_AP ||
-	    ah->ah_op_mode == NL80211_IFTYPE_MESH_POINT)
+	if (ah->ah_sc->opmode == NL80211_IFTYPE_AP ||
+	    ah->ah_sc->opmode == NL80211_IFTYPE_MESH_POINT)
 		ath5k_hw_reg_write(ah, 0, AR5K_TIMER0);
 
 	ath5k_hw_reg_write(ah, next_beacon, AR5K_TIMER0);
@@ -767,203 +660,6 @@ void ath5k_hw_init_beacon(struct ath5k_hw *ah, u32 next_beacon, u32 interval)
 	AR5K_REG_DISABLE_BITS(ah, AR5K_STA_ID1, AR5K_STA_ID1_PWR_SV);
 
 }
-
-#if 0
-/*
- * Set beacon timers
- */
-int ath5k_hw_set_beacon_timers(struct ath5k_hw *ah,
-		const struct ath5k_beacon_state *state)
-{
-	u32 cfp_period, next_cfp, dtim, interval, next_beacon;
-
-	/*
-	 * TODO: should be changed through *state
-	 * review struct ath5k_beacon_state struct
-	 *
-	 * XXX: These are used for cfp period bellow, are they
-	 * ok ? Is it O.K. for tsf here to be 0 or should we use
-	 * get_tsf ?
-	 */
-	u32 dtim_count = 0; /* XXX */
-	u32 cfp_count = 0; /* XXX */
-	u32 tsf = 0; /* XXX */
-
-	ATH5K_TRACE(ah->ah_sc);
-	/* Return on an invalid beacon state */
-	if (state->bs_interval < 1)
-		return -EINVAL;
-
-	interval = state->bs_interval;
-	dtim = state->bs_dtim_period;
-
-	/*
-	 * PCF support?
-	 */
-	if (state->bs_cfp_period > 0) {
-		/*
-		 * Enable PCF mode and set the CFP
-		 * (Contention Free Period) and timer registers
-		 */
-		cfp_period = state->bs_cfp_period * state->bs_dtim_period *
-			state->bs_interval;
-		next_cfp = (cfp_count * state->bs_dtim_period + dtim_count) *
-			state->bs_interval;
-
-		AR5K_REG_ENABLE_BITS(ah, AR5K_STA_ID1,
-				AR5K_STA_ID1_DEFAULT_ANTENNA |
-				AR5K_STA_ID1_PCF);
-		ath5k_hw_reg_write(ah, cfp_period, AR5K_CFP_PERIOD);
-		ath5k_hw_reg_write(ah, state->bs_cfp_max_duration,
-				AR5K_CFP_DUR);
-		ath5k_hw_reg_write(ah, (tsf + (next_cfp == 0 ? cfp_period :
-						next_cfp)) << 3, AR5K_TIMER2);
-	} else {
-		/* Disable PCF mode */
-		AR5K_REG_DISABLE_BITS(ah, AR5K_STA_ID1,
-				AR5K_STA_ID1_DEFAULT_ANTENNA |
-				AR5K_STA_ID1_PCF);
-	}
-
-	/*
-	 * Enable the beacon timer register
-	 */
-	ath5k_hw_reg_write(ah, state->bs_next_beacon, AR5K_TIMER0);
-
-	/*
-	 * Start the beacon timers
-	 */
-	ath5k_hw_reg_write(ah, (ath5k_hw_reg_read(ah, AR5K_BEACON) &
-		~(AR5K_BEACON_PERIOD | AR5K_BEACON_TIM)) |
-		AR5K_REG_SM(state->bs_tim_offset ? state->bs_tim_offset + 4 : 0,
-		AR5K_BEACON_TIM) | AR5K_REG_SM(state->bs_interval,
-		AR5K_BEACON_PERIOD), AR5K_BEACON);
-
-	/*
-	 * Write new beacon miss threshold, if it appears to be valid
-	 * XXX: Figure out right values for min <= bs_bmiss_threshold <= max
-	 * and return if its not in range. We can test this by reading value and
-	 * setting value to a largest value and seeing which values register.
-	 */
-
-	AR5K_REG_WRITE_BITS(ah, AR5K_RSSI_THR, AR5K_RSSI_THR_BMISS,
-			state->bs_bmiss_threshold);
-
-	/*
-	 * Set sleep control register
-	 * XXX: Didn't find this in 5210 code but since this register
-	 * exists also in ar5k's 5210 headers i leave it as common code.
-	 */
-	AR5K_REG_WRITE_BITS(ah, AR5K_SLEEP_CTL, AR5K_SLEEP_CTL_SLDUR,
-			(state->bs_sleep_duration - 3) << 3);
-
-	/*
-	 * Set enhanced sleep registers on 5212
-	 */
-	if (ah->ah_version == AR5K_AR5212) {
-		if (state->bs_sleep_duration > state->bs_interval &&
-				roundup(state->bs_sleep_duration, interval) ==
-				state->bs_sleep_duration)
-			interval = state->bs_sleep_duration;
-
-		if (state->bs_sleep_duration > dtim && (dtim == 0 ||
-				roundup(state->bs_sleep_duration, dtim) ==
-				state->bs_sleep_duration))
-			dtim = state->bs_sleep_duration;
-
-		if (interval > dtim)
-			return -EINVAL;
-
-		next_beacon = interval == dtim ? state->bs_next_dtim :
-			state->bs_next_beacon;
-
-		ath5k_hw_reg_write(ah,
-			AR5K_REG_SM((state->bs_next_dtim - 3) << 3,
-			AR5K_SLEEP0_NEXT_DTIM) |
-			AR5K_REG_SM(10, AR5K_SLEEP0_CABTO) |
-			AR5K_SLEEP0_ENH_SLEEP_EN |
-			AR5K_SLEEP0_ASSUME_DTIM, AR5K_SLEEP0);
-
-		ath5k_hw_reg_write(ah, AR5K_REG_SM((next_beacon - 3) << 3,
-			AR5K_SLEEP1_NEXT_TIM) |
-			AR5K_REG_SM(10, AR5K_SLEEP1_BEACON_TO), AR5K_SLEEP1);
-
-		ath5k_hw_reg_write(ah,
-			AR5K_REG_SM(interval, AR5K_SLEEP2_TIM_PER) |
-			AR5K_REG_SM(dtim, AR5K_SLEEP2_DTIM_PER), AR5K_SLEEP2);
-	}
-
-	return 0;
-}
-
-/*
- * Reset beacon timers
- */
-void ath5k_hw_reset_beacon(struct ath5k_hw *ah)
-{
-	ATH5K_TRACE(ah->ah_sc);
-	/*
-	 * Disable beacon timer
-	 */
-	ath5k_hw_reg_write(ah, 0, AR5K_TIMER0);
-
-	/*
-	 * Disable some beacon register values
-	 */
-	AR5K_REG_DISABLE_BITS(ah, AR5K_STA_ID1,
-			AR5K_STA_ID1_DEFAULT_ANTENNA | AR5K_STA_ID1_PCF);
-	ath5k_hw_reg_write(ah, AR5K_BEACON_PERIOD, AR5K_BEACON);
-}
-
-/*
- * Wait for beacon queue to finish
- */
-int ath5k_hw_beaconq_finish(struct ath5k_hw *ah, unsigned long phys_addr)
-{
-	unsigned int i;
-	int ret;
-
-	ATH5K_TRACE(ah->ah_sc);
-
-	/* 5210 doesn't have QCU*/
-	if (ah->ah_version == AR5K_AR5210) {
-		/*
-		 * Wait for beaconn queue to finish by checking
-		 * Control Register and Beacon Status Register.
-		 */
-		for (i = AR5K_TUNE_BEACON_INTERVAL / 2; i > 0; i--) {
-			if (!(ath5k_hw_reg_read(ah, AR5K_BSR) & AR5K_BSR_TXQ1F)
-					||
-			    !(ath5k_hw_reg_read(ah, AR5K_CR) & AR5K_BSR_TXQ1F))
-				break;
-			udelay(10);
-		}
-
-		/* Timeout... */
-		if (i <= 0) {
-			/*
-			 * Re-schedule the beacon queue
-			 */
-			ath5k_hw_reg_write(ah, phys_addr, AR5K_NOQCU_TXDP1);
-			ath5k_hw_reg_write(ah, AR5K_BCR_TQ1V | AR5K_BCR_BDMAE,
-					AR5K_BCR);
-
-			return -EIO;
-		}
-		ret = 0;
-	} else {
-	/*5211/5212*/
-		ret = ath5k_hw_register_timeout(ah,
-			AR5K_QUEUE_STATUS(AR5K_TX_QUEUE_ID_BEACON),
-			AR5K_QCU_STS_FRMPENDCNT, 0, false);
-
-		if (AR5K_REG_READ_Q(ah, AR5K_QCU_TXE, AR5K_TX_QUEUE_ID_BEACON))
-			return -EIO;
-	}
-
-	return ret;
-}
-#endif
 
 
 /*********************\
@@ -1015,19 +711,6 @@ int ath5k_hw_reset_key(struct ath5k_hw *ah, u16 entry)
 	}
 
 	return 0;
-}
-
-/*
- * Check if a table entry is valid
- */
-int ath5k_hw_is_key_valid(struct ath5k_hw *ah, u16 entry)
-{
-	ATH5K_TRACE(ah->ah_sc);
-	AR5K_ASSERT_ENTRY(entry, AR5K_KEYTABLE_SIZE);
-
-	/* Check the validation flag at the end of the entry */
-	return ath5k_hw_reg_read(ah, AR5K_KEYTABLE_MAC1(entry)) &
-		AR5K_KEYTABLE_VALID;
 }
 
 static
@@ -1157,14 +840,17 @@ int ath5k_hw_set_key_lladdr(struct ath5k_hw *ah, u16 entry, const u8 *mac)
 	 /* Invalid entry (key table overflow) */
 	AR5K_ASSERT_ENTRY(entry, AR5K_KEYTABLE_SIZE);
 
-	/* MAC may be NULL if it's a broadcast key. In this case no need to
-	 * to compute AR5K_LOW_ID and AR5K_HIGH_ID as we already know it. */
+	/*
+	 * MAC may be NULL if it's a broadcast key. In this case no need to
+	 * to compute get_unaligned_le32 and get_unaligned_le16 as we
+	 * already know it.
+	 */
 	if (!mac) {
 		low_id = 0xffffffff;
 		high_id = 0xffff | AR5K_KEYTABLE_VALID;
 	} else {
-		low_id = AR5K_LOW_ID(mac);
-		high_id = AR5K_HIGH_ID(mac) | AR5K_KEYTABLE_VALID;
+		low_id = get_unaligned_le32(mac);
+		high_id = get_unaligned_le16(mac + 4) | AR5K_KEYTABLE_VALID;
 	}
 
 	ath5k_hw_reg_write(ah, low_id, AR5K_KEYTABLE_MAC0(entry));
@@ -1173,3 +859,24 @@ int ath5k_hw_set_key_lladdr(struct ath5k_hw *ah, u16 entry, const u8 *mac)
 	return 0;
 }
 
+/**
+ * ath5k_hw_set_coverage_class - Set IEEE 802.11 coverage class
+ *
+ * @ah: The &struct ath5k_hw
+ * @coverage_class: IEEE 802.11 coverage class number
+ *
+ * Sets slot time, ACK timeout and CTS timeout for given coverage class.
+ */
+void ath5k_hw_set_coverage_class(struct ath5k_hw *ah, u8 coverage_class)
+{
+	/* As defined by IEEE 802.11-2007 17.3.8.6 */
+	int slot_time = ath5k_hw_get_default_slottime(ah) + 3 * coverage_class;
+	int ack_timeout = ath5k_hw_get_default_sifs(ah) + slot_time;
+	int cts_timeout = ack_timeout;
+
+	ath5k_hw_set_slot_time(ah, slot_time);
+	ath5k_hw_set_ack_timeout(ah, ack_timeout);
+	ath5k_hw_set_cts_timeout(ah, cts_timeout);
+
+	ah->ah_coverage_class = coverage_class;
+}

@@ -57,23 +57,6 @@ MODULE_DESCRIPTION("ISDN4Linux: PCMCIA client driver for Elsa PCM cards");
 MODULE_AUTHOR("Klaus Lichtenwalder");
 MODULE_LICENSE("Dual MPL/GPL");
 
-/*
-   All the PCMCIA modules use PCMCIA_DEBUG to control debugging.  If
-   you do not define PCMCIA_DEBUG at all, all the debug code will be
-   left out.  If you compile with PCMCIA_DEBUG=0, the debug code will
-   be present but disabled -- but it can then be enabled for specific
-   modules at load time with a 'pc_debug=#' option to insmod.
-*/
-
-#ifdef PCMCIA_DEBUG
-static int pc_debug = PCMCIA_DEBUG;
-module_param(pc_debug, int, 0);
-#define DEBUG(n, args...) if (pc_debug>(n)) printk(KERN_DEBUG args);
-static char *version =
-"elsa_cs.c $Revision: 1.2.2.4 $ $Date: 2004/01/25 15:07:06 $ (K.Lichtenwalder)";
-#else
-#define DEBUG(n, args...)
-#endif
 
 /*====================================================================*/
 
@@ -93,7 +76,7 @@ module_param(protocol, int, 0);
    handler.
 */
 
-static int elsa_cs_config(struct pcmcia_device *link);
+static int elsa_cs_config(struct pcmcia_device *link) __devinit ;
 static void elsa_cs_release(struct pcmcia_device *link);
 
 /*
@@ -102,26 +85,10 @@ static void elsa_cs_release(struct pcmcia_device *link);
    needed to manage one actual PCMCIA card.
 */
 
-static void elsa_cs_detach(struct pcmcia_device *p_dev);
-
-/*
-   A driver needs to provide a dev_node_t structure for each device
-   on a card.  In some cases, there is only one device per card (for
-   example, ethernet cards, modems).  In other cases, there may be
-   many actual or logical devices (SCSI adapters, memory cards with
-   multiple partitions).  The dev_node_t structures need to be kept
-   in a linked list starting at the 'dev' field of a struct pcmcia_device
-   structure.  We allocate them in the card's private data structure,
-   because they generally shouldn't be allocated dynamically.
-   In this case, we also provide a flag to indicate if a device is
-   "stopped" due to a power management event, or card ejection.  The
-   device IO routines can use a flag like this to throttle IO to a
-   card that is not ready to accept it.
-*/
+static void elsa_cs_detach(struct pcmcia_device *p_dev) __devexit;
 
 typedef struct local_info_t {
 	struct pcmcia_device	*p_dev;
-    dev_node_t          node;
     int                 busy;
     int			cardnr;
 } local_info_t;
@@ -138,11 +105,11 @@ typedef struct local_info_t {
 
 ======================================================================*/
 
-static int elsa_cs_probe(struct pcmcia_device *link)
+static int __devinit elsa_cs_probe(struct pcmcia_device *link)
 {
     local_info_t *local;
 
-    DEBUG(0, "elsa_cs_attach()\n");
+    dev_dbg(&link->dev, "elsa_cs_attach()\n");
 
     /* Allocate space for private device-specific data */
     local = kzalloc(sizeof(local_info_t), GFP_KERNEL);
@@ -152,11 +119,6 @@ static int elsa_cs_probe(struct pcmcia_device *link)
     link->priv = local;
 
     local->cardnr = -1;
-
-    /* Interrupt setup */
-    link->irq.Attributes = IRQ_TYPE_DYNAMIC_SHARING|IRQ_FIRST_SHARED;
-    link->irq.IRQInfo1 = IRQ_LEVEL_ID|IRQ_SHARE_ID;
-    link->irq.Handler = NULL;
 
     /*
       General socket configuration defaults can go here.  In this
@@ -184,11 +146,11 @@ static int elsa_cs_probe(struct pcmcia_device *link)
 
 ======================================================================*/
 
-static void elsa_cs_detach(struct pcmcia_device *link)
+static void __devexit elsa_cs_detach(struct pcmcia_device *link)
 {
 	local_info_t *info = link->priv;
 
-	DEBUG(0, "elsa_cs_detach(0x%p)\n", link);
+	dev_dbg(&link->dev, "elsa_cs_detach(0x%p)\n", link);
 
 	info->busy = 1;
 	elsa_cs_release(link);
@@ -228,46 +190,31 @@ static int elsa_cs_configcheck(struct pcmcia_device *p_dev,
 	return -ENODEV;
 }
 
-static int elsa_cs_config(struct pcmcia_device *link)
+static int __devinit elsa_cs_config(struct pcmcia_device *link)
 {
     local_info_t *dev;
-    int i, last_fn;
+    int i;
     IsdnCard_t icard;
 
-    DEBUG(0, "elsa_config(0x%p)\n", link);
+    dev_dbg(&link->dev, "elsa_config(0x%p)\n", link);
     dev = link->priv;
 
     i = pcmcia_loop_config(link, elsa_cs_configcheck, NULL);
-    if (i != 0) {
-	last_fn = RequestIO;
-	goto cs_failed;
-    }
+    if (i != 0)
+	goto failed;
 
-    i = pcmcia_request_irq(link, &link->irq);
-    if (i != 0) {
-        link->irq.AssignedIRQ = 0;
-	last_fn = RequestIRQ;
-        goto cs_failed;
-    }
+    if (!link->irq)
+	goto failed;
 
     i = pcmcia_request_configuration(link, &link->conf);
-    if (i != 0) {
-      last_fn = RequestConfiguration;
-      goto cs_failed;
-    }
-
-    /* At this point, the dev_node_t structure(s) should be
-       initialized and arranged in a linked list at link->dev. *//*  */
-    sprintf(dev->node.dev_name, "elsa");
-    dev->node.major = dev->node.minor = 0x0;
-
-    link->dev_node = &dev->node;
+    if (i != 0)
+	goto failed;
 
     /* Finally, report what we've done */
-    printk(KERN_INFO "%s: index 0x%02x: ",
-           dev->node.dev_name, link->conf.ConfigIndex);
+    dev_info(&link->dev, "index 0x%02x: ",
+	    link->conf.ConfigIndex);
     if (link->conf.Attributes & CONF_ENABLE_IRQ)
-        printk(", irq %d", link->irq.AssignedIRQ);
+	printk(", irq %d", link->irq);
     if (link->io.NumPorts1)
         printk(", io 0x%04x-0x%04x", link->io.BasePort1,
                link->io.BasePort1+link->io.NumPorts1-1);
@@ -276,7 +223,7 @@ static int elsa_cs_config(struct pcmcia_device *link)
                link->io.BasePort2+link->io.NumPorts2-1);
     printk("\n");
 
-    icard.para[0] = link->irq.AssignedIRQ;
+    icard.para[0] = link->irq;
     icard.para[1] = link->io.BasePort1;
     icard.protocol = protocol;
     icard.typ = ISDN_CTYPE_ELSA_PCMCIA;
@@ -290,8 +237,7 @@ static int elsa_cs_config(struct pcmcia_device *link)
     	((local_info_t*)link->priv)->cardnr = i;
 
     return 0;
-cs_failed:
-    cs_error(link, last_fn, i);
+failed:
     elsa_cs_release(link);
     return -ENODEV;
 } /* elsa_cs_config */
@@ -308,7 +254,7 @@ static void elsa_cs_release(struct pcmcia_device *link)
 {
     local_info_t *local = link->priv;
 
-    DEBUG(0, "elsa_cs_release(0x%p)\n", link);
+    dev_dbg(&link->dev, "elsa_cs_release(0x%p)\n", link);
 
     if (local) {
     	if (local->cardnr >= 0) {
@@ -351,7 +297,7 @@ static struct pcmcia_driver elsa_cs_driver = {
 		.name	= "elsa_cs",
 	},
 	.probe		= elsa_cs_probe,
-	.remove		= elsa_cs_detach,
+	.remove		= __devexit_p(elsa_cs_detach),
 	.id_table	= elsa_ids,
 	.suspend	= elsa_suspend,
 	.resume		= elsa_resume,

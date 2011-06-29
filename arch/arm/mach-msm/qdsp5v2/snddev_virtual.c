@@ -23,6 +23,7 @@
 #include <mach/qdsp5v2/audio_dev_ctl.h>
 #include <mach/qdsp5v2/snddev_virtual.h>
 #include <mach/debug_mm.h>
+#include <linux/slab.h>
 
 static int snddev_virtual_open(struct msm_snddev_info *dev_info)
 {

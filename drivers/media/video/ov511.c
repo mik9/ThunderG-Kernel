@@ -57,8 +57,8 @@
 #define DRIVER_VERSION "v1.64 for Linux 2.5"
 #define EMAIL "mark@alpha.dyndns.org"
 #define DRIVER_AUTHOR "Mark McClelland <mark@alpha.dyndns.org> & Bret Wallach \
-	& Orion Sky Lawlor <olawlor@acm.org> & Kevin Moore & Charl P. Botha \
-	<cpbotha@ieee.org> & Claudio Matsuoka <claudio@conectiva.com>"
+& Orion Sky Lawlor <olawlor@acm.org> & Kevin Moore & Charl P. Botha \
+<cpbotha@ieee.org> & Claudio Matsuoka <claudio@conectiva.com>"
 #define DRIVER_DESC "ov511 USB Camera Driver"
 
 #define OV511_I2C_RETRIES 3
@@ -4674,7 +4674,6 @@ static struct video_device vdev_template = {
 	.name =		"OV511 USB Camera",
 	.fops =		&ov511_fops,
 	.release =	video_device_release,
-	.minor =	-1,
 };
 
 /****************************************************************************
@@ -5867,8 +5866,8 @@ ov51x_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	ov511_devused |= 1 << nr;
 	ov->nr = nr;
 
-	dev_info(&intf->dev, "Device at %s registered to minor %d\n",
-		 ov->usb_path, ov->vdev->minor);
+	dev_info(&intf->dev, "Device at %s registered to %s\n",
+		 ov->usb_path, video_device_node_name(ov->vdev));
 
 	usb_set_intfdata(intf, ov);
 	if (ov_create_sysfs(ov->vdev)) {
@@ -5884,7 +5883,7 @@ ov51x_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 error:
 	if (ov->vdev) {
-		if (-1 == ov->vdev->minor)
+		if (!video_is_registered(ov->vdev))
 			video_device_release(ov->vdev);
 		else
 			video_unregister_device(ov->vdev);
@@ -5917,11 +5916,6 @@ ov51x_disconnect(struct usb_interface *intf)
 	mutex_lock(&ov->lock);
 	usb_set_intfdata (intf, NULL);
 
-	if (!ov) {
-		mutex_unlock(&ov->lock);
-		return;
-	}
-
 	/* Free device number */
 	ov511_devused &= ~(1 << ov->nr);
 
@@ -5946,7 +5940,7 @@ ov51x_disconnect(struct usb_interface *intf)
 	ov->dev = NULL;
 
 	/* Free the memory */
-	if (ov && !ov->user) {
+	if (!ov->user) {
 		mutex_lock(&ov->cbuf_lock);
 		kfree(ov->cbuf);
 		ov->cbuf = NULL;

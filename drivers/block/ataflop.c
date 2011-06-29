@@ -1470,18 +1470,13 @@ repeat:
 
 void do_fd_request(struct request_queue * q)
 {
- 	unsigned long flags;
-
 	DPRINT(("do_fd_request for pid %d\n",current->pid));
 	while( fdc_busy ) sleep_on( &fdc_wait );
 	fdc_busy = 1;
 	stdma_lock(floppy_irq, NULL);
 
 	atari_disable_irq( IRQ_MFP_FDC );
-	local_save_flags(flags);	/* The request function is called with ints
-	local_irq_disable();		 * disabled... so must save the IPL for later */ 
 	redo_fd_request();
-	local_irq_restore(flags);
 	atari_enable_irq( IRQ_MFP_FDC );
 }
 

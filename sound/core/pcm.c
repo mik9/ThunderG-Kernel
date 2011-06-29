@@ -435,6 +435,7 @@ static void snd_pcm_substream_proc_status_read(struct snd_info_entry *entry,
 		return;
 	}
 	snd_iprintf(buffer, "state: %s\n", snd_pcm_state_name(status.state));
+	snd_iprintf(buffer, "owner_pid   : %d\n", pid_vnr(substream->pid));
 	snd_iprintf(buffer, "trigger_time: %ld.%09ld\n",
 		status.trigger_tstamp.tv_sec, status.trigger_tstamp.tv_nsec);
 	snd_iprintf(buffer, "tstamp      : %ld.%09ld\n",
@@ -647,9 +648,6 @@ int snd_pcm_new_stream(struct snd_pcm *pcm, int stream, int substream_count)
 		substream->number = idx;
 		substream->stream = stream;
 		sprintf(substream->name, "subdevice #%i", idx);
-		snprintf(substream->latency_id, sizeof(substream->latency_id),
-			 "ALSA-PCM%d-%d%c%d", pcm->card->number, pcm->device,
-			 (stream ? 'c' : 'p'), idx);
 		substream->buffer_bytes_max = UINT_MAX;
 		if (prev == NULL)
 			pstr->substream = substream;
@@ -809,7 +807,7 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 	card = pcm->card;
 	read_lock(&card->ctl_files_rwlock);
 	list_for_each_entry(kctl, &card->ctl_files, list) {
-		if (kctl->pid == current->pid) {
+		if (kctl->pid == task_pid(current)) {
 			prefer_subdevice = kctl->prefer_pcm_subdevice;
 			if (prefer_subdevice != -1)
 				break;
@@ -893,6 +891,7 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 	memset((void*)runtime->control, 0, size);
 
 	init_waitqueue_head(&runtime->sleep);
+	init_waitqueue_head(&runtime->tsleep);
 
 	runtime->status->state = SNDRV_PCM_STATE_OPEN;
 
@@ -900,6 +899,7 @@ int snd_pcm_attach_substream(struct snd_pcm *pcm, int stream,
 	substream->private_data = pcm->private_data;
 	substream->ref_count = 1;
 	substream->f_flags = file->f_flags;
+	substream->pid = get_pid(task_pid(current));
 	pstr->substream_opened++;
 	*rsubstream = substream;
 	return 0;
@@ -919,8 +919,14 @@ void snd_pcm_detach_substream(struct snd_pcm_substream *substream)
 	snd_free_pages((void*)runtime->control,
 		       PAGE_ALIGN(sizeof(struct snd_pcm_mmap_control)));
 	kfree(runtime->hw_constraints.rules);
+#ifdef CONFIG_SND_PCM_XRUN_DEBUG
+	if (runtime->hwptr_log)
+		kfree(runtime->hwptr_log);
+#endif
 	kfree(runtime);
 	substream->runtime = NULL;
+	put_pid(substream->pid);
+	substream->pid = NULL;
 	substream->pstr->substream_opened--;
 }
 

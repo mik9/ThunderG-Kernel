@@ -17,14 +17,16 @@ menuconfig TCG_TPM
 	  obtained at: <http://sourceforge.net/projects/trousers>.  To 
 	  compile this driver as a module, choose M here; the module 
 	  will be called tpm. If unsure, say N.
-	  Note: For more TPM drivers enable CONFIG_PNP, CONFIG_ACPI
+	  Notes:
+	  1) For more TPM drivers enable CONFIG_PNP, CONFIG_ACPI
 	  and CONFIG_PNPACPI.
+	  2) Without ACPI enabled, the BIOS event log won't be accessible,
+	  which is required to validate the PCR 0-7 values.
 
 if TCG_TPM
 
 config TCG_TIS
 	tristate "TPM Interface Specification 1.2 Interface"
-	depends on PNP
 	---help---
 	  If you have a TPM security chip that is compliant with the
 	  TCG TIS 1.2 TPM specification say Yes and it will be accessible
@@ -57,5 +59,19 @@ config TCG_INFINEON
 	  will be called tpm_infineon.
 	  Further information on this driver and the supported hardware
 	  can be found at http://www.prosec.rub.de/tpm
+
+config TCG_ST_I2C
+	tristate "ST Micro ST19NP18-TPM-I2C TPM interface"
+	depends on I2C
+	default n
+	---help---
+	  If you have a ST19NP18-TPM-I2C TPM security chip from ST Micro
+	  say Yes and it will be accessible from Linux.
+
+config TCG_TPMD_DEV
+	tristate "tpmd_dev TPM Emulator driver"
+	default n
+	---help---
+	  Enables the TPM emulator driver
 
 endif # TCG_TPM

@@ -23,6 +23,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <linux/init.h>
 #include <linux/usb.h>
 #include <linux/firmware.h>
+#include <linux/slab.h>
 
 #include "smscoreapi.h"
 #include "sms-cards.h"
@@ -390,7 +391,7 @@ static int smsusb_init_device(struct usb_interface *intf, int board_id)
 	return rc;
 }
 
-static int smsusb_probe(struct usb_interface *intf,
+static int __devinit smsusb_probe(struct usb_interface *intf,
 			const struct usb_device_id *id)
 {
 	struct usb_device *udev = interface_to_usbdev(intf);
@@ -484,7 +485,7 @@ static int smsusb_resume(struct usb_interface *intf)
 	return 0;
 }
 
-struct usb_device_id smsusb_id_table[] = {
+static const struct usb_device_id smsusb_id_table[] __devinitconst = {
 	{ USB_DEVICE(0x187f, 0x0010),
 		.driver_info = SMS1XXX_BOARD_SIANO_STELLAR },
 	{ USB_DEVICE(0x187f, 0x0100),
@@ -560,7 +561,7 @@ static struct usb_driver smsusb_driver = {
 	.resume			= smsusb_resume,
 };
 
-int smsusb_module_init(void)
+static int __init smsusb_module_init(void)
 {
 	int rc = usb_register(&smsusb_driver);
 	if (rc)
@@ -571,7 +572,7 @@ int smsusb_module_init(void)
 	return rc;
 }
 
-void smsusb_module_exit(void)
+static void __exit smsusb_module_exit(void)
 {
 	/* Regular USB Cleanup */
 	usb_deregister(&smsusb_driver);

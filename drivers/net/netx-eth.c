@@ -126,7 +126,6 @@ netx_eth_hard_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	           FIFO_PTR_FRAMENO(1) |
 	           FIFO_PTR_FRAMELEN(len));
 
-	ndev->trans_start = jiffies;
 	ndev->stats.tx_packets++;
 	ndev->stats.tx_bytes += skb->len;
 
@@ -212,7 +211,7 @@ static int netx_eth_open(struct net_device *ndev)
 	struct netx_eth_priv *priv = netdev_priv(ndev);
 
 	if (request_irq
-	    (ndev->irq, &netx_eth_interrupt, IRQF_SHARED, ndev->name, ndev))
+	    (ndev->irq, netx_eth_interrupt, IRQF_SHARED, ndev->name, ndev))
 		return -EAGAIN;
 
 	writel(ndev->dev_addr[0] |

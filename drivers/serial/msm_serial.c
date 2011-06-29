@@ -2,7 +2,7 @@
  * drivers/serial/msm_serial.c - driver for msm7k serial device and console
  *
  * Copyright (C) 2007 Google, Inc.
- * Copyright (c) 2009, Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2009-2010, Code Aurora Forum. All rights reserved.
  * Author: Robert Love <rlove@google.com>
  *
  * This software is licensed under the terms of the GNU General Public
@@ -34,6 +34,7 @@
 #include <linux/nmi.h>
 #include <linux/clk.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 #include <mach/msm_serial_pdata.h>
 #include "msm_serial.h"
 
@@ -567,7 +568,10 @@ static int msm_startup(struct uart_port *port)
 	if (unlikely(ret))
 		return ret;
 
+#ifndef CONFIG_PM_RUNTIME
 	msm_init_clock(port);
+#endif
+	pm_runtime_get_sync(port->dev);
 
 	if (likely(port->fifosize > 12))
 		rfr_level = port->fifosize - 12;
@@ -635,8 +639,10 @@ static void msm_shutdown(struct uart_port *port)
 		free_irq(msm_port->wakeup.irq, msm_port);
 	}
 #endif
+#ifndef CONFIG_PM_RUNTIME
 	msm_deinit_clock(port);
-
+#endif
+	pm_runtime_put_sync(port->dev);
 }
 
 static void msm_set_termios(struct uart_port *port, struct ktermios *termios,
@@ -950,7 +956,12 @@ static int __init msm_console_setup(struct console *co, char *options)
 
 	port->cons = co;
 
+	pm_runtime_get_noresume(port->dev);
+
+#ifndef CONFIG_PM_RUNTIME
 	msm_init_clock(port);
+#endif
+	pm_runtime_resume(port->dev);
 
 	if (options)
 		uart_parse_options(options, &baud, &parity, &bits, &flow);
@@ -1003,6 +1014,7 @@ static int __init msm_serial_probe(struct platform_device *pdev)
 	struct msm_port *msm_port;
 	struct resource *resource;
 	struct uart_port *port;
+	int irq;
 #ifdef CONFIG_SERIAL_MSM_RX_WAKEUP
 	struct msm_serial_platform_data *pdata = pdev->dev.platform_data;
 #endif
@@ -1026,9 +1038,10 @@ static int __init msm_serial_probe(struct platform_device *pdev)
 		return -ENXIO;
 	port->mapbase = resource->start;
 
-	port->irq = platform_get_irq(pdev, 0);
-	if (unlikely(port->irq < 0))
+	irq = platform_get_irq(pdev, 0);
+	if (unlikely(irq < 0))
 		return -ENXIO;
+	port->irq = irq;
 
 	platform_set_drvdata(pdev, port);
 
@@ -1056,12 +1069,16 @@ static int __init msm_serial_probe(struct platform_device *pdev)
 	msm_port->clk_off_delay = ktime_set(0, 1000000);  /* 1 ms */
 #endif
 
+	pm_runtime_enable(port->dev);
 	return uart_add_one_port(&msm_uart_driver, port);
 }
 
 static int __devexit msm_serial_remove(struct platform_device *pdev)
 {
 	struct msm_port *msm_port = platform_get_drvdata(pdev);
+
+	pm_runtime_put_sync(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
 
 	clk_put(msm_port->clk);
 
@@ -1073,9 +1090,10 @@ static int __devexit msm_serial_remove(struct platform_device *pdev)
 #define msm_serial_resume NULL
 #else
 #ifdef CONFIG_PM
-static int msm_serial_suspend(struct platform_device *pdev, pm_message_t state)
+static int msm_serial_suspend(struct device *dev)
 {
 	struct uart_port *port;
+	struct platform_device *pdev = to_platform_device(dev);
 	port = get_port_from_line(pdev->id);
 
 	if (port) {
@@ -1087,9 +1105,10 @@ static int msm_serial_suspend(struct platform_device *pdev, pm_message_t state)
 	return 0;
 }
 
-static int msm_serial_resume(struct platform_device *pdev)
+static int msm_serial_resume(struct device *dev)
 {
 	struct uart_port *port;
+	struct platform_device *pdev = to_platform_device(dev);
 	port = get_port_from_line(pdev->id);
 
 	if (port) {
@@ -1106,14 +1125,41 @@ static int msm_serial_resume(struct platform_device *pdev)
 #endif
 #endif //#ifdef CONFIG_MACH_MSM7X27_THUNDERG
 
-static struct platform_driver msm_platform_driver = {
-	.probe = msm_serial_probe,
-	.remove = msm_serial_remove,
+static int msm_serial_runtime_suspend(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct uart_port *port;
+	port = get_port_from_line(pdev->id);
+
+	dev_dbg(dev, "pm_runtime: suspending\n");
+	msm_deinit_clock(port);
+	return 0;
+}
+
+static int msm_serial_runtime_resume(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct uart_port *port;
+	port = get_port_from_line(pdev->id);
+
+	dev_dbg(dev, "pm_runtime: resuming\n");
+	msm_init_clock(port);
+	return 0;
+}
+
+static struct dev_pm_ops msm_serial_dev_pm_ops = {
 	.suspend = msm_serial_suspend,
 	.resume = msm_serial_resume,
+	.runtime_suspend = msm_serial_runtime_suspend,
+	.runtime_resume = msm_serial_runtime_resume,
+};
+
+static struct platform_driver msm_platform_driver = {
+	.remove = msm_serial_remove,
 	.driver = {
 		.name = "msm_serial",
 		.owner = THIS_MODULE,
+		.pm = &msm_serial_dev_pm_ops,
 	},
 };
 

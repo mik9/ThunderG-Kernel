@@ -1,4 +1,4 @@
-/* Copyright (c) 2010, Code Aurora Forum. All rights reserved.
+/* Copyright (c) 2010-2011, Code Aurora Forum. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -20,9 +20,11 @@
 #include <linux/i2c.h>
 #include <linux/uaccess.h>
 #include <linux/miscdevice.h>
+#include <linux/slab.h>
 #include <media/msm_camera.h>
 #include <mach/gpio.h>
 #include <mach/camera.h>
+#include <asm/mach-types.h>
 #include "imx074.h"
 
 /*SENSOR REGISTER DEFINES*/
@@ -123,9 +125,12 @@
 #define	IMX074_VER_FULL_BLK_LINES			96
 /* Quarter Size	*/
 #define	IMX074_HRZ_QTR_BLK_PIXELS			2368
-#define	IMX074_VER_QTR_BLK_LINES			48
+#define	IMX074_VER_QTR_BLK_LINES			21
 #define	Q8						0x100
 #define	Q10						0x400
+#define	IMX074_AF_I2C_SLAVE_ID				0x72
+#define	IMX074_STEPS_NEAR_TO_CLOSEST_INF		42
+#define	IMX074_TOTAL_STEPS_NEAR_TO_FAR			42
 
 struct imx074_work_t {
 	struct work_struct work;
@@ -151,8 +156,9 @@ struct imx074_ctrl_t {
 	enum imx074_test_mode_t set_test;
 	unsigned short imgaddr;
 };
-static uint8_t imx074_delay_msecs_stdby = 20;
-static uint16_t imx074_delay_msecs_stream = 60;
+static uint8_t imx074_delay_msecs_stdby = 5;
+static uint16_t imx074_delay_msecs_stream = 5;
+static int32_t config_csi;
 
 static struct imx074_ctrl_t *imx074_ctrl;
 static DECLARE_WAIT_QUEUE_HEAD(imx074_wait_queue);
@@ -237,6 +243,20 @@ static int32_t imx074_i2c_write_b_sensor(unsigned short waddr, uint8_t bdata)
 	}
 	return rc;
 }
+static int16_t imx074_i2c_write_b_af(unsigned short saddr,
+	unsigned short baddr, unsigned short bdata)
+{
+	int32_t rc;
+	unsigned char buf[2];
+	memset(buf, 0, sizeof(buf));
+	buf[0] = baddr;
+	buf[1] = bdata;
+	rc = imx074_i2c_txdata(saddr, buf, 2);
+	if (rc < 0)
+		CDBG("AFi2c_write failed, saddr = 0x%x addr = 0x%x, val =0x%x!",
+			saddr, baddr, bdata);
+	return rc;
+}
 
 static int32_t imx074_i2c_write_w_table(struct imx074_i2c_reg_conf const
 					 *reg_conf_tbl, int num)
@@ -252,6 +272,18 @@ static int32_t imx074_i2c_write_w_table(struct imx074_i2c_reg_conf const
 	}
 	return rc;
 }
+static int16_t imx074_af_init(void)
+{
+	int32_t rc;
+	/* Initialize waveform */
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x01, 0xA9);
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x02, 0xD2);
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x03, 0x0C);
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x04, 0x14);
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x05, 0xB6);
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x06, 0x4F);
+	return rc;
+}
 
 static void imx074_get_pict_fps(uint16_t fps, uint16_t *pfps)
 {
@@ -259,6 +291,8 @@ static void imx074_get_pict_fps(uint16_t fps, uint16_t *pfps)
 	uint16_t preview_frame_length_lines, snapshot_frame_length_lines;
 	uint16_t preview_line_length_pck, snapshot_line_length_pck;
 	uint32_t divider, d1, d2;
+	uint32_t pclk_mult;/*Q10 */
+
 	/* Total frame_length_lines and line_length_pck for preview */
 	preview_frame_length_lines = IMX074_QTR_SIZE_HEIGHT +
 		IMX074_VER_QTR_BLK_LINES;
@@ -273,8 +307,12 @@ static void imx074_get_pict_fps(uint16_t fps, uint16_t *pfps)
 		snapshot_frame_length_lines;
 	d2 = preview_line_length_pck * 0x00000400 /
 		snapshot_line_length_pck;
-	divider = d1 * d2 / 0x400;
-	*pfps = (uint16_t) (fps * divider / 0x400);
+	pclk_mult =
+		(uint32_t) ((imx074_regs.reg_pat[RES_CAPTURE].pll_multiplier *
+		0x00000400) /
+		(imx074_regs.reg_pat[RES_PREVIEW].pll_multiplier));
+	divider = d1 * d2 * pclk_mult / 0x400;
+	*pfps = (uint16_t) (fps * divider / 0x400 / 0x400);
 }
 
 static uint16_t imx074_get_prev_lines_pf(void)
@@ -448,13 +486,44 @@ static int32_t imx074_set_pict_exp_gain(uint16_t gain, uint32_t line)
 static int32_t imx074_move_focus(int direction,
 	int32_t num_steps)
 {
-	return 0;
+	int32_t step_direction, dest_step_position, bit_mask;
+	int32_t rc = 0;
+	uint32_t imx074_l_region_code_per_step = 3;
+
+	if (num_steps == 0)
+		return rc;
+
+	if (direction == MOVE_NEAR) {
+		step_direction = 1;
+		bit_mask = 0x80;
+	} else if (direction == MOVE_FAR) {
+		step_direction = -1;
+		bit_mask = 0x00;
+	} else {
+		CDBG("imx074_move_focus: Illegal focus direction");
+		return -EINVAL;
+	}
+	dest_step_position = imx074_ctrl->curr_step_pos +
+		(step_direction * num_steps);
+	if (dest_step_position < 0)
+		dest_step_position = 0;
+	else if (dest_step_position > IMX074_TOTAL_STEPS_NEAR_TO_FAR)
+		dest_step_position = IMX074_TOTAL_STEPS_NEAR_TO_FAR;
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x00,
+		((num_steps * imx074_l_region_code_per_step) | bit_mask));
+	imx074_ctrl->curr_step_pos = dest_step_position;
+	return rc;
 }
 
 
 static int32_t imx074_set_default_focus(uint8_t af_step)
 {
-	return 0;
+	int32_t rc;
+	/* Initialize to infinity */
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x00, 0x7F);
+	rc = imx074_i2c_write_b_af(IMX074_AF_I2C_SLAVE_ID, 0x00, 0x7F);
+	imx074_ctrl->curr_step_pos = 0;
+	return rc;
 }
 static int32_t imx074_test(enum imx074_test_mode_t mo)
 {
@@ -478,9 +547,6 @@ static int32_t imx074_sensor_setting(int update_type, int rt)
 	case REG_INIT:
 		if (rt == RES_PREVIEW || rt == RES_CAPTURE) {
 			struct imx074_i2c_reg_conf init_tbl[] = {
-				{REG_PLL_MULTIPLIER,
-					imx074_regs.reg_pat_init[0].
-					pll_multiplier},
 				{REG_PRE_PLL_CLK_DIV,
 					imx074_regs.reg_pat_init[0].
 					pre_pll_clk_div},
@@ -568,6 +634,9 @@ static int32_t imx074_sensor_setting(int update_type, int rt)
 			struct imx074_i2c_reg_conf init_mode_tbl[] = {
 				{REG_GROUPED_PARAMETER_HOLD,
 					GROUPED_PARAMETER_HOLD},
+				{REG_PLL_MULTIPLIER,
+					imx074_regs.reg_pat[rt].
+					pll_multiplier},
 				{REG_FRAME_LENGTH_LINES_HI,
 					imx074_regs.reg_pat[rt].
 					frame_length_lines_hi},
@@ -637,17 +706,6 @@ static int32_t imx074_sensor_setting(int update_type, int rt)
 				MODE_SELECT_STANDBY_MODE);
 			if (rc < 0)
 				return rc;
-			imx074_csi_params.lane_cnt = 4;
-			imx074_csi_params.data_format = CSI_10BIT;
-			imx074_csi_params.lane_assign = 0xe4;
-			imx074_csi_params.dpcm_scheme = 0;
-			imx074_csi_params.settle_cnt = 0x14;
-
-			rc = msm_camio_csi_config(&imx074_csi_params);
-			if (rc < 0)
-				CDBG("config csi controller failed \n");
-
-			/*imx074_delay_msecs_stdby*/
 			msleep(imx074_delay_msecs_stdby);
 			rc = imx074_i2c_write_w_table(&init_tbl[0],
 				ARRAY_SIZE(init_tbl));
@@ -658,14 +716,6 @@ static int32_t imx074_sensor_setting(int update_type, int rt)
 			if (rc < 0)
 				return rc;
 			rc = imx074_test(imx074_ctrl->set_test);
-			if (rc < 0)
-				return rc;
-			/* Start sensor streaming */
-			rc = imx074_i2c_write_b_sensor(REG_MODE_SELECT,
-				MODE_SELECT_STREAM);
-			if (rc < 0)
-				return rc;
-			msleep(imx074_delay_msecs_stream);
 			return rc;
 		}
 		break;
@@ -674,6 +724,9 @@ static int32_t imx074_sensor_setting(int update_type, int rt)
 			struct imx074_i2c_reg_conf mode_tbl[] = {
 				{REG_GROUPED_PARAMETER_HOLD,
 					GROUPED_PARAMETER_HOLD},
+				{REG_PLL_MULTIPLIER,
+					imx074_regs.reg_pat[rt].
+					pll_multiplier},
 				{REG_FRAME_LENGTH_LINES_HI,
 					imx074_regs.reg_pat[rt].
 					frame_length_lines_hi},
@@ -738,8 +791,18 @@ static int32_t imx074_sensor_setting(int update_type, int rt)
 			/* stop streaming */
 			rc = imx074_i2c_write_b_sensor(REG_MODE_SELECT,
 				MODE_SELECT_STANDBY_MODE);
-			if (rc < 0)
-				return rc;
+			msleep(imx074_delay_msecs_stdby);
+			if (config_csi == 0) {
+				imx074_csi_params.lane_cnt = 4;
+				imx074_csi_params.data_format = CSI_10BIT;
+				imx074_csi_params.lane_assign = 0xe4;
+				imx074_csi_params.dpcm_scheme = 0;
+				imx074_csi_params.settle_cnt = 0x14;
+				rc = msm_camio_csi_config(&imx074_csi_params);
+				/*imx074_delay_msecs_stdby*/
+				msleep(imx074_delay_msecs_stream);
+				config_csi = 1;
+			}
 			rc = imx074_i2c_write_w_table(&mode_tbl[0],
 				ARRAY_SIZE(mode_tbl));
 			if (rc < 0)
@@ -768,14 +831,8 @@ static int32_t imx074_video_config(int mode)
 	/* change sensor resolution	if needed */
 	if (imx074_ctrl->prev_res == QTR_SIZE) {
 		rt = RES_PREVIEW;
-		imx074_delay_msecs_stdby =
-			((((2 * 1000 * imx074_ctrl->fps_divider)/
-				imx074_ctrl->fps) * Q8) / Q10) + 1;
 	} else {
 		rt = RES_CAPTURE;
-		imx074_delay_msecs_stdby =
-			((((1000 * imx074_ctrl->fps_divider)/
-			imx074_ctrl->fps) * Q8) / Q10) + 1;
 	}
 	if (imx074_sensor_setting(UPDATE_PERIODIC, rt) < 0)
 		return rc;
@@ -792,14 +849,8 @@ static int32_t imx074_snapshot_config(int mode)
 	if (imx074_ctrl->curr_res != imx074_ctrl->pict_res) {
 		if (imx074_ctrl->pict_res == QTR_SIZE) {
 			rt = RES_PREVIEW;
-			imx074_delay_msecs_stdby =
-				((((2*1000 * imx074_ctrl->fps_divider)/
-				imx074_ctrl->fps) * Q8) / Q10) + 1;
 		} else {
 			rt = RES_CAPTURE;
-			imx074_delay_msecs_stdby =
-				((((1000 * imx074_ctrl->fps_divider)/
-				imx074_ctrl->fps) * Q8) / Q10) + 1;
 		}
 	}
 	if (imx074_sensor_setting(UPDATE_PERIODIC, rt) < 0)
@@ -816,14 +867,8 @@ static int32_t imx074_raw_snapshot_config(int mode)
 	if (imx074_ctrl->curr_res != imx074_ctrl->pict_res) {
 		if (imx074_ctrl->pict_res == QTR_SIZE) {
 			rt = RES_PREVIEW;
-			imx074_delay_msecs_stdby =
-				((((2*1000 * imx074_ctrl->fps_divider)/
-				imx074_ctrl->fps) * Q8) / Q10) + 1;
 		} else {
 			rt = RES_CAPTURE;
-				imx074_delay_msecs_stdby =
-					((((1000 * imx074_ctrl->fps_divider)/
-					imx074_ctrl->fps) * Q8) / Q10) + 1;
 		}
 	}
 	if (imx074_sensor_setting(UPDATE_PERIODIC, rt) < 0)
@@ -854,11 +899,14 @@ static int32_t imx074_set_sensor_mode(int mode,
 }
 static int32_t imx074_power_down(void)
 {
+	imx074_i2c_write_b_sensor(REG_MODE_SELECT,
+		MODE_SELECT_STANDBY_MODE);
+	msleep(imx074_delay_msecs_stdby);
 	return 0;
 }
 static int imx074_probe_init_done(const struct msm_camera_sensor_info *data)
 {
-	gpio_direction_output(data->sensor_reset, 0);
+	gpio_direction_input(data->sensor_reset);
 	gpio_free(data->sensor_reset);
 	return 0;
 }
@@ -872,24 +920,23 @@ static int imx074_probe_init_sensor(const struct msm_camera_sensor_info *data)
 	if (!rc) {
 		CDBG("sensor_reset = %d\n", rc);
 		gpio_direction_output(data->sensor_reset, 0);
-		msleep(50);
-		gpio_direction_output(data->sensor_reset, 1);
-		msleep(50);
+		usleep_range(5000, 6000);
+		gpio_set_value_cansleep(data->sensor_reset, 1);
+		usleep_range(5000, 6000);
 	} else {
 		CDBG("gpio reset fail");
 		goto init_probe_done;
 	}
-	msleep(20);
-	CDBG(" imx074_probe_init_sensor is called \n");
+	CDBG("imx074_probe_init_sensor is called\n");
 	/* 3. Read sensor Model ID: */
 	rc = imx074_i2c_read(0x0000, &chipidh, 1);
 	if (rc < 0) {
-		CDBG(" Model read failed \n");
+		CDBG("Model read failed\n");
 		goto init_probe_fail;
 	}
 	rc = imx074_i2c_read(0x0001, &chipidl, 1);
 	if (rc < 0) {
-		CDBG(" Model read failed \n");
+		CDBG("Model read failed\n");
 		goto init_probe_fail;
 	}
 	CDBG("imx074 model_id = 0x%x  0x%x\n", chipidh, chipidl);
@@ -901,17 +948,39 @@ static int imx074_probe_init_sensor(const struct msm_camera_sensor_info *data)
 	}
 	goto init_probe_done;
 init_probe_fail:
-	CDBG(" imx074_probe_init_sensor fails\n");
+	CDBG("imx074_probe_init_sensor fails\n");
+	gpio_set_value_cansleep(data->sensor_reset, 0);
 	imx074_probe_init_done(data);
 init_probe_done:
 	CDBG(" imx074_probe_init_sensor finishes\n");
 	return rc;
 	}
+static int32_t imx074_poweron_af(void)
+{
+	int32_t rc = 0;
+	CDBG("imx074 enable AF actuator, gpio = %d\n",
+			imx074_ctrl->sensordata->vcm_pwd);
+	rc = gpio_request(imx074_ctrl->sensordata->vcm_pwd, "imx074");
+	if (!rc) {
+		gpio_direction_output(imx074_ctrl->sensordata->vcm_pwd, 1);
+		msleep(20);
+		rc = imx074_af_init();
+		if (rc < 0)
+			CDBG("imx074 AF initialisation failed\n");
+	} else {
+		CDBG("%s: AF PowerON gpio_request failed %d\n", __func__, rc);
+	 }
+	return rc;
+}
+static void imx074_poweroff_af(void)
+{
+	gpio_set_value_cansleep(imx074_ctrl->sensordata->vcm_pwd, 0);
+	gpio_free(imx074_ctrl->sensordata->vcm_pwd);
+}
 /* camsensor_iu060f_imx074_reset */
 int imx074_sensor_open_init(const struct msm_camera_sensor_info *data)
 {
 	int32_t rc = 0;
-
 	CDBG("%s: %d\n", __func__, __LINE__);
 	CDBG("Calling imx074_sensor_open_init\n");
 	imx074_ctrl = kzalloc(sizeof(struct imx074_ctrl_t), GFP_KERNEL);
@@ -927,14 +996,14 @@ int imx074_sensor_open_init(const struct msm_camera_sensor_info *data)
 	imx074_ctrl->prev_res = QTR_SIZE;
 	imx074_ctrl->pict_res = FULL_SIZE;
 	imx074_ctrl->curr_res = INVALID_SIZE;
+	config_csi = 0;
 
 	if (data)
 		imx074_ctrl->sensordata = data;
 
 	/* enable mclk first */
 	msm_camio_clk_rate_set(24000000);
-	msleep(20);
-
+	usleep_range(1000, 2000);
 	rc = imx074_probe_init_sensor(data);
 	if (rc < 0) {
 		CDBG("Calling imx074_sensor_open_init fail\n");
@@ -942,10 +1011,20 @@ int imx074_sensor_open_init(const struct msm_camera_sensor_info *data)
 	}
 
 	rc = imx074_sensor_setting(REG_INIT, RES_PREVIEW);
-	if (rc < 0)
+	if (rc < 0) {
+		CDBG("imx074_sensor_setting failed\n");
 		goto init_fail;
+	}
+	if (machine_is_msm8x60_fluid())
+		rc = imx074_poweron_af();
 	else
+		rc = imx074_af_init();
+	if (rc < 0) {
+		CDBG("AF initialisation failed\n");
+		goto init_fail;
+	} else
 		goto init_done;
+
 init_fail:
 	CDBG(" imx074_sensor_open_init fail\n");
 	imx074_probe_init_done(data);
@@ -988,7 +1067,6 @@ static int imx074_i2c_probe(struct i2c_client *client,
 	imx074_init_client(client);
 	imx074_client = client;
 
-	msleep(50);
 
 	CDBG("imx074_probe successed! rc = %d\n", rc);
 	return 0;
@@ -1129,9 +1207,12 @@ static int imx074_sensor_release(void)
 {
 	int rc = -EBADF;
 	mutex_lock(&imx074_mut);
+	if (machine_is_msm8x60_fluid())
+		imx074_poweroff_af();
 	imx074_power_down();
-	gpio_direction_output(imx074_ctrl->sensordata->sensor_reset,
-		0);
+	gpio_set_value_cansleep(imx074_ctrl->sensordata->sensor_reset, 0);
+	msleep(5);
+	gpio_direction_input(imx074_ctrl->sensordata->sensor_reset);
 	gpio_free(imx074_ctrl->sensordata->sensor_reset);
 	kfree(imx074_ctrl);
 	imx074_ctrl = NULL;
@@ -1157,6 +1238,7 @@ static int imx074_sensor_probe(const struct msm_camera_sensor_info *info,
 	s->s_init = imx074_sensor_open_init;
 	s->s_release = imx074_sensor_release;
 	s->s_config  = imx074_sensor_config;
+	s->s_mount_angle = 90;
 	imx074_probe_init_done(info);
 
 	return rc;

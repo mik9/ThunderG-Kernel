@@ -57,12 +57,13 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/dcache.h>
-#include <linux/zlib.h>
+#include <linux/xattr.h>
 
 #include "squashfs_fs.h"
 #include "squashfs_fs_sb.h"
 #include "squashfs_fs_i.h"
 #include "squashfs.h"
+#include "xattr.h"
 
 /*
  * Lookup name in the directory index, returning the location of the metadata
@@ -175,11 +176,6 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 		length += sizeof(dirh);
 
 		dir_count = le32_to_cpu(dirh.count) + 1;
-
-		/* dir_count should never be larger than 256 */
-		if (dir_count > 256)
-			goto data_error;
-
 		while (dir_count--) {
 			/*
 			 * Read directory entry.
@@ -190,10 +186,6 @@ static struct dentry *squashfs_lookup(struct inode *dir, struct dentry *dentry,
 				goto read_failure;
 
 			size = le16_to_cpu(dire->size) + 1;
-
-			/* size should never be larger than SQUASHFS_NAME_LEN */
-			if (size > SQUASHFS_NAME_LEN)
-				goto data_error;
 
 			err = squashfs_read_metadata(dir->i_sb, dire->name,
 					&block, &offset, size);
@@ -236,9 +228,6 @@ exit_lookup:
 	d_add(dentry, inode);
 	return ERR_PTR(0);
 
-data_error:
-	err = -EIO;
-
 read_failure:
 	ERROR("Unable to read directory block [%llx:%x]\n",
 		squashfs_i(dir)->start + msblk->directory_table,
@@ -250,5 +239,7 @@ failed:
 
 
 const struct inode_operations squashfs_dir_inode_ops = {
-	.lookup = squashfs_lookup
+	.lookup = squashfs_lookup,
+	.getxattr = generic_getxattr,
+	.listxattr = squashfs_listxattr
 };

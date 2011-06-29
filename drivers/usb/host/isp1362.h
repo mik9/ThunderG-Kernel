@@ -65,7 +65,7 @@ static inline void delayed_insw(unsigned int addr, void *buf, int len)
 	unsigned short *bp = (unsigned short *)buf;
 	while (len--) {
 		DUMMY_DELAY_ACCESS;
-		*bp++ = inw((void *)addr);
+		*bp++ = inw(addr);
 	}
 }
 
@@ -534,8 +534,8 @@ struct isp1362_hcd {
 
 	/* periodic schedule: isochronous */
 	struct list_head	isoc;
-	int			istl_flip:1;
-	int			irq_active:1;
+	unsigned int		istl_flip:1;
+	unsigned int		irq_active:1;
 
 	/* Schedules for the current frame */
 	struct isp1362_ep_queue atl_queue;

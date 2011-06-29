@@ -162,6 +162,9 @@ struct dvb_usb_adapter_properties {
 	struct usb_data_stream_properties stream;
 
 	int size_of_priv;
+
+	int (*fe_ioctl_override) (struct dvb_frontend *,
+				  unsigned int, void *, unsigned int);
 };
 
 /**
@@ -194,6 +197,12 @@ struct dvb_usb_adapter_properties {
  *  endpoint which received control messages with bulk transfers. When this
  *  is non-zero, one can use dvb_usb_generic_rw and dvb_usb_generic_write-
  *  helper functions.
+ *
+ * @generic_bulk_ctrl_endpoint_response: some DVB USB devices use a separate
+ *  endpoint for responses to control messages sent with bulk transfers via
+ *  the generic_bulk_ctrl_endpoint. When this is non-zero, this will be used
+ *  instead of the generic_bulk_ctrl_endpoint when reading usb responses in
+ *  the dvb_usb_generic_rw helper function.
  *
  * @num_device_descs: number of struct dvb_usb_device_description in @devices
  * @devices: array of struct dvb_usb_device_description compatibles with these
@@ -236,6 +245,7 @@ struct dvb_usb_device_properties {
 	struct i2c_algorithm *i2c_algo;
 
 	int generic_bulk_ctrl_endpoint;
+	int generic_bulk_ctrl_endpoint_response;
 
 	int num_device_descs;
 	struct dvb_usb_device_description devices[12];

@@ -23,6 +23,7 @@
 
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
+#include <media/v4l2-chip-ident.h>
 #include <linux/i2c.h>
 
 /* ENABLE_PVR150_WORKAROUND activates a workaround for a hardware bug that is
@@ -48,9 +49,6 @@ struct cx25840_state {
 	int vbi_line_offset;
 	u32 id;
 	u32 rev;
-	int is_cx25836;
-	int is_cx23885;
-	int is_cx231xx;
 	int is_initialized;
 	wait_queue_head_t fw_wait;    /* wake up when the fw load is finished */
 	struct work_struct fw_work;   /* work entry for fw load */
@@ -59,6 +57,24 @@ struct cx25840_state {
 static inline struct cx25840_state *to_state(struct v4l2_subdev *sd)
 {
 	return container_of(sd, struct cx25840_state, sd);
+}
+
+static inline bool is_cx2583x(struct cx25840_state *state)
+{
+	return state->id == V4L2_IDENT_CX25836 ||
+	       state->id == V4L2_IDENT_CX25837;
+}
+
+static inline bool is_cx231xx(struct cx25840_state *state)
+{
+	return state->id == V4L2_IDENT_CX2310X_AV;
+}
+
+static inline bool is_cx2388x(struct cx25840_state *state)
+{
+	return state->id == V4L2_IDENT_CX23885_AV ||
+	       state->id == V4L2_IDENT_CX23887_AV ||
+	       state->id == V4L2_IDENT_CX23888_AV;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -83,8 +99,9 @@ int cx25840_audio_s_ctrl(struct v4l2_subdev *sd, struct v4l2_control *ctrl);
 
 /* ----------------------------------------------------------------------- */
 /* cx25850-vbi.c                                                           */
-int cx25840_vbi_s_fmt(struct v4l2_subdev *sd, struct v4l2_format *fmt);
-int cx25840_vbi_g_fmt(struct v4l2_subdev *sd, struct v4l2_format *fmt);
+int cx25840_s_raw_fmt(struct v4l2_subdev *sd, struct v4l2_vbi_format *fmt);
+int cx25840_s_sliced_fmt(struct v4l2_subdev *sd, struct v4l2_sliced_vbi_format *fmt);
+int cx25840_g_sliced_fmt(struct v4l2_subdev *sd, struct v4l2_sliced_vbi_format *fmt);
 int cx25840_decode_vbi_line(struct v4l2_subdev *sd, struct v4l2_decode_vbi_line *vbi);
 
 #endif
