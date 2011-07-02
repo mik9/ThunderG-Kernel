@@ -1296,10 +1296,13 @@ composite_switch_work(struct work_struct *data)
 		container_of(data, struct usb_composite_dev, switch_work);
 	struct usb_configuration *config = cdev->config;
 
-	if (config)
+	if (config) {
 		switch_set_state(&cdev->sdev, config->bConfigurationValue);
-	else
+		switch_set_state(&cdev->sw_connected, 1);
+	} else {
 		switch_set_state(&cdev->sdev, 0);
+		switch_set_state(&cdev->sw_connected, 0);
+	}
 }
 
 static int composite_bind(struct usb_gadget *gadget)
@@ -1353,6 +1356,10 @@ static int composite_bind(struct usb_gadget *gadget)
 	if (status < 0)
 		goto fail;
 
+	cdev->sw_connected.name = "usb_connected";
+	status = switch_dev_register(&cdev->sw_connected);
+	if (status < 0)
+		goto fail;
 	cdev->sdev.name = "usb_configuration";
 	status = switch_dev_register(&cdev->sdev);
 	if (status < 0)
